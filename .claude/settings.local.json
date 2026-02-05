@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\\\Users\\\\Jodson Graves\\\\Documents\\\\SoHoLINK\" /s /b)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Jodson Graves\\\\Documents\\\\SoHoLINK\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(export PATH=\"/c/Program Files/Go/bin:$PATH\")",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go doc:*)",
+      "Bash(go test:*)",
+      "Bash(\"C:\\\\Program Files\\\\Go\\\\bin\\\\go.exe\" test -v -race ./internal/verifier/...)",
+      "Bash(\"C:\\\\Program Files\\\\Go\\\\bin\\\\go.exe\" test -v ./internal/verifier/...)",
+      "Bash(\"C:\\\\Program Files\\\\Go\\\\bin\\\\go.exe\" test -v ./internal/...)",
+      "Bash(\"C:\\\\Program Files\\\\Go\\\\bin\\\\go.exe\" test -v ./test/integration/...)",
+      "Bash(\"C:\\\\Program Files\\\\Go\\\\bin\\\\go.exe\" test -v ./...)"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+node:
+  name: "soholink-node"
+  location: ""
+
+radius:
+  auth_address: "0.0.0.0:1812"
+  acct_address: "0.0.0.0:1813"
+  shared_secret: "testing123"
+
+auth:
+  credential_ttl: 3600
+  max_nonce_age: 300
+  clock_skew_tolerance: 300  # 5 minutes - allows for client/server clock drift
+
+storage:
+  base_path: ""
+
+policy:
+  directory: ""
+  default_policy: "default.rego"
+
+accounting:
+  rotation_interval: "24h"
+  compress_after_days: 7
+
+merkle:
+  batch_interval: "1h"
+
+logging:
+  level: "info"
+  format: "json"
