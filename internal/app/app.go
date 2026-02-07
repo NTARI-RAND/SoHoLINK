@@ -46,6 +46,17 @@ func New(cfg *config.Config) (*App, error) {
 	// Initialize verifier
 	credTTL := time.Duration(cfg.Auth.CredentialTTL) * time.Second
 	maxNonceAge := time.Duration(cfg.Auth.MaxNonceAge) * time.Second
+	if maxNonceAge == 0 {
+		maxNonceAge = credTTL
+	}
+	if credTTL > 0 && maxNonceAge < credTTL {
+		log.Printf("[app] auth.max_nonce_age (%s) is shorter than credential_ttl (%s); extending nonce cache duration to match TTL",
+			maxNonceAge, credTTL)
+		maxNonceAge = credTTL
+	}
+	if maxNonceAge > 0 {
+		cfg.Auth.MaxNonceAge = int(maxNonceAge.Seconds())
+	}
 	app.Verifier = verifier.NewVerifier(s, credTTL, maxNonceAge)
 
 	// Initialize policy engine
