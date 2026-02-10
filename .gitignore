@@ -1,3 +1,7 @@
 /.claude/settings.local.json
 /fedaaa.exe
 /bin/fedaaa.exe
+/.gocache/
+/.gotmp/
+/.gotelemetry/
+/.gopath/
