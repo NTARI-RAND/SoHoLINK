@@ -63,6 +63,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	// Step 2: Generate node keypair
 	fmt.Printf("\nGenerating node keypair...\n")
 	keyPath := cfg.NodeKeyPath()
+	nodeDID := ""
 
 	if _, err := os.Stat(keyPath); err == nil {
 		fmt.Printf("  Node key already exists at %s (skipping)\n", keyPath)
@@ -70,7 +71,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to load existing key: %w", err)
 		}
-		nodeDID := did.EncodeDIDKey(pub)
+		nodeDID = did.EncodeDIDKey(pub)
 		fmt.Printf("  Node DID: %s\n", nodeDID)
 	} else {
 		pub, priv, err := did.GenerateKeypair()
@@ -80,7 +81,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		if err := did.SavePrivateKey(keyPath, priv); err != nil {
 			return fmt.Errorf("failed to save private key: %w", err)
 		}
-		nodeDID := did.EncodeDIDKey(pub)
+		nodeDID = did.EncodeDIDKey(pub)
 		fmt.Printf("  Private key saved to: %s\n", keyPath)
 		fmt.Printf("  Node DID: %s\n", nodeDID)
 
@@ -95,35 +96,37 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	    ctx := context.Background()
-    // Load existing public key and handle errors
-    pub, err := did.LoadPublicKey(keyPath)
-    if err != nil {
-        return fmt.Errorf("failed to load public key: %w", err)
-    }
-    nodeDID := did.EncodeDIDKey(pub)
-    // Persist node_did in database; ensure closure via defer
-    defer s.Close()
-    if err := s.SetNodeInfo(ctx, "node_did", nodeDID); err != nil {
-        return fmt.Errorf("failed to set node_did: %w", err)
-    }
-    if cfg.Node.Name != "" {
-        if err := s.SetNodeInfo(ctx, "node_name", cfg.Node.Name); err != nil {
-            return fmt.Errorf("failed to set node_name: %w", err)
-        }
-    }
-                fmt.Printf("  Database: %s\n", cfg.DatabasePath())
-    // Check for existing config; handle errors
-    if _, err := os.Stat(configPath); err != nil {
-        if !os.IsNotExist(err) {
-            return fmt.Errorf("failed to stat config file: %w", err)
-        }
-        fmt.Printf("\nWriting default configuration...\n")
-        if mkErr := os.MkdirAll(filepath.Dir(configPath), 0750); mkErr != nil {
-            return fmt.Errorf("failed to create config directory: %w", mkErr)
-        }
-        // proceed to write default config below
+	ctx := context.Background()
+	// Load existing public key and handle errors
+	pub, err := did.LoadPublicKey(keyPath)
+	if err != nil {
+		return fmt.Errorf("failed to load public key: %w", err)
+	}
+	nodeDID = did.EncodeDIDKey(pub)
+	// Persist node_did in database; ensure closure via defer
+	defer s.Close()
+	if err := s.SetNodeInfo(ctx, "node_did", nodeDID); err != nil {
+		return fmt.Errorf("failed to set node_did: %w", err)
+	}
+	if cfg.Node.Name != "" {
+		if err := s.SetNodeInfo(ctx, "node_name", cfg.Node.Name); err != nil {
+			return fmt.Errorf("failed to set node_name: %w", err)
+		}
+	}
+	fmt.Printf("  Database: %s\n", cfg.DatabasePath())
 
+	// Step 4: Write default config if it doesn't exist
+	configPath := filepath.Join(config.DefaultConfigDir(), "config.yaml")
+	// Check for existing config; handle errors
+	if _, err := os.Stat(configPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to stat config file: %w", err)
+		}
+		fmt.Printf("\nWriting default configuration...\n")
+		if mkErr := os.MkdirAll(filepath.Dir(configPath), 0750); mkErr != nil {
+			return fmt.Errorf("failed to create config directory: %w", mkErr)
+		}
+		// proceed to write default config below
 
 		configContent := fmt.Sprintf(`node:
   did: "%s"
