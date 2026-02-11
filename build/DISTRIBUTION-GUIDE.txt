@@ -1,0 +1,278 @@
+╔══════════════════════════════════════════════════════════════╗
+║          SoHoLINK Distribution Guide                         ║
+║          Network Theory Applied Research Institute          ║
+╚══════════════════════════════════════════════════════════════╝
+
+CONGRATULATIONS!
+
+You have successfully downloaded SoHoLINK from GitHub. This guide will
+help you build a complete installation package for distribution.
+
+═══════════════════════════════════════════════════════════════════
+
+PROBLEM YOU ENCOUNTERED
+-----------------------
+
+When you cloned the repo, you found:
+- The build/ folder only contains README.txt and soholink-wizard.exe
+- No one-click installer
+- No clear path to installation
+- Unclear if Go needs to be installed on target machines
+
+This is expected! GitHub repositories contain SOURCE CODE, not
+pre-built installers. You need to BUILD the installer package.
+
+═══════════════════════════════════════════════════════════════════
+
+SOLUTION: Building the Installer Package
+-----------------------------------------
+
+We've created a comprehensive build system that:
+✓ Builds all SoHoLINK binaries
+✓ Optionally embeds a portable Go runtime (no dependency!)
+✓ Creates an installation script
+✓ Packages everything into a distributable ZIP
+✓ Generates user documentation
+
+═══════════════════════════════════════════════════════════════════
+
+QUICK START: Building the Installer
+------------------------------------
+
+1. Open PowerShell in the SoHoLINK directory
+
+2. Run the build command:
+
+   # Option 1: Portable installer (RECOMMENDED for end users)
+   # Embeds Go - no installation needed on target machine
+   make build-installer-windows-portable
+
+   # Option 2: Smaller installer (requires Go on target)
+   make build-installer-windows
+
+3. Wait for the build to complete (~5-10 minutes for portable)
+
+4. Find your installer package:
+   dist/SoHoLINK-v0.1.0-windows-amd64.zip
+
+═══════════════════════════════════════════════════════════════════
+
+WHAT GETS BUILT
+---------------
+
+The installer package includes:
+
+📦 SoHoLINK-v0.1.0-windows-amd64.zip
+   ├── fedaaa.exe                    Main service
+   ├── soholink-wizard.exe           GUI configuration wizard
+   ├── soholink-wizard-cli.exe       CLI fallback wizard
+   ├── install.bat                   One-click installer
+   ├── README.txt                    End-user instructions
+   ├── docs/                         Complete documentation
+   └── go/                           Portable Go (portable build only)
+
+Package Sizes:
+- Portable (with Go):     ~120-150 MB
+- System Go:              ~15-25 MB
+
+═══════════════════════════════════════════════════════════════════
+
+DISTRIBUTING TO END USERS
+--------------------------
+
+Once built, you can distribute the ZIP file to users.
+
+Installation is simple for them:
+
+1. Extract SoHoLINK-v0.1.0-windows-amd64.zip
+2. Right-click install.bat → "Run as administrator"
+3. Launch the wizard from desktop shortcut
+4. Follow the configuration wizard
+
+NO GO INSTALLATION REQUIRED (if you used portable build)!
+
+═══════════════════════════════════════════════════════════════════
+
+THE CONFIGURATION WIZARD
+-------------------------
+
+The wizard provides a guided setup experience:
+
+Step 1: System Detection (Automatic)
+- Detects CPU, RAM, storage
+- Checks hypervisor support
+- Validates system requirements
+
+Step 2: Cost Configuration
+- Electricity rate input
+- Optional cooling costs
+- Optional hardware depreciation
+
+Step 3: Cost Analysis (Automatic)
+- Calculates operating costs
+- Suggests competitive pricing
+- Compares to AWS pricing
+- Shows profit projections
+
+Step 4: Configuration Generation (Automatic)
+- Creates node identity (DID:key)
+- Generates RADIUS config
+- Sets up OPA policies
+- Creates database schema
+- Configures network settings
+
+Step 5: Dependency Check
+- Verifies hypervisor
+- Checks required ports
+- Validates configuration
+
+═══════════════════════════════════════════════════════════════════
+
+BUILD OPTIONS EXPLAINED
+-----------------------
+
+1. build-installer-windows-portable
+   ✓ Best for end-user distribution
+   ✓ Includes portable Go runtime
+   ✓ No dependencies required
+   ✓ Larger download (~120 MB)
+   ✓ Works on any Windows 10+ machine
+
+2. build-installer-windows
+   ✓ Smaller package (~20 MB)
+   ✓ Requires Go on target machine
+   ✓ Good for tech-savvy users
+   ✓ Best for development teams
+
+3. build-installer-windows-quick
+   ✓ Reuses downloaded Go from previous build
+   ✓ Fast rebuilds during development
+   ✓ Same as portable build otherwise
+
+═══════════════════════════════════════════════════════════════════
+
+ADVANCED: Customizing the Installer
+------------------------------------
+
+You can customize the build by editing:
+
+scripts/build-installer-windows.ps1
+
+Key customization points:
+- Go version
+- Package structure
+- Installation paths
+- Desktop shortcuts
+- Start menu entries
+
+See INSTALLER.md for detailed customization guide.
+
+═══════════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING BUILD ISSUES
+-----------------------------
+
+Problem: "Go not found"
+Solution: Install Go from https://go.dev/dl/
+         OR use -SkipGoDownload flag (if Go was downloaded before)
+
+Problem: Build fails with errors
+Solution: Ensure you have these prerequisites:
+         - Go 1.22+
+         - PowerShell 5.1+
+         - Git
+         Run: go mod download && go mod tidy
+
+Problem: Permission denied
+Solution: Run PowerShell as Administrator
+
+Problem: Antivirus blocks build
+Solution: Temporarily disable antivirus or add exception
+         (Go executables sometimes trigger false positives)
+
+═══════════════════════════════════════════════════════════════════
+
+DOCUMENTATION FILES
+-------------------
+
+README.md               - Project overview
+QUICKSTART.md          - Quick start for end users and developers
+INSTALLER.md           - Complete installation guide
+BUILD.md               - Build instructions for developers
+ARCHITECTURE.md        - System architecture documentation
+
+All documentation is included in the installer package.
+
+═══════════════════════════════════════════════════════════════════
+
+DEVELOPMENT WORKFLOW
+--------------------
+
+For active development:
+
+1. Build wizards individually for testing:
+   make build-wizards
+
+2. Test the wizard:
+   .\bin\soholink-wizard.exe
+
+3. When ready to distribute:
+   make build-installer-windows-portable
+
+4. Test the complete installer on clean VM
+
+5. Distribute the ZIP file
+
+═══════════════════════════════════════════════════════════════════
+
+SUPPORT AND CONTRIBUTION
+-------------------------
+
+GitHub: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+Issues: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/issues
+License: AGPL-3.0 (see LICENSE.txt)
+
+Contributions welcome! See CONTRIBUTING.md for guidelines.
+
+═══════════════════════════════════════════════════════════════════
+
+QUICK REFERENCE COMMANDS
+-------------------------
+
+# Build portable installer (recommended)
+make build-installer-windows-portable
+
+# Build system Go installer
+make build-installer-windows
+
+# Build just the wizards
+make build-wizards
+
+# Build CLI only
+make build-cli
+
+# Clean build artifacts
+make clean
+
+# View all build targets
+make help
+
+═══════════════════════════════════════════════════════════════════
+
+NEXT STEPS
+----------
+
+1. Build the installer package (see QUICK START above)
+2. Test on a clean Windows 10/11 VM
+3. Distribute to end users
+4. Users run install.bat and follow wizard
+5. Users start earning with federated cloud!
+
+═══════════════════════════════════════════════════════════════════
+
+Thank you for using SoHoLINK!
+
+Built by the Network Theory Applied Research Institute (NTARI)
+Supporting community networking and digital sovereignty.
+
+═══════════════════════════════════════════════════════════════════

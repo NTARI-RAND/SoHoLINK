@@ -1,17 +1,49 @@
-# FedAAA Quick Start Guide
+# SoHoLINK Quick Start Guide
 
-This guide will help you build and launch FedAAA on your system.
+Get up and running with SoHoLINK in under 15 minutes!
 
 ---
 
-## Prerequisites
+## For End Users: Pre-Built Installer (Recommended)
 
-### Required
+### Windows Installation
+
+1. **Download the installer package**
+   - Download `SoHoLINK-v{VERSION}-windows-amd64.zip` from releases
+   - Extract the ZIP file
+
+2. **Run the installer**
+   - Right-click `install.bat` → "Run as administrator"
+   - Follow the installation prompts
+
+3. **Launch the configuration wizard**
+   - Double-click the desktop shortcut "SoHoLINK Setup"
+   - OR run from Start Menu: SoHoLINK → SoHoLINK Wizard
+   - The wizard will:
+     - Detect your system hardware
+     - Calculate operating costs
+     - Suggest competitive pricing
+     - Generate complete configuration
+
+4. **Start the service**
+   ```cmd
+   fedaaa start
+   ```
+
+**See [INSTALLER.md](INSTALLER.md) for complete installation instructions.**
+
+---
+
+## For Developers: Building from Source
+
+### Prerequisites
+
+#### Required
 - **Go 1.22+** - [Download from golang.org](https://go.dev/dl/)
 - **Git** - For version control
 
-### Optional (for GUI)
-- **GUI Dependencies** (only if you want the graphical installer)
+#### Optional (for GUI)
+- **GUI Dependencies** (only if you want the graphical wizard)
   - Linux: `sudo apt-get install gcc libgl1-mesa-dev xorg-dev`
   - macOS: `xcode-select --install`
   - Windows: No additional dependencies needed
@@ -20,27 +52,37 @@ This guide will help you build and launch FedAAA on your system.
 
 ## Step 1: Build the Application
 
-### Option A: CLI Only (Recommended for Servers)
+### Option A: Build Complete Installer Package (Recommended)
 
 ```bash
-cd "C:\Users\Jodson Graves\Documents\SoHoLINK"
+# Build complete Windows installer with embedded Go
+make build-installer-windows-portable
 
-# Build CLI-only version
-go build -o fedaaa.exe ./cmd/fedaaa
+# Or build with system Go (smaller package)
+make build-installer-windows
+
+# Output: dist/SoHoLINK-v0.1.0-windows-amd64.zip
 ```
 
-**Output:** `fedaaa.exe` in current directory
+This creates a complete distribution package ready for deployment.
 
-### Option B: With GUI (For Desktop)
+### Option B: Build Individual Components
 
 ```bash
-cd "C:\Users\Jodson Graves\Documents\SoHoLINK"
+# Build main service
+make build-cli
 
-# Build with GUI support
-go build -tags gui -o fedaaa-gui.exe ./cmd/fedaaa-gui
+# Build configuration wizards
+make build-wizards
+
+# Build all
+make all
 ```
 
-**Output:** `fedaaa-gui.exe` with graphical installer
+**Outputs:**
+- `bin/fedaaa.exe` - Main service
+- `bin/soholink-wizard.exe` - GUI configuration wizard
+- `bin/soholink-wizard-cli.exe` - CLI configuration wizard
 
 ---
 
