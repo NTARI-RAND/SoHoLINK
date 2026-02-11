@@ -321,3 +321,10 @@ The dual-mode approach (portable vs system Go) provides flexibility for differen
 3. Generate checksums for distribution package
 4. Create GitHub release with installer package
 5. Update release notes with installation instructions
+
+---
+
+**Built by**: Network Theory Applied Research Institute (NTARI)
+**Contact**: info@ntari.org
+**Website**: https://ntari.org
+**GitHub**: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink

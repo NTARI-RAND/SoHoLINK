@@ -228,6 +228,8 @@ For active development:
 SUPPORT AND CONTRIBUTION
 -------------------------
 
+Contact: info@ntari.org
+Website: https://ntari.org
 GitHub: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
 Issues: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/issues
 License: AGPL-3.0 (see LICENSE.txt)
@@ -273,6 +275,7 @@ NEXT STEPS
 Thank you for using SoHoLINK!
 
 Built by the Network Theory Applied Research Institute (NTARI)
+Contact: info@ntari.org | https://ntari.org
 Supporting community networking and digital sovereignty.
 
 ═══════════════════════════════════════════════════════════════════

@@ -259,6 +259,8 @@ If you prefer not to use install.bat:
 Support
 -------
 
+Contact: info@ntari.org
+Website: https://ntari.org
 Documentation: docs/README.md
 GitHub: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
 License: AGPL-3.0 (see docs/LICENSE.txt)

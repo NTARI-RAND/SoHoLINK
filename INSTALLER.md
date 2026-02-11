@@ -357,10 +357,14 @@ Include checksum in release notes for verification.
 
 - **Documentation**: See `docs/` folder in installation directory
 - **GitHub Issues**: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/issues
+- **Email Support**: info@ntari.org
 - **License**: AGPL-3.0 (see LICENSE.txt)
 
 ## Credits
 
 Built by the Network Theory Applied Research Institute (NTARI)
+
+**Contact**: info@ntari.org
+**Website**: https://ntari.org
 
 SoHoLINK is free and open-source software supporting community networking and digital sovereignty.
