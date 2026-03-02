@@ -1,0 +1,121 @@
+#!/sbin/openrc-run
+# NTARI OS — Globe WebSocket Bridge Service
+# Phase 8: Globe Interface — Production
+#
+# Manages the ntari-globe-bridge process: the WebSocket bridge that connects
+# the live ROS2 DDS graph to the browser-based globe interface.
+#
+# The bridge:
+#   - Polls `ros2 node list` and `ros2 topic list` every POLL_INTERVAL seconds
+#   - Measures round-trip latency to each NTARI service node
+#   - Serves a JSON graph snapshot over WebSocket on localhost:9090
+#   - The Caddy reverse proxy (ntari-web) forwards /ws/* to this port
+#
+# Boot dependencies:
+#   - Requires ros2-domain (DDS graph must be up to poll it)
+#   - Requires ntari-web (Caddy must be running to serve the globe interface
+#     and proxy WebSocket connections)
+#   - Requires net
+#   - After all NTARI service nodes (so the graph has content when bridge starts)
+
+name="ntari-globe-bridge"
+description="NTARI Globe WebSocket Bridge — DDS graph → browser interface"
+
+command="/usr/local/bin/ntari-globe-bridge.sh"
+command_args="--port ${NTARI_GLOBE_PORT:-9090} --bind ${NTARI_GLOBE_BIND:-127.0.0.1} --interval ${NTARI_GLOBE_INTERVAL:-2}"
+command_background="yes"
+pidfile="/run/ntari-globe/bridge.pid"
+command_user="root"
+
+output_log="/var/log/ntari/globe-bridge.log"
+error_log="/var/log/ntari/globe-bridge.log"
+
+# ── ROS2 environment ─────────────────────────────────────────────────────────
+export AMENT_PREFIX_PATH="/usr/ros/jazzy"
+export CMAKE_PREFIX_PATH="/usr/ros/jazzy"
+export LD_LIBRARY_PATH="/usr/ros/jazzy/lib:/usr/ros/jazzy/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="/usr/ros/jazzy/bin:/usr/local/sbin:/usr/sbin:/sbin:${PATH}"
+export PYTHONPATH="/usr/ros/jazzy/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
+export ROS_VERSION="2"
+export ROS_PYTHON_VERSION="3"
+export ROS_DISTRO="jazzy"
+
+if [ -f /etc/ntari/cyclonedds.xml ]; then
+    export CYCLONEDDS_URI="file:///etc/ntari/cyclonedds.xml"
+fi
+
+depend() {
+    need net ros2-domain ntari-web
+    # After all service nodes so the initial graph snapshot has content
+    after ntari-dns ntari-ntp ntari-cache ntari-dhcp ntari-vpn ntari-identity ntari-files
+}
+
+start_pre() {
+    mkdir -p /var/log/ntari
+    mkdir -p /run/ntari-globe
+
+    if [ ! -x /usr/local/bin/ntari-globe-bridge.sh ]; then
+        eerror "ntari-globe-bridge.sh not found at /usr/local/bin/"
+        return 1
+    fi
+
+    if ! command -v socat >/dev/null 2>&1; then
+        eerror "socat is required — install via: apk add socat"
+        return 1
+    fi
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        eerror "openssl is required — install via: apk add openssl"
+        return 1
+    fi
+
+    # Verify ROS2 daemon is responding
+    if ! ros2 daemon status >/dev/null 2>&1; then
+        ewarn "ROS2 daemon not responding — graph may be empty at startup"
+        ewarn "The bridge will retry on each poll cycle"
+    fi
+
+    einfo "Globe bridge starting on ${NTARI_GLOBE_BIND:-127.0.0.1}:${NTARI_GLOBE_PORT:-9090}"
+    einfo "Poll interval: ${NTARI_GLOBE_INTERVAL:-2}s, DDS domain: ${ROS_DOMAIN_ID:-0}"
+}
+
+start_post() {
+    sleep 2
+
+    # Verify the WebSocket port is actually listening
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tln 2>/dev/null | grep -q ":${NTARI_GLOBE_PORT:-9090}"; then
+            einfo "Globe bridge listening on :${NTARI_GLOBE_PORT:-9090}"
+        else
+            ewarn "Globe bridge port ${NTARI_GLOBE_PORT:-9090} not yet open (may still be starting)"
+        fi
+    fi
+
+    # Update Caddyfile to proxy WebSocket if it hasn't been done yet
+    CADDYFILE="/etc/ntari/Caddyfile"
+    if [ -f "${CADDYFILE}" ] && ! grep -q "ntari-globe-bridge" "${CADDYFILE}" 2>/dev/null; then
+        einfo "Enabling WebSocket proxy in Caddyfile"
+        sed -i \
+            's|# handle /ws/\* {|handle /ws/* {|g;
+             s|#     reverse_proxy localhost:9090|    reverse_proxy localhost:'"${NTARI_GLOBE_PORT:-9090}"'|g;
+             s|# }$|}|g' \
+            "${CADDYFILE}" 2>/dev/null || true
+        # Reload Caddy gracefully if it's running
+        if rc-service ntari-web status >/dev/null 2>&1; then
+            if command -v caddy >/dev/null 2>&1; then
+                caddy reload --config "${CADDYFILE}" >/dev/null 2>&1 || true
+                einfo "Caddy reloaded with WebSocket proxy"
+            fi
+        fi
+    fi
+
+    einfo "Globe interface: http://ntari.local (served by Caddy via ntari-web)"
+    einfo "WebSocket endpoint: ws://ntari.local/ws/graph"
+    einfo "DDS graph: ros2 node list"
+}
+
+stop_pre() {
+    einfo "Stopping globe bridge"
+}

@@ -1,0 +1,22 @@
+# NTARI OS — ntari-globe-bridge OpenRC service configuration
+# /etc/conf.d/ntari-globe-bridge
+
+# WebSocket server bind address (127.0.0.1 = loopback only; Caddy proxies externally)
+NTARI_GLOBE_BIND="127.0.0.1"
+
+# WebSocket server port
+NTARI_GLOBE_PORT=9090
+
+# Graph poll interval in seconds (how often ros2 node/topic list is called)
+# Lower = more responsive globe; higher = less ROS2 daemon load
+# Recommended: 2s for a single cooperative node, 5s for federation deployments
+NTARI_GLOBE_INTERVAL=2
+
+# Log file
+NTARI_GLOBE_LOG="/var/log/ntari/globe-bridge.log"
+
+# ROS2 domain to introspect
+ROS_DOMAIN_ID=0
+
+# RMW implementation
+RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"

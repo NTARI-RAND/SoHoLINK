@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+name="SoHoLINK"
+description="Federated Edge AAA Platform"
+command="/usr/bin/fedaaa"
+command_args="start"
+command_user="soholink:soholink"
+pidfile="/run/soholink.pid"
+command_background="yes"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	# Ensure directories exist
+	checkpath --directory --owner soholink:soholink \
+		/var/lib/soholink \
+		/var/log/soholink \
+		/etc/soholink/policies
+
+	# Initialize on first run
+	if [ ! -f /var/lib/soholink/node.db ]; then
+		einfo "Initializing SoHoLINK..."
+		su -s /bin/sh soholink -c "/usr/bin/fedaaa install"
+	fi
+}

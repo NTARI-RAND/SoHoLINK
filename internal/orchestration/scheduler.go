@@ -83,6 +83,25 @@ func (s *FedScheduler) GetWorkloadState(workloadID string) *WorkloadState {
 	return s.ActiveWorkloads[workloadID]
 }
 
+// ListActiveWorkloads returns a snapshot of all active workload states.
+// Each returned WorkloadState contains a deep-copied Placements slice so that
+// callers cannot race with handleScaleEvent, which mutates Placements under lock.
+func (s *FedScheduler) ListActiveWorkloads() []*WorkloadState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]*WorkloadState, 0, len(s.ActiveWorkloads))
+	for _, ws := range s.ActiveWorkloads {
+		placements := make([]Placement, len(ws.Placements))
+		copy(placements, ws.Placements)
+		result = append(result, &WorkloadState{
+			Workload:   ws.Workload,
+			Placements: placements,
+			Health:     ws.Health,
+		})
+	}
+	return result
+}
+
 // scheduleLoop pulls workloads from the pending queue and schedules them.
 func (s *FedScheduler) scheduleLoop(ctx context.Context) {
 	for {
@@ -212,14 +231,17 @@ func (s *FedScheduler) handleScaleEvent(ctx context.Context, ev ScaleEvent) {
 
 	current := len(state.Placements)
 	target := ev.TargetReplicas
+	// Copy fields needed after unlock to avoid data race on WorkloadState.
+	spec := state.Workload.Spec
+	constraints := state.Workload.Constraints
 	s.mu.Unlock()
 
 	if target > current {
 		// Scale up — submit extra replica placements
 		extra := &Workload{
 			WorkloadID:  ev.WorkloadID,
-			Spec:        state.Workload.Spec,
-			Constraints: state.Workload.Constraints,
+			Spec:        spec,
+			Constraints: constraints,
 			Replicas:    target - current,
 		}
 		_ = s.scheduleWorkload(ctx, extra)

@@ -1,0 +1,11 @@
+# SoHoLINK configuration
+# Override in /etc/conf.d/soholink
+
+# Node name (defaults to hostname)
+#NODE_NAME="ntari-node-01"
+
+# RADIUS shared secret (CHANGE THIS!)
+#RADIUS_SECRET="change-me-in-production"
+
+# Log level: debug, info, warn, error
+#LOG_LEVEL="info"
