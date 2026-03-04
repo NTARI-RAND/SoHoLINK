@@ -114,9 +114,24 @@ func (s *Server) SetMobileHub(hub *MobileHub) {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 
+	// Dashboard SPA — serves embedded ui/dashboard/ assets.
+	// /          → redirect to /dashboard
+	// /dashboard → index.html (hash-router handles tab selection)
+	// /dashboard/* → static assets (style.css, app.js, …)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/dashboard", http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/dashboard", s.handleDashboard)
+	mux.HandleFunc("/dashboard/", s.handleDashboard)
+
 	// Health and discovery
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/resources/discover", s.handleDiscoverResources)
+	mux.HandleFunc("/api/status", s.handleStatus)
 
 	// LBTAS reputation
 	mux.HandleFunc("/api/lbtas/score/", s.handleGetScore)

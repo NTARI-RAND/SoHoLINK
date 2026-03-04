@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -11,7 +12,17 @@ var (
 	cfgFile string
 	dataDir string
 	verbose bool
+
+	// globalDashboardFS is the embedded ui/dashboard asset tree.
+	// Set via SetDashboardFS before Execute() is called.
+	globalDashboardFS fs.FS
 )
+
+// SetDashboardFS registers the embedded dashboard asset tree so that the
+// httpapi.Server can serve it at /dashboard.  Call this in main() before Execute().
+func SetDashboardFS(fsys fs.FS) {
+	globalDashboardFS = fsys
+}
 
 // rootCmd represents the base command when called without any subcommands.
 var rootCmd = &cobra.Command{

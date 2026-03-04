@@ -13,3 +13,9 @@ var DefaultPolicyRego []byte
 //
 //go:embed configs/policies
 var PoliciesFS embed.FS
+
+// DashboardFS holds the local web dashboard assets (HTML, CSS, JS) at compile time.
+// Served by the httpapi.Server at /dashboard — no external ui/ directory needed at runtime.
+//
+//go:embed ui/dashboard
+var DashboardFS embed.FS

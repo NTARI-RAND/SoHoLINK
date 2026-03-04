@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoHoLINK Node Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <div class="brand">
+    <!-- hexagon node icon -->
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+      <polygon points="14,2 25,8 25,20 14,26 3,20 3,8"
+               fill="none" stroke="#00d4aa" stroke-width="1.5"/>
+      <circle cx="14" cy="14" r="3" fill="#00d4aa"/>
+      <line x1="14" y1="11" x2="14" y2="6" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+      <line x1="14" y1="17" x2="14" y2="22" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+      <line x1="11.4" y1="12.5" x2="7"  y2="10" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+      <line x1="16.6" y1="15.5" x2="21" y2="18" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+      <line x1="11.4" y1="15.5" x2="7"  y2="18" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+      <line x1="16.6" y1="12.5" x2="21" y2="10" stroke="#00d4aa" stroke-width="1" opacity="0.6"/>
+    </svg>
+    SoHoLINK
+  </div>
+
+  <div id="node-status" class="online">
+    <div class="dot"></div>
+    <span class="status-text">Connecting…</span>
+  </div>
+</div>
+
+<!-- ── Navigation ───────────────────────────────────────────────────────────── -->
+<nav id="nav">
+  <a href="#dashboard">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M2 2h5v5H2zm7 0h5v5H9zm-7 7h5v5H2zm7 0h5v5H9z" opacity="0.9"/>
+    </svg>
+    <span>Dashboard</span>
+  </a>
+  <a href="#planwork">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M3 2h10a1 1 0 0 1 1 1v1H2V3a1 1 0 0 1 1-1zm-1 3h12v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5zm3 3v1h6V8H5zm0 3v1h4v-1H5z"/>
+    </svg>
+    <span>Plan Work</span>
+  </a>
+  <a href="#management">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zm.75 3.5h-1.5V8H5v1.5h3.75V4.5z" opacity="0.9"/>
+    </svg>
+    <span>Management</span>
+  </a>
+  <a href="#help">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zm0 10.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm.75-6.5h-1.5v4.5h1.5V5z"/>
+    </svg>
+    <span>Help</span>
+  </a>
+  <a href="#settings">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 5a3 3 0 1 1 0 6A3 3 0 0 1 8 5zm5.657-1.657-.707-.707-1.06.353A4.978 4.978 0 0 0 10 2.5l-.354-1.061h-3.29L6 2.5a4.978 4.978 0 0 0-1.89.489l-1.06-.353-.708.707.354 1.06A4.978 4.978 0 0 0 2.5 6l-1.061.354v3.29L2.5 10c.112.675.338 1.31.696 1.89l-.353 1.06.707.708 1.06-.354A4.978 4.978 0 0 0 6 13.5l.354 1.061h3.29L10 13.5a4.978 4.978 0 0 0 1.89-.696l1.06.354.708-.707-.354-1.06A4.978 4.978 0 0 0 13.5 10l1.061-.354V6.356L13.5 6a4.978 4.978 0 0 0-.696-1.89l.353-1.06-.5-.607z"/>
+    </svg>
+    <span>Settings</span>
+  </a>
+</nav>
+
+<!-- ── Content ───────────────────────────────────────────────────────────────── -->
+<main id="content">
+
+  <!-- ── DASHBOARD ──────────────────────────────────────────────────────────── -->
+  <div id="screen-dashboard" class="screen active">
+    <div class="section-head">
+      <h2>Node Overview</h2>
+      <span class="meta" id="last-updated">Updating…</span>
+    </div>
+
+    <!-- Stat tiles -->
+    <div class="grid-4" style="margin-bottom:16px">
+      <div class="stat-tile">
+        <div class="label">Uptime</div>
+        <div class="value accent" id="stat-uptime">—</div>
+        <div class="sub">since last start</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Active Rentals</div>
+        <div class="value" id="stat-rentals">—</div>
+        <div class="sub">resource sessions</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Federation Nodes</div>
+        <div class="value" id="stat-nodes">—</div>
+        <div class="sub">connected peers</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Earned Today</div>
+        <div class="value accent" id="stat-earned">—</div>
+        <div class="sub">satoshis</div>
+      </div>
+    </div>
+
+    <!-- Radial dials -->
+    <div class="dials-row" style="margin-bottom:16px">
+
+      <!-- CPU -->
+      <div class="dial-card">
+        <div class="dial-wrap">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="dial-bg"   cx="60" cy="60" r="50"
+                    stroke-dasharray="314.16" stroke-dashoffset="0"
+                    transform="rotate(-90 60 60)"/>
+            <circle class="dial-fill cpu" id="dial-fill-cpu" cx="60" cy="60" r="50"
+                    transform="rotate(-90 60 60)"/>
+          </svg>
+          <div class="dial-center">
+            <div class="dial-pct accent" id="dial-pct-cpu">0%</div>
+            <div class="dial-sub">in use</div>
+          </div>
+        </div>
+        <div class="dial-label">CPU</div>
+        <div class="dial-offered" id="dial-offered-cpu">— offered</div>
+      </div>
+
+      <!-- RAM -->
+      <div class="dial-card">
+        <div class="dial-wrap">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="dial-bg"   cx="60" cy="60" r="50"
+                    stroke-dasharray="314.16" stroke-dashoffset="0"
+                    transform="rotate(-90 60 60)"/>
+            <circle class="dial-fill ram" id="dial-fill-ram" cx="60" cy="60" r="50"
+                    transform="rotate(-90 60 60)"/>
+          </svg>
+          <div class="dial-center">
+            <div class="dial-pct" style="color:#0088ff" id="dial-pct-ram">0%</div>
+            <div class="dial-sub">in use</div>
+          </div>
+        </div>
+        <div class="dial-label">RAM</div>
+        <div class="dial-offered" id="dial-offered-ram">— offered</div>
+      </div>
+
+      <!-- Storage -->
+      <div class="dial-card">
+        <div class="dial-wrap">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="dial-bg"   cx="60" cy="60" r="50"
+                    stroke-dasharray="314.16" stroke-dashoffset="0"
+                    transform="rotate(-90 60 60)"/>
+            <circle class="dial-fill storage" id="dial-fill-storage" cx="60" cy="60" r="50"
+                    transform="rotate(-90 60 60)"/>
+          </svg>
+          <div class="dial-center">
+            <div class="dial-pct" style="color:#a78bfa" id="dial-pct-storage">0%</div>
+            <div class="dial-sub">in use</div>
+          </div>
+        </div>
+        <div class="dial-label">Storage</div>
+        <div class="dial-offered" id="dial-offered-storage">— offered</div>
+      </div>
+
+      <!-- Network -->
+      <div class="dial-card">
+        <div class="dial-wrap">
+          <svg viewBox="0 0 120 120" width="120" height="120">
+            <circle class="dial-bg"   cx="60" cy="60" r="50"
+                    stroke-dasharray="314.16" stroke-dashoffset="0"
+                    transform="rotate(-90 60 60)"/>
+            <circle class="dial-fill net" id="dial-fill-net" cx="60" cy="60" r="50"
+                    transform="rotate(-90 60 60)"/>
+          </svg>
+          <div class="dial-center">
+            <div class="dial-pct" style="color:#f59e0b" id="dial-pct-net">0%</div>
+            <div class="dial-sub">in use</div>
+          </div>
+        </div>
+        <div class="dial-label">Network</div>
+        <div class="dial-offered" id="dial-offered-net">— offered</div>
+      </div>
+
+    </div><!-- /dials-row -->
+
+    <!-- Globe -->
+    <div class="card">
+      <div class="card-title">Federation Network</div>
+      <iframe id="globe-frame"
+              src="/ntarios-globe.html"
+              frameborder="0"
+              allow="autoplay"
+              title="Federation globe">
+      </iframe>
+    </div>
+  </div><!-- /screen-dashboard -->
+
+
+  <!-- ── PLAN WORK ───────────────────────────────────────────────────────────── -->
+  <div id="screen-planwork" class="screen">
+    <div class="section-head">
+      <h2>Plan Work</h2>
+      <span class="meta">Configure what resources your node offers</span>
+    </div>
+
+    <div class="grid-2">
+      <!-- Resource offers -->
+      <div class="card">
+        <div class="card-title">Resource Offers</div>
+
+        <div class="form-group">
+          <div class="form-label">CPU Cores Offered</div>
+          <div class="slider-wrap">
+            <input type="range" id="offer-cpu" min="0" max="100" value="50"
+                   oninput="document.getElementById('offer-cpu-val').textContent=this.value+'%'">
+            <span class="slider-val" id="offer-cpu-val">50%</span>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px">
+            Percentage of CPU capacity available to renters
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">RAM Offered</div>
+          <div class="slider-wrap">
+            <input type="range" id="offer-ram" min="0" max="100" value="50"
+                   oninput="document.getElementById('offer-ram-val').textContent=this.value+'%'">
+            <span class="slider-val" id="offer-ram-val">50%</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Storage Offered (GB)</div>
+          <div class="slider-wrap">
+            <input type="range" id="offer-storage" min="0" max="2000" step="10" value="100"
+                   oninput="document.getElementById('offer-storage-val').textContent=this.value+' GB'">
+            <span class="slider-val" id="offer-storage-val">100 GB</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Bandwidth Offered (Mbps)</div>
+          <div class="slider-wrap">
+            <input type="range" id="offer-bw" min="0" max="1000" step="10" value="100"
+                   oninput="document.getElementById('offer-bw-val').textContent=this.value+' Mbps'">
+            <span class="slider-val" id="offer-bw-val">100 Mbps</span>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="alert('Config update API coming in Phase 4')">
+          Apply Offers
+        </button>
+      </div>
+
+      <!-- Pricing -->
+      <div class="card">
+        <div class="card-title">Pricing</div>
+
+        <div class="form-group">
+          <div class="form-label">CPU — sats per core-hour</div>
+          <input type="number" class="form-input" id="price-cpu" value="100" min="0">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">RAM — sats per GB-hour</div>
+          <input type="number" class="form-input" id="price-ram" value="20" min="0">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Storage — sats per GB-hour</div>
+          <input type="number" class="form-input" id="price-storage" value="5" min="0">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Bandwidth — sats per GB transferred</div>
+          <input type="number" class="form-input" id="price-bw" value="10" min="0">
+        </div>
+
+        <div class="card" style="margin-top:8px;background:var(--surface2)">
+          <div class="card-title">Estimated Monthly Revenue</div>
+          <div class="value accent" style="font-size:22px;font-weight:700">~—</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">
+            Based on 70% utilization at current prices
+          </div>
+        </div>
+      </div>
+    </div><!-- /grid-2 -->
+
+    <div class="spacer"></div>
+
+    <!-- Availability schedule -->
+    <div class="card">
+      <div class="card-title">Availability Schedule</div>
+      <p class="muted" style="font-size:13px">
+        Fine-grained schedule control (e.g. accept jobs only 10 PM–6 AM) is coming in Phase 4.
+        For now, the node accepts rentals continuously while running.
+      </p>
+    </div>
+  </div><!-- /screen-planwork -->
+
+
+  <!-- ── MANAGEMENT ─────────────────────────────────────────────────────────── -->
+  <div id="screen-management" class="screen">
+    <div class="section-head">
+      <h2>Management</h2>
+      <button class="btn btn-primary" id="payout-btn">Request Payout</button>
+    </div>
+
+    <!-- Revenue summary -->
+    <div class="grid-3" style="margin-bottom:16px">
+      <div class="stat-tile">
+        <div class="label">Available Balance</div>
+        <div class="value accent" id="mgmt-balance">—</div>
+        <div class="sub">ready to withdraw</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Pending</div>
+        <div class="value warn" id="mgmt-pending">—</div>
+        <div class="sub">in settlement</div>
+      </div>
+      <div class="stat-tile">
+        <div class="label">Total Earned</div>
+        <div class="value" id="mgmt-total">—</div>
+        <div class="sub">all time</div>
+      </div>
+    </div>
+
+    <!-- Active rentals -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Active Rentals</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Rental ID</th>
+            <th>Resource</th>
+            <th>Tenant</th>
+            <th>Rate</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody id="rentals-tbody">
+          <tr><td colspan="5" class="muted" style="text-align:center;padding:24px">
+            <span class="loading"></span> Loading…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Payout history -->
+    <div class="card">
+      <div class="card-title">Payout History</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Amount</th>
+            <th>Processor</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="payouts-tbody">
+          <tr><td colspan="4" class="muted" style="text-align:center;padding:24px">
+            <span class="loading"></span> Loading…
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div><!-- /screen-management -->
+
+
+  <!-- ── HELP ───────────────────────────────────────────────────────────────── -->
+  <div id="screen-help" class="screen">
+    <div class="section-head">
+      <h2>Help &amp; Learning Center</h2>
+    </div>
+
+    <div class="grid-2">
+      <div class="help-article">
+
+        <h3>What is SoHoLINK?</h3>
+        <p>SoHoLINK is a federated compute marketplace for Small Office / Home Office (SOHO)
+           hardware. Your node earns Bitcoin (satoshis via Lightning) by renting out spare CPU,
+           RAM, storage, and bandwidth to verified tenants.</p>
+
+        <h3>How does payment work?</h3>
+        <p>Tenants pay per-hour using Lightning Network invoices. The node meters usage every hour
+           and charges the tenant's account automatically. You receive 99% of the net payment
+           (after ~2.9% processor fees); the Network Theory Applied Research Institute takes 1%
+           as a platform fee.</p>
+
+        <h3>How is my identity protected?</h3>
+        <p>There are no passwords. Your node uses an <strong>Ed25519 DID key</strong> — a
+           cryptographic identity. Access credentials are 84-byte signed tokens that prove
+           identity without revealing secrets. There is no password recovery by design; if a
+           key is compromised, revoke and re-enroll with a new DID.</p>
+
+        <h3>What is RADIUS?</h3>
+        <p>RADIUS is the protocol used by enterprise Wi-Fi (802.1X) and VPNs to authenticate
+           users. SoHoLINK's RADIUS server (UDP 1812/1813) allows your node to act as an
+           authentication gateway for federation tenants using your domain.</p>
+
+        <h3>What are OPA policies?</h3>
+        <p>Open Policy Agent (OPA) policies are the rules that govern what resources your node
+           shares and with whom. They are written in <code>Rego</code> and embedded in the
+           binary at build time. Edit <code>configs/policies/resource_sharing.rego</code>
+           and rebuild to change them.</p>
+
+        <h3>Where are config files?</h3>
+        <ul>
+          <li><code>C:\Program Files\SoHoLINK\config.yaml</code> — runtime config (node name, ports, pricing)</li>
+          <li>Environment variables: <code>SOHOLINK_*</code> (override any config key)</li>
+          <li>Policies: embedded in binary at build time</li>
+        </ul>
+
+        <h3>How do I update the node?</h3>
+        <p>Build a new <code>fedaaa.exe</code> and run <code>scripts\install-service.ps1</code>
+           as Administrator. The installer stops the old task, replaces the binary, and restarts.</p>
+
+      </div>
+
+      <div>
+        <!-- Quick reference -->
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-title">Quick Reference</div>
+          <table class="data-table">
+            <tr><td class="muted">HTTP API</td><td class="monospace">http://localhost:8080</td></tr>
+            <tr><td class="muted">Dashboard</td><td class="monospace">http://localhost:8080/dashboard</td></tr>
+            <tr><td class="muted">Health check</td><td class="monospace">GET /api/health</td></tr>
+            <tr><td class="muted">RADIUS Auth</td><td class="monospace">UDP 0.0.0.0:1812</td></tr>
+            <tr><td class="muted">RADIUS Acct</td><td class="monospace">UDP 0.0.0.0:1813</td></tr>
+            <tr><td class="muted">Captive Portal</td><td class="monospace">TCP 0.0.0.0:8081</td></tr>
+            <tr><td class="muted">Task Scheduler</td><td class="monospace">SoHoLINK Node</td></tr>
+            <tr><td class="muted">Install dir</td><td class="monospace">C:\Program Files\SoHoLINK\</td></tr>
+          </table>
+        </div>
+
+        <!-- Links -->
+        <div class="card">
+          <div class="card-title">Resources</div>
+          <table class="data-table">
+            <tr><td><a href="https://ntari.org" target="_blank" style="color:var(--accent)">ntari.org</a></td><td class="muted">Project website</td></tr>
+            <tr><td><a href="https://github.com/NetworkTheoryAppliedResearchInstitute/soholink" target="_blank" style="color:var(--accent)">GitHub</a></td><td class="muted">Source code</td></tr>
+            <tr><td><a href="https://go.dev/dl/" target="_blank" style="color:var(--accent)">go.dev/dl</a></td><td class="muted">Go toolchain</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- /screen-help -->
+
+
+  <!-- ── SETTINGS ───────────────────────────────────────────────────────────── -->
+  <div id="screen-settings" class="screen">
+    <div class="section-head">
+      <h2>Settings</h2>
+      <span class="meta">Edit config.yaml directly for full control</span>
+    </div>
+
+    <div class="grid-2">
+      <!-- Node identity -->
+      <div class="card">
+        <div class="card-title">Node Identity</div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-node-name">Node Name</label>
+          <input type="text" class="form-input" id="cfg-node-name" placeholder="my-soho-node">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-node-region">Region</label>
+          <input type="text" class="form-input" id="cfg-node-region" placeholder="us-east-1">
+        </div>
+      </div>
+
+      <!-- Network -->
+      <div class="card">
+        <div class="card-title">Network Ports</div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-api-port">HTTP API Port</label>
+          <input type="number" class="form-input" id="cfg-api-port" value="8080">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-radius-port">RADIUS Port</label>
+          <input type="number" class="form-input" id="cfg-radius-port" value="1812">
+        </div>
+      </div>
+
+      <!-- Pricing defaults -->
+      <div class="card">
+        <div class="card-title">Default Pricing (sats)</div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-price-cpu">CPU per core-hour</label>
+          <input type="number" class="form-input" id="cfg-price-cpu" value="100" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-price-ram">RAM per GB-hour</label>
+          <input type="number" class="form-input" id="cfg-price-ram" value="20" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfg-price-storage">Storage per GB-hour</label>
+          <input type="number" class="form-input" id="cfg-price-storage" value="5" min="0">
+        </div>
+      </div>
+
+      <!-- Danger zone -->
+      <div class="card" style="border-color:rgba(239,68,68,0.3)">
+        <div class="card-title" style="color:var(--danger)">Danger Zone</div>
+        <p class="muted" style="font-size:13px;margin-bottom:16px">
+          These actions affect the running node service. Use with care.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-danger"
+                  onclick="if(confirm('Stop the node? It will not accept new rentals until restarted.')) fetch('/api/admin/stop',{method:'POST'})">
+            Stop Node
+          </button>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:12px">
+          To uninstall: run <code>scripts\uninstall-service.ps1</code> as Administrator.
+        </p>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" id="settings-save">Save Settings</button>
+      <button class="btn btn-secondary" onclick="loadSettings()">Reset</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:8px">
+      Settings are written to <code>C:\Program Files\SoHoLINK\config.yaml</code>.
+      Restart the node for changes to take effect.
+    </p>
+  </div><!-- /screen-settings -->
+
+</main><!-- /content -->
+
+<script src="app.js"></script>
+</body>
+</html>

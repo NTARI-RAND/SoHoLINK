@@ -37,5 +37,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize application: %w", err)
 	}
 
+	// Wire the embedded dashboard assets into the HTTP API server so that
+	// /dashboard serves the local web UI from within the single binary.
+	if globalDashboardFS != nil && application.HTTPAPIServer != nil {
+		application.HTTPAPIServer.SetDashboardFS(globalDashboardFS)
+	}
+
 	return application.Start()
 }

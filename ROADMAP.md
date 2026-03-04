@@ -12,6 +12,47 @@ For detailed implementation plans see:
 
 ---
 
+## 🔨 v0.1.x — Local Web Dashboard (In Progress, 2026-03-03)
+
+**Goal:** Replace the Fyne native GUI with an embedded local web dashboard served by `fedaaa.exe` at
+`http://localhost:8080/dashboard`. No CGO/MinGW required; richer UI for radial dials, charts, and
+globe integration; works 100% offline — the node IS the program, the browser is the renderer.
+
+**Phase 1 — Shell + navigation (done 2026-03-03):**
+
+- ✅ `ui/dashboard/index.html` — SPA shell with 5-tab nav (Dashboard, Plan Work, Management, Help, Settings)
+- ✅ `ui/dashboard/style.css` — dark theme, cyan accent, SVG radial dials
+- ✅ `ui/dashboard/app.js` — hash router, live polling, dial animation
+- ✅ `internal/httpapi/dashboard.go` — embed + serve assets at `/dashboard`
+- ✅ `internal/httpapi/server.go` — `/dashboard`, `/api/status` routes
+
+**Phase 2 — Dashboard screen (next):**
+
+- [ ] `GET /api/status` — CPU, RAM, storage, uptime, active rentals, federation nodes
+- [ ] Radial dials pulling real data; globe iframe using existing `/ntarios-globe.html`
+- [ ] Remove demo buttons (ADD NODE, ADD 5, ADD 10) from globe; connect to real `/ws/graph`
+
+**Phase 3 — Management screen:**
+
+- [ ] `GET /api/ledger` — revenue events from `internal/payment/ledger`
+- [ ] `GET /api/rentals/active` — from `internal/rental`
+- [ ] `POST /api/payout` — trigger Stripe / Lightning settlement
+- [ ] Income chart (30-day bar chart)
+
+**Phase 4 — Plan Work + Settings:**
+
+- [ ] `GET/POST /api/config` — read/write config.yaml safely
+- [ ] Resource offer sliders → live earnings estimate
+- [ ] Settings form with validation
+
+**Phase 5 — Help + polish:**
+
+- [ ] Rendered documentation, FAQ, glossary
+- [ ] Desktop shortcut created by `install-service.ps1`
+- [ ] Dark theme polish; mobile-friendly layout
+
+---
+
 ## ✅ v0.1.0 — Core Platform (Shipped 2026-03-01)
 
 The foundational federated compute marketplace. All core subsystems operational.
@@ -300,7 +341,7 @@ Items explicitly deferred or out of scope:
 
 ---
 
-*Last updated: 2026-03-03 (ML Phases 0+1 shipped; bandit wiring complete; code review hardening patch applied — see CHANGELOG.md [Unreleased])*
+*Last updated: 2026-03-03 (Web dashboard Phase 1 in progress; ML Phases 0+1 shipped; code review hardening patch applied — see CHANGELOG.md [Unreleased])*
 *Detailed mobile plan: [`docs/MOBILE_INTEGRATION.md`](docs/MOBILE_INTEGRATION.md)*
 *ML scheduling research: [`docs/research/ML_LOAD_BALANCING.md`](docs/research/ML_LOAD_BALANCING.md)*
 *Full change history: [`CHANGELOG.md`](CHANGELOG.md)*

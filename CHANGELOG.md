@@ -9,6 +9,33 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Local Web Dashboard Phase 1 (2026-03-03)
+
+**Architecture decision:** Dashboard is an embedded local web app served by `fedaaa.exe` at
+`http://localhost:8080/dashboard` — not a Fyne native app (avoids CGO/MinGW complexity) and not a
+cloud SaaS (fully offline, no login). The running node IS the program; the browser is the renderer.
+
+- `ui/dashboard/index.html`: single-page app shell with dark theme and 5-tab navigation
+- `ui/dashboard/style.css`: dark theme, cyan accent, SVG radial dials, responsive layout
+- `ui/dashboard/app.js`: hash-based router, live stat polling, radial dial animation
+- `embed.go`: added `DashboardFS embed.FS` with `//go:embed ui/dashboard` directive
+- `internal/httpapi/dashboard.go`: serves embedded dashboard assets at `/dashboard`; redirects `/` to dashboard
+- `internal/httpapi/server.go`: added `SetDashboardFS()`, `/dashboard`, `/dashboard/` routes, `/api/status` endpoint
+- `cmd/fedaaa/main.go`: wires `soholink.DashboardFS` → `server.SetDashboardFS()`
+
+**5 screens planned:** Dashboard (radial dials), Plan Work, Management (income/payments), Help, Settings
+
+### Added — Self-Contained Binary & Windows Service (2026-03-03)
+
+- **Embedded OPA policies**: `embed.go` — `PoliciesFS embed.FS` (`//go:embed configs/policies`); `internal/policy/engine.go` — `SetEmbeddedFS(fs.FS)` setter; engine loads `.rego` files from embedded FS when `policy.directory == ""`
+- **`cmd/fedaaa/main.go`** and **`cmd/fedaaa-gui/main.go`**: wire `policy.SetEmbeddedFS(sub)` before `cli.Execute()` so both entry points use embedded policies
+- **`internal/app/app.go`**: startup banner now shows `Policies: (embedded)` via `PolicyEng.PolicyDir()`
+- **`configs/default.yaml`**: `policy.directory: ""` (empty triggers embedded FS; no external configs/ directory required)
+- **`scripts/install-service.ps1`**: copies `fedaaa.exe` → `C:\Program Files\SoHoLINK\`; registers Windows Scheduled Task (SYSTEM, at-boot, 5x auto-restart); opens firewall UDP 1812/1813 + TCP 8080; starts immediately
+- **`scripts/uninstall-service.ps1`**: stops task, removes task, removes firewall rules, deletes install directory
+- **`start-node.bat`**: double-click launcher; keeps console window open with endpoint summary; waits for Ctrl+C
+- **`.gitignore`**: `/fedaaa` and `/fedaaa-*` (anchored to root; previously bare `fedaaa` matched `cmd/fedaaa/` directory); added `/accounting/` to exclude runtime JSONL audit logs
+
 ### Security — gosec G115 + annotation pass (2026-03-03)
 
 - Resolved all 29 HIGH-severity gosec findings across 12 files using targeted `// #nosec` annotations and two code improvements:
