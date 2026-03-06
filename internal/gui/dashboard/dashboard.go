@@ -767,9 +767,9 @@ func buildUsersTab(w fyne.Window, application *app.App) *container.TabItem {
 			case 2:
 				lbl.SetText(u.Role)
 			case 3:
-				lbl.SetText(u.CreatedAt.Format("2006-01-02"))
+				lbl.SetText(u.CreatedAt)
 			case 4:
-				if u.IsRevoked {
+				if u.RevokedAt.Valid {
 					lbl.SetText("revoked")
 				} else {
 					lbl.SetText("active")
@@ -964,9 +964,9 @@ func showNodeSettingsDialog(w fyne.Window, application *app.App) {
 	items := []*widget.FormItem{
 		widget.NewFormItem("Node name", nameEntry),
 		widget.NewFormItem("Node DID", didEntry),
-		widget.NewFormItem("Auth address", authEntry),
-		widget.NewFormItem("Acct address", acctEntry),
-		widget.NewFormItem("Shared secret", secretEntry),
+		widget.NewFormItem("Coop. auth address", authEntry),
+		widget.NewFormItem("Coop. acct address", acctEntry),
+		widget.NewFormItem("Cooperative secret", secretEntry),
 		widget.NewFormItem("Data directory", dataDirEntry),
 	}
 
@@ -1398,8 +1398,14 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 	dirEntry.OnChanged = func(s string) { state.DataDir = s }
 
 	secretEntry := widget.NewPasswordEntry()
-	secretEntry.SetPlaceHolder("strong shared secret")
+	secretEntry.SetPlaceHolder("secret shared among cooperative members")
 	secretEntry.OnChanged = func(s string) { state.Secret = s }
+
+	coopHint := widget.NewLabel(
+		"Nodes that share the same cooperative secret form a trusted earning group " +
+			"with preferential routing and zero marketplace fee between members. " +
+			"Leave blank to participate in the open marketplace only.")
+	coopHint.Wrapping = fyne.TextWrapWord
 
 	return container.NewBorder(
 		widget.NewLabelWithStyle("Node Configuration", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
@@ -1415,12 +1421,19 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 		),
 		nil, nil,
 		container.NewScroll(container.NewPadded(
-			widget.NewForm(
-				widget.NewFormItem("Node name", nameEntry),
-				widget.NewFormItem("RADIUS auth port", authEntry),
-				widget.NewFormItem("RADIUS acct port", acctEntry),
-				widget.NewFormItem("Data directory", dirEntry),
-				widget.NewFormItem("Shared secret", secretEntry),
+			container.NewVBox(
+				widget.NewForm(
+					widget.NewFormItem("Node name", nameEntry),
+					widget.NewFormItem("Data directory", dirEntry),
+				),
+				widget.NewSeparator(),
+				widget.NewLabelWithStyle("Cooperative Earning Group (optional)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+				coopHint,
+				widget.NewForm(
+					widget.NewFormItem("Cooperative secret", secretEntry),
+					widget.NewFormItem("Coop. auth port", authEntry),
+					widget.NewFormItem("Coop. acct port", acctEntry),
+				),
 			),
 		)),
 	)
@@ -1594,7 +1607,7 @@ func wizardCompletePage(w fyne.Window, onComplete func()) fyne.CanvasObject {
 		widget.NewSeparator(),
 		widget.NewLabel("SoHoLINK has been configured successfully.\n\n"+
 			"Next steps:\n"+
-			"  1. Open firewall ports for RADIUS (1812/1813 UDP)\n"+
+			"  1. If joining a cooperative: open ports 1812/1813 UDP for cooperative auth\n"+
 			"  2. Start the SoHoLINK service: soholink start\n"+
 			"  3. The dashboard will show live node status\n"),
 		layout.NewSpacer(),
@@ -1675,7 +1688,7 @@ func maskSecret(s string) string {
 
 // countOnlineSubsystems returns the number of non-nil subsystems.
 func countOnlineSubsystems(a *app.App) int {
-	count := 1 // RADIUS is always up
+	count := 1 // cooperative auth server always running
 	if a.LBTASManager != nil {
 		count++
 	}

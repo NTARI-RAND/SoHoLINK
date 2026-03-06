@@ -2,11 +2,19 @@ node:
   name: "soholink-node"
   location: ""
 
+# Cooperative Earning Group (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+# Nodes that share the same cooperative secret form a trusted earning group.
+# Members get preferential routing and pay no inter-member marketplace fee.
+# All nodes discover each other automatically via the P2P mesh (see p2p: below);
+# cooperative auth is an ADDITIONAL trust layer for operators who have agreed to
+# pool resources together.  Leave enabled: false to use the open marketplace only.
 radius:
   enabled: false
   auth_address: "0.0.0.0:1812"
   acct_address: "0.0.0.0:1813"
   shared_secret: ""   # REQUIRED when enabled: true — set via SOHOLINK_RADIUS_SHARED_SECRET
+                      # All cooperative members must use the same secret.
 
 auth:
   credential_ttl: 3600

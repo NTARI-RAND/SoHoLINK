@@ -14,18 +14,19 @@ import (
 func (a *App) validateConfig() error {
 	cfg := a.Config
 
-	// 1. RADIUS shared secret — fatal when RADIUS is enabled.
+	// 1. Cooperative shared secret — fatal when cooperative auth is enabled.
+	//    All nodes in the same earning cooperative must share this secret.
 	if cfg.Radius.Enabled {
 		if cfg.Radius.SharedSecret == "" {
-			return fmt.Errorf("FATAL: radius.enabled=true but radius.shared_secret is empty — " +
-				"set a strong secret via SOHOLINK_RADIUS_SHARED_SECRET or the config file")
+			return fmt.Errorf("FATAL: cooperative auth enabled (radius.enabled=true) but radius.shared_secret is empty — " +
+				"set a strong cooperative secret via SOHOLINK_RADIUS_SHARED_SECRET or the config file")
 		}
 		if cfg.Radius.SharedSecret == "testing123" {
-			return fmt.Errorf("FATAL: radius.shared_secret is set to the insecure default 'testing123' — " +
-				"set a strong secret via SOHOLINK_RADIUS_SHARED_SECRET before enabling RADIUS in production")
+			return fmt.Errorf("FATAL: radius.shared_secret is the insecure default 'testing123' — " +
+				"set a strong cooperative secret via SOHOLINK_RADIUS_SHARED_SECRET before enabling cooperative mode")
 		}
 	} else if cfg.Radius.SharedSecret == "testing123" {
-		log.Printf("[WARN] SECURITY: radius.shared_secret is 'testing123'. Change it before enabling RADIUS.")
+		log.Printf("[WARN] SECURITY: radius.shared_secret is 'testing123'. Change it before enabling cooperative auth.")
 	}
 
 	// 2. Payment enabled but no real money-movement processor configured.
