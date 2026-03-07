@@ -116,6 +116,9 @@ For reference, the following security controls are currently in place:
 | DID blocklist with propagation | ✅ Federation-wide |
 | OPA policy enforcement | ✅ Resource sharing limits |
 | Self-review prevention (LBTAS) | ✅ Both rating directions |
+| Auto-updater HTTPS enforcement | ✅ `release_url` must be `https://`; redirects to non-HTTPS rejected |
+| Auto-updater checksum verification | ✅ SHA-256 vs official `checksums.txt`; `crypto/subtle` constant-time compare |
+| Auto-updater temp file isolation | ✅ `0600` permissions set before binary data written |
 
 ---
 

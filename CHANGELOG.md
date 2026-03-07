@@ -9,6 +9,70 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.1.1] — 2026-03-06
+
+### Added — Secure Auto-Update System
+
+SoHoLINK nodes can now update themselves automatically and securely.  The new `internal/updater`
+package polls the GitHub releases API on a configurable interval, downloads the new binary for
+the running OS and architecture, verifies its SHA-256 against the official `checksums.txt`
+published with each GoReleaser release, and atomically installs the update.
+
+**Security guarantees** (all stdlib, no new external dependencies):
+1. `release_url` must use `https://` — `http://` is rejected at validation time
+2. The HTTP client's `CheckRedirect` policy rejects any redirect that would leave HTTPS
+3. SHA-256 comparison uses `crypto/subtle.ConstantTimeCompare` to prevent timing side-channel leaks
+4. The temp file is restricted to `0600` permissions immediately after creation, before any binary data is written
+5. On Windows the batch update script validates `execPath` for batch-special characters (`"` and `%`) before interpolation
+6. On Unix, `os.Rename` provides kernel-level atomicity; the old binary's inode remains valid until the process exits
+
+**New files:**
+- `internal/updater/updater.go` — core update logic (`New`, `Start`, `CheckNow`, `Download`, `LatestRelease`)
+- `internal/httpapi/version.go` — `GET /api/version` endpoint (public, no auth required)
+
+**Modified files:**
+- `internal/config/config.go` — `UpdatesConfig` struct + `Updates` field on `Config`
+- `configs/default.yaml` — `updates:` section (disabled by default; opt in via wizard or config)
+- `internal/app/app.go` — `Updater`, `Version`, `Commit`, `BuildTime` fields; `SetVersion()`; updater wired into `New()` and `Start()`
+- `internal/httpapi/server.go` — version fields; `/api/version` route
+- `internal/httpapi/auth_middleware.go` — `/api/version` added to `publicPaths`
+- `internal/gui/dashboard/dashboard.go` — wizard now persists `UpdatesEnabled`; Help ▸ "Check for Updates…" dialog; update-available banner on Overview tab
+- `cmd/soholink/main.go` — `application.SetVersion(version, commit, buildTime)` called after `app.New()`
+
+**Configuration** (`configs/default.yaml`):
+```yaml
+updates:
+  enabled: false           # opt in via Setup Wizard step 5 or set true here
+  check_interval: "24h"
+  release_url: "https://api.github.com/repos/NetworkTheoryAppliedResearchInstitute/soholink/releases/latest"
+```
+
+### Added — Icon Update & Build Scripts
+
+- `assets/soholink-source.png` — NTARI globe+buildings logo ("STAY CONNECTED") saved as reproducible PNG source
+- `assets/soholink.ico` — rebuilt from new logo: 16/32/48/256 px, 69.8 KB
+- `scripts/update-icon.ps1` — reusable script: `assets/soholink-source.png` → `assets/soholink.ico` → rebuild `soholink.exe`
+- `scripts/build-gui.ps1` — reusable script: GUI binary build with version ldflags, no need to remember MinGW PATH setup
+- `soholink.exe` rebuilt as v0.1.1 with new NTARI logo embedded
+
+### Security — Updater Hardening (post-audit)
+
+An internal security audit of the initial updater implementation found 6 issues; all were
+fixed in this release before the binary was distributed:
+
+| Severity | Finding | Fix |
+|----------|---------|-----|
+| CRITICAL | No HTTPS scheme validation on `release_url` | Added `strings.HasPrefix("https://")` check in `CheckNow()` |
+| CRITICAL | Uncontrolled HTTP redirects in binary download | `http.Client.CheckRedirect` rejects non-HTTPS redirects |
+| HIGH | Non-constant-time SHA-256 comparison (`strings.EqualFold`) | Replaced with `crypto/subtle.ConstantTimeCompare` |
+| MEDIUM | Temp file world-readable before binary data written | `tmp.Chmod(0o600)` called immediately after `os.CreateTemp` |
+| MEDIUM | Windows batch script path injection via `execPath` | `strings.ContainsAny(execPath, '"%')` guard added |
+| LOW | Package doc did not reflect all security controls | Updated package-level doc comment |
+
+---
+
 ### Added — Buyer-Side Marketplace & Prepaid Wallet (2026-03-05)
 
 Complete requester (buyer) experience for the federated compute marketplace. Requesters can now
@@ -439,7 +503,8 @@ Initial production-capable release of the SoHoLINK federated compute marketplace
 
 ---
 
-[Unreleased]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.0.4...v0.1.0
 [0.0.4]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/compare/v0.0.2...v0.0.3
