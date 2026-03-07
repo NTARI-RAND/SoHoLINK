@@ -56,7 +56,31 @@ func RunSetupWizard(cfg *config.Config, s *store.Store) {
 	w.Resize(fyne.NewSize(900, 640))
 	w.CenterOnScreen()
 	w.SetFixedSize(false)
-	showWizard(w, cfg, s, nil)
+
+	// onComplete is called when the user clicks "Open Dashboard →".
+	// It loads the freshly written config and transitions the same window
+	// to the full dashboard — no process restart required.
+	onComplete := func() {
+		go func() {
+			newCfg, err := config.Load("")
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("setup complete, but could not load configuration: %w\n\nPlease restart SoHoLINK.", err), w)
+				return
+			}
+			application, err := app.New(newCfg)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("services could not start: %w\n\nPlease restart SoHoLINK.", err), w)
+				return
+			}
+			// Transition the wizard window to the full operator dashboard.
+			w.SetTitle("SoHoLINK")
+			w.Resize(windowSize)
+			w.SetMainMenu(buildMenuBar(w, application))
+			w.SetContent(buildDashboard(w, application))
+		}()
+	}
+
+	showWizard(w, cfg, s, onComplete)
 	w.ShowAndRun()
 }
 
@@ -1849,26 +1873,40 @@ func wizardInstallPage(w fyne.Window, state *wizardState, cfg *config.Config, s 
 	logLabel.Wrapping = fyne.TextWrapWord
 
 	go func() {
+		// Ensure we always have a valid config to populate and save.
+		workCfg := cfg
+		if workCfg == nil {
+			var err error
+			workCfg, err = config.Load("")
+			if err != nil {
+				// Even if Load fails (missing defaults), create a minimal config.
+				workCfg = &config.Config{}
+			}
+		}
+		configPath := filepath.Join(config.DefaultConfigDir(), "config.yaml")
+
 		steps := []struct {
 			label string
 			fn    func() error
 		}{
 			{"Applying configuration…", func() error {
-				if cfg != nil {
-					cfg.Node.Name = state.NodeName
-					cfg.Radius.AuthAddress = "0.0.0.0:" + state.AuthPort
-					cfg.Radius.AcctAddress = "0.0.0.0:" + state.AcctPort
-					cfg.Storage.BasePath = state.DataDir
-					cfg.Radius.SharedSecret = state.Secret
-				cfg.Updates.Enabled = state.UpdatesEnabled
-				}
+				workCfg.Node.Name = state.NodeName
+				workCfg.Radius.AuthAddress = "0.0.0.0:" + state.AuthPort
+				workCfg.Radius.AcctAddress = "0.0.0.0:" + state.AcctPort
+				workCfg.Storage.BasePath = state.DataDir
+				workCfg.Radius.SharedSecret = state.Secret
+				workCfg.Updates.Enabled = state.UpdatesEnabled
 				return nil
 			}},
 			{"Creating directories…", func() error {
-				if cfg != nil {
-					return config.EnsureDirectories(cfg)
+				// Ensure the config directory exists before we save into it.
+				if err := os.MkdirAll(config.DefaultConfigDir(), 0750); err != nil {
+					return fmt.Errorf("failed to create config directory: %w", err)
 				}
-				return os.MkdirAll(state.DataDir, 0750)
+				return config.EnsureDirectories(workCfg)
+			}},
+			{"Saving configuration…", func() error {
+				return config.Save(workCfg, configPath)
 			}},
 			{"Initializing database…", func() error {
 				if s != nil {
@@ -1885,9 +1923,6 @@ func wizardInstallPage(w fyne.Window, state *wizardState, cfg *config.Config, s 
 					}
 					return s.SetNodeInfo(context.Background(), "deployment_mode", state.DeploymentMode)
 				}
-				return nil
-			}},
-			{"Verifying installation…", func() error {
 				return nil
 			}},
 		}
@@ -2044,22 +2079,10 @@ func countOnlineSubsystems(a *app.App) int {
 }
 
 // defaultDataDir returns the platform-appropriate default data directory.
+// Delegates to config.DefaultDataDir so the wizard and the backend agree
+// on the same path.
 func defaultDataDir() string {
-	switch runtime.GOOS {
-	case "windows":
-		if d := os.Getenv("APPDATA"); d != "" {
-			return filepath.Join(d, "SoHoLINK")
-		}
-		return `C:\SoHoLINK`
-	case "darwin":
-		if h := os.Getenv("HOME"); h != "" {
-			return filepath.Join(h, "Library", "Application Support", "SoHoLINK")
-		}
-	}
-	if h := os.Getenv("HOME"); h != "" {
-		return filepath.Join(h, ".soholink")
-	}
-	return "/var/lib/soholink"
+	return config.DefaultDataDir()
 }
 
 // licenseText returns the license summary shown in the wizard.

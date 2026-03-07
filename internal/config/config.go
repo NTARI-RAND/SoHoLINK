@@ -364,6 +364,35 @@ func Load(configFile string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Save writes the essential wizard-configured fields to a YAML config file.
+// Only the fields set during setup are written; all other settings retain
+// their embedded defaults on the next load via config.Load.
+func Save(cfg *Config, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	content := fmt.Sprintf(
+		"# SoHoLINK node configuration — written by setup wizard\n"+
+			"node:\n"+
+			"  name: %q\n"+
+			"radius:\n"+
+			"  auth_address: %q\n"+
+			"  acct_address: %q\n"+
+			"  shared_secret: %q\n"+
+			"storage:\n"+
+			"  base_path: %q\n"+
+			"updates:\n"+
+			"  enabled: %v\n",
+		cfg.Node.Name,
+		cfg.Radius.AuthAddress,
+		cfg.Radius.AcctAddress,
+		cfg.Radius.SharedSecret,
+		cfg.Storage.BasePath,
+		cfg.Updates.Enabled,
+	)
+	return os.WriteFile(path, []byte(content), 0600)
+}
+
 // EnsureDirectories creates all required directories for the node.
 func EnsureDirectories(cfg *Config) error {
 	dirs := []string{
