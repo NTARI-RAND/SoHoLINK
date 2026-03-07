@@ -1278,6 +1278,7 @@ const (
 	stepLicense
 	stepDeploymentMode
 	stepConfiguration
+	stepHardware       // NEW: system resource assessment
 	stepAdvancedConfig
 	stepReview
 	stepInstallProgress
@@ -1300,6 +1301,7 @@ type wizardState struct {
 	MetricsPort      string
 	PaymentsEnabled  bool
 	StorageLimitGB   int
+	Capabilities     *wizard.SystemCapabilities // set by wizardHardwarePage; nil until detection runs
 	LogOutput        []string
 }
 
@@ -1356,6 +1358,8 @@ func buildWizardPage(w fyne.Window, step *wizardStep, state *wizardState,
 		body = wizardDeploymentPage(state, nextStep, prevStep)
 	case stepConfiguration:
 		body = wizardConfigPage(state, nextStep, prevStep)
+	case stepHardware:
+		body = wizardHardwarePage(state, nextStep, prevStep)
 	case stepAdvancedConfig:
 		body = wizardAdvancedPage(state, nextStep, prevStep)
 	case stepReview:
@@ -1555,6 +1559,121 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 			),
 		)),
 	)
+}
+
+// wizardHardwarePage detects the system's hardware in a background goroutine and
+// displays each resource as a plain-English card. It also pre-fills
+// state.StorageLimitGB to 50% of actual free disk space so the next step's
+// slider opens at a sensible default rather than the hardcoded 50 GB.
+func wizardHardwarePage(state *wizardState, next, prev func()) fyne.CanvasObject {
+	spin := widget.NewProgressBarInfinite()
+	status := widget.NewLabel("Scanning your hardware… this takes a few seconds.")
+	status.Wrapping = fyne.TextWrapWord
+	results := container.NewVBox()
+
+	go func() {
+		caps, err := wizard.DetectSystemCapabilities()
+		spin.Hide()
+		if err != nil {
+			status.SetText("⚠️  Could not scan hardware: " + err.Error() +
+				"\n\nYou can still continue — the default values will be used.")
+			return
+		}
+		state.Capabilities = caps
+
+		// ── Smart storage default: 50% of free space, rounded to nearest 10 GB ──
+		free := caps.Storage.AvailableGB
+		suggested := (free / 2 / 10) * 10
+		if suggested < 10 {
+			suggested = 10
+		}
+		if suggested > 1000 {
+			suggested = 1000
+		}
+		state.StorageLimitGB = suggested
+
+		status.SetText("Here's what we found on this computer:")
+
+		// CPU
+		cpuNote := fmt.Sprintf(
+			"Can handle %d simultaneous compute jobs (one per core). More cores = more earning potential.",
+			caps.CPU.Cores)
+		results.Add(wizardHardwareCard(
+			"🖥️  Processor",
+			fmt.Sprintf("%s  ·  %d cores / %d threads", caps.CPU.Model, caps.CPU.Cores, caps.CPU.Threads),
+			cpuNote,
+		))
+
+		// Memory
+		vmCount := caps.Memory.AvailableGB / 2
+		if vmCount < 1 {
+			vmCount = 1
+		}
+		memNote := fmt.Sprintf(
+			"Enough memory to run up to %d small virtual machines simultaneously.", vmCount)
+		results.Add(wizardHardwareCard(
+			"🧠  Memory (RAM)",
+			fmt.Sprintf("%.1f GB total  /  %.1f GB available",
+				float64(caps.Memory.TotalGB), float64(caps.Memory.AvailableGB)),
+			memNote,
+		))
+
+		// Storage
+		driveType := caps.Storage.DriveType
+		if driveType == "" {
+			driveType = "Disk"
+		}
+		storNote := fmt.Sprintf(
+			"We suggest sharing %d GB (50%% of your free space). You'll set the exact amount on the next screen.",
+			suggested)
+		results.Add(wizardHardwareCard(
+			"💾  Storage",
+			fmt.Sprintf("%s  ·  %d GB free of %d GB total", driveType, caps.Storage.AvailableGB, caps.Storage.TotalGB),
+			storNote,
+		))
+
+		// GPU
+		gpuValue := "None detected"
+		gpuNote := "Compute jobs will use your CPU only. That's perfectly fine for most tasks."
+		if caps.GPU != nil && caps.GPU.Model != "" {
+			gpuValue = caps.GPU.Model
+			if caps.GPU.VRAMGb > 0 {
+				gpuValue = fmt.Sprintf("%s  ·  %d GB VRAM", caps.GPU.Model, caps.GPU.VRAMGb)
+			}
+			gpuNote = "GPU acceleration is available — unlocks AI inference, 3D rendering, and video transcoding jobs which pay premium rates."
+		}
+		results.Add(wizardHardwareCard("🎮  Graphics (GPU)", gpuValue, gpuNote))
+
+		results.Refresh()
+	}()
+
+	return container.NewBorder(
+		widget.NewLabelWithStyle("Your Computer's Resources", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		container.NewHBox(
+			widget.NewButton("← Back", prev),
+			layout.NewSpacer(),
+			widget.NewButton("Continue →", next),
+		),
+		nil, nil,
+		container.NewScroll(container.NewPadded(
+			container.NewVBox(status, spin, results),
+		)),
+	)
+}
+
+// wizardHardwareCard renders one resource row: a bold title, a measured value line,
+// and an optional plain-English explanation prefixed with "→".
+func wizardHardwareCard(title, value, explanation string) fyne.CanvasObject {
+	titleLbl := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	valueLbl := widget.NewLabel(value)
+	valueLbl.Wrapping = fyne.TextWrapWord
+	items := []fyne.CanvasObject{titleLbl, valueLbl}
+	if explanation != "" {
+		expLbl := widget.NewLabel("→ " + explanation)
+		expLbl.Wrapping = fyne.TextWrapWord
+		items = append(items, expLbl)
+	}
+	return widget.NewCard("", "", container.NewVBox(items...))
 }
 
 func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject {
