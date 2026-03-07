@@ -1376,17 +1376,24 @@ func buildWizardPage(w fyne.Window, step *wizardStep, state *wizardState,
 }
 
 func wizardWelcomePage(next func()) fyne.CanvasObject {
-	return container.NewVBox(
+	intro := widget.NewLabel(
+		"SoHoLINK lets your spare computer power earn money.\n\n" +
+			"When you're not using your PC, other people and businesses can rent your CPU,\n" +
+			"storage, or printer through a secure marketplace — and you get paid automatically.\n\n" +
+			"This 6-step wizard takes about 5 minutes. It will:\n" +
+			"  • Measure what your computer can offer\n" +
+			"  • Suggest a fair price for your resources\n" +
+			"  • Create a secure identity for your node\n" +
+			"  • Ask a few optional questions about extra features\n" +
+			"  • Save your settings and open the earnings dashboard\n\n" +
+			"You can change any setting later in Settings.",
+	)
+	intro.Wrapping = fyne.TextWrapWord
+	return container.NewBorder(
 		widget.NewLabelWithStyle("Welcome to SoHoLINK", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("Transform your spare hardware into income by joining the federated cloud marketplace.\n\n"+
-			"This wizard will guide you through:\n"+
-			"  • Hardware detection and capability assessment\n"+
-			"  • Operating cost calculation\n"+
-			"  • Competitive pricing configuration\n"+
-			"  • Decentralized identity creation\n"+
-			"  • Network and security setup\n"),
-		layout.NewSpacer(),
-		container.NewHBox(layout.NewSpacer(), widget.NewButton("Begin Setup →", next)),
+		container.NewHBox(layout.NewSpacer(), widget.NewButton("Get Started →", next)),
+		nil, nil,
+		container.NewPadded(intro),
 	)
 }
 
@@ -1420,38 +1427,69 @@ func wizardLicensePage(state *wizardState, next, prev func()) fyne.CanvasObject 
 func wizardDeploymentPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 	group := widget.NewRadioGroup(
 		[]string{
-			"Standalone Node — share your hardware directly",
-			"SaaS/Managed Mode — operate as a managed cloud provider",
+			"Home / Small Office  —  easiest, most common",
+			"Managed Cloud Provider  —  run a service for paying clients",
 		},
 		func(chosen string) {
-			if strings.HasPrefix(chosen, "Standalone") {
+			if strings.HasPrefix(chosen, "Home") {
 				state.DeploymentMode = "standalone"
 			} else {
 				state.DeploymentMode = "saas"
 			}
 		},
 	)
-	group.SetSelected("Standalone Node — share your hardware directly")
+	group.SetSelected("Home / Small Office  —  easiest, most common")
 
-	return container.NewVBox(
-		widget.NewLabelWithStyle("Deployment Mode", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		widget.NewLabel("How will this node participate in the SoHoLINK marketplace?"),
-		widget.NewSeparator(),
-		group,
-		layout.NewSpacer(),
+	standaloneDesc := widget.NewLabel(
+		"🏠  Home / Small Office\n" +
+			"Your computer joins the open marketplace and earns money by completing jobs that\n" +
+			"other users post — compute tasks, file storage, or printing. No business setup\n" +
+			"required. Best for individuals, remote workers, and small teams who want passive\n" +
+			"income from hardware that would otherwise sit idle.",
+	)
+	standaloneDesc.Wrapping = fyne.TextWrapWord
+
+	saasDesc := widget.NewLabel(
+		"☁️  Managed Cloud Provider\n" +
+			"Run a professional cloud service where clients pay you for dedicated compute,\n" +
+			"storage, or print capacity on contract. Includes customer billing dashboards,\n" +
+			"capacity alerts, and service-level management. Best for IT professionals and\n" +
+			"small hosting businesses who want to offer a branded service to clients.",
+	)
+	saasDesc.Wrapping = fyne.TextWrapWord
+
+	hint := widget.NewLabel("Not sure? Choose Home / Small Office — it's the right choice for most people and you can switch later.")
+	hint.Wrapping = fyne.TextWrapWord
+
+	return container.NewBorder(
+		widget.NewLabelWithStyle("How do you want to participate?", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		container.NewHBox(
 			widget.NewButton("← Back", prev),
 			layout.NewSpacer(),
 			widget.NewButton("Continue →", next),
 		),
+		nil, nil,
+		container.NewScroll(container.NewPadded(container.NewVBox(
+			widget.NewSeparator(),
+			group,
+			widget.NewSeparator(),
+			standaloneDesc,
+			widget.NewSeparator(),
+			saasDesc,
+			widget.NewSeparator(),
+			hint,
+		))),
 	)
 }
 
 func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(state.NodeName)
-	nameEntry.SetPlaceHolder("my-soho-node")
+	nameEntry.SetPlaceHolder("home-office-1")
 	nameEntry.OnChanged = func(s string) { state.NodeName = s }
+
+	nameHint := widget.NewLabel("A nickname for this computer on the network — like a label on a server rack. Use letters, numbers, and hyphens. Example: home-office-1 or janes-desktop")
+	nameHint.Wrapping = fyne.TextWrapWord
 
 	authEntry := widget.NewEntry()
 	authEntry.SetText(state.AuthPort)
@@ -1465,18 +1503,26 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 	dirEntry.SetText(state.DataDir)
 	dirEntry.OnChanged = func(s string) { state.DataDir = s }
 
+	dirHint := widget.NewLabel("Where SoHoLINK stores its database, identity files, and logs. The default location is fine for most users — only change this if you want data on a different drive.")
+	dirHint.Wrapping = fyne.TextWrapWord
+
 	secretEntry := widget.NewPasswordEntry()
-	secretEntry.SetPlaceHolder("secret shared among cooperative members")
+	secretEntry.SetPlaceHolder("Leave blank to use the open marketplace")
 	secretEntry.OnChanged = func(s string) { state.Secret = s }
 
 	coopHint := widget.NewLabel(
-		"Nodes that share the same cooperative secret form a trusted earning group " +
-			"with preferential routing and zero marketplace fee between members. " +
-			"Leave blank to participate in the open marketplace only.")
+		"A Cooperative Earning Group is a private circle of trusted nodes — like a co-op. " +
+			"Members pay zero platform fee to each other and get priority job routing between " +
+			"themselves. To join an existing group, enter the shared passphrase your group uses. " +
+			"To start a group, invent a strong passphrase and share it with the other node operators. " +
+			"Leave blank if you're setting up your first node or just want the open marketplace.")
 	coopHint.Wrapping = fyne.TextWrapWord
 
+	portsHint := widget.NewLabel("Advanced: these network ports are used for cooperative authentication. Change only if port 1812 or 1813 is already in use on this computer.")
+	portsHint.Wrapping = fyne.TextWrapWord
+
 	return container.NewBorder(
-		widget.NewLabelWithStyle("Node Configuration", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Name Your Node", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		container.NewHBox(
 			widget.NewButton("← Back", prev),
 			layout.NewSpacer(),
@@ -1490,17 +1536,21 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 		nil, nil,
 		container.NewScroll(container.NewPadded(
 			container.NewVBox(
-				widget.NewForm(
-					widget.NewFormItem("Node name", nameEntry),
-					widget.NewFormItem("Data directory", dirEntry),
-				),
+				widget.NewForm(widget.NewFormItem("Node nickname", nameEntry)),
+				nameHint,
 				widget.NewSeparator(),
-				widget.NewLabelWithStyle("Cooperative Earning Group (optional)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+				widget.NewForm(widget.NewFormItem("Data folder", dirEntry)),
+				dirHint,
+				widget.NewSeparator(),
+				widget.NewLabelWithStyle("Cooperative Earning Group  (optional)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 				coopHint,
 				widget.NewForm(
-					widget.NewFormItem("Cooperative secret", secretEntry),
-					widget.NewFormItem("Coop. auth port", authEntry),
-					widget.NewFormItem("Coop. acct port", acctEntry),
+					widget.NewFormItem("Group passphrase", secretEntry),
+				),
+				portsHint,
+				widget.NewForm(
+					widget.NewFormItem("Auth port", authEntry),
+					widget.NewFormItem("Accounting port", acctEntry),
 				),
 			),
 		)),
@@ -1508,24 +1558,61 @@ func wizardConfigPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 }
 
 func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject {
-	p2pCheck := widget.NewCheck("Enable P2P mesh networking", func(b bool) { state.P2PEnabled = b })
+	// ── Local network discovery (P2P) ─────────────────────────────────────────
+	p2pCheck := widget.NewCheck("Find other nodes automatically on my local network", func(b bool) { state.P2PEnabled = b })
 	p2pCheck.SetChecked(state.P2PEnabled)
+	p2pHint := widget.NewLabel(
+		"When enabled, SoHoLINK computers on the same home or office Wi-Fi/LAN find\n" +
+			"each other automatically — no internet required for local jobs. This makes\n" +
+			"local jobs faster, cheaper, and resilient to internet outages.\n" +
+			"→ Recommended if you have more than one SoHoLINK node at home or in the office.\n" +
+			"→ Safe to leave off if this is your only node.",
+	)
+	p2pHint.Wrapping = fyne.TextWrapWord
 	p2pPortEntry := widget.NewEntry()
 	p2pPortEntry.SetText(state.P2PPort)
 	p2pPortEntry.OnChanged = func(s string) { state.P2PPort = s }
 
-	updateCheck := widget.NewCheck("Enable auto-updates", func(b bool) { state.UpdatesEnabled = b })
+	// ── Auto-updates ──────────────────────────────────────────────────────────
+	updateCheck := widget.NewCheck("Keep SoHoLINK updated automatically", func(b bool) { state.UpdatesEnabled = b })
 	updateCheck.SetChecked(state.UpdatesEnabled)
+	updateHint := widget.NewLabel(
+		"Once a day, SoHoLINK quietly checks for a new version. If one is available it\n" +
+			"downloads it, verifies the file hasn't been tampered with (SHA-256 checksum),\n" +
+			"and applies it the next time the app starts. No action needed from you.\n" +
+			"→ Recommended for most users — keeps your node secure and earning with new features.\n" +
+			"→ Disable only if you prefer to update manually.",
+	)
+	updateHint.Wrapping = fyne.TextWrapWord
 
-	metricsCheck := widget.NewCheck("Enable Prometheus metrics", func(b bool) { state.MetricsEnabled = b })
+	// ── Performance monitoring feed (Prometheus metrics) ──────────────────────
+	metricsCheck := widget.NewCheck("Expose a performance monitoring feed", func(b bool) { state.MetricsEnabled = b })
 	metricsCheck.SetChecked(state.MetricsEnabled)
+	metricsHint := widget.NewLabel(
+		"Publishes a live data stream about your node's CPU usage, memory, job activity,\n" +
+			"and earnings on a local port. Server monitoring tools like Prometheus, Grafana,\n" +
+			"and Datadog can read this feed to draw graphs and send alerts.\n" +
+			"→ Only useful if you already run server monitoring software.\n" +
+			"→ Leave this off if you don't know what Prometheus is — the dashboard covers the basics.",
+	)
+	metricsHint.Wrapping = fyne.TextWrapWord
 	metricsPortEntry := widget.NewEntry()
 	metricsPortEntry.SetText(state.MetricsPort)
 	metricsPortEntry.OnChanged = func(s string) { state.MetricsPort = s }
 
-	paymentsCheck := widget.NewCheck("Enable payment processors (Stripe / Lightning)", func(b bool) { state.PaymentsEnabled = b })
+	// ── Payment processors ────────────────────────────────────────────────────
+	paymentsCheck := widget.NewCheck("Accept credit card and Bitcoin Lightning payments", func(b bool) { state.PaymentsEnabled = b })
 	paymentsCheck.SetChecked(state.PaymentsEnabled)
+	paymentsHint := widget.NewLabel(
+		"Lets clients pay you with a credit card (via Stripe) or Bitcoin Lightning — real\n" +
+			"money deposited to your account. You'll enter your payment credentials in\n" +
+			"Settings → Payment after the wizard finishes.\n" +
+			"Without this, your node still earns barter credits redeemable within the federation.\n" +
+			"→ Enable if you want cash payouts. You configure your Stripe or Lightning details after setup.",
+	)
+	paymentsHint.Wrapping = fyne.TextWrapWord
 
+	// ── Shared storage pool ───────────────────────────────────────────────────
 	storageLimitSlider := widget.NewSlider(10, 2000)
 	storageLimitSlider.SetValue(float64(state.StorageLimitGB))
 	storageLimitLabel := widget.NewLabel(fmt.Sprintf("%d GB", state.StorageLimitGB))
@@ -1533,23 +1620,42 @@ func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject
 		state.StorageLimitGB = int(v)
 		storageLimitLabel.SetText(fmt.Sprintf("%d GB", int(v)))
 	}
+	storageHint := widget.NewLabel(
+		"The maximum amount of your hard drive that clients can use to store files.\n" +
+			"Your own files are untouched — SoHoLINK only uses the space you allocate here,\n" +
+			"and only when clients are actively storing data.\n" +
+			"→ Set to the amount of free disk space you're comfortable sharing.\n" +
+			"→ More shared space can mean more storage earnings.",
+	)
+	storageHint.Wrapping = fyne.TextWrapWord
 
 	content := container.NewVBox(
+		// P2P
 		p2pCheck,
-		widget.NewForm(widget.NewFormItem("P2P listen port", p2pPortEntry)),
+		p2pHint,
+		widget.NewForm(widget.NewFormItem("  Local network port", p2pPortEntry)),
 		widget.NewSeparator(),
+		// Auto-updates
 		updateCheck,
+		updateHint,
+		widget.NewSeparator(),
+		// Prometheus metrics
 		metricsCheck,
-		widget.NewForm(widget.NewFormItem("Metrics port", metricsPortEntry)),
+		metricsHint,
+		widget.NewForm(widget.NewFormItem("  Monitoring port", metricsPortEntry)),
 		widget.NewSeparator(),
+		// Payments
 		paymentsCheck,
+		paymentsHint,
 		widget.NewSeparator(),
-		widget.NewLabel("Storage pool limit:"),
+		// Storage
+		widget.NewLabelWithStyle("Shared storage space", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewHBox(storageLimitSlider, storageLimitLabel),
+		storageHint,
 	)
 
 	return container.NewBorder(
-		widget.NewLabelWithStyle("Advanced Configuration", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Features & Earning Options", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		container.NewHBox(
 			widget.NewButton("← Back", prev),
 			layout.NewSpacer(),
@@ -1561,19 +1667,26 @@ func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject
 }
 
 func wizardReviewPage(state *wizardState, next, prev func()) fyne.CanvasObject {
+	modeLabel := "Home / Small Office Node"
+	if state.DeploymentMode == "saas" {
+		modeLabel = "Managed Cloud Provider"
+	}
+	coopLabel := "No — open marketplace only"
+	if state.Secret != "" {
+		coopLabel = "Yes — group passphrase set"
+	}
+
 	summary := fmt.Sprintf(
-		"Node name:       %s\n"+
-			"Deployment:      %s\n"+
-			"Auth port:       %s\n"+
-			"Acct port:       %s\n"+
-			"Data directory:  %s\n"+
-			"P2P enabled:     %s\n"+
-			"Auto-updates:    %s\n"+
-			"Metrics:         %s\n"+
-			"Payments:        %s\n"+
-			"Storage limit:   %d GB\n",
-		state.NodeName, state.DeploymentMode,
-		state.AuthPort, state.AcctPort, state.DataDir,
+		"Node nickname:       %s\n"+
+			"Participation:       %s\n"+
+			"Data folder:         %s\n"+
+			"Cooperative group:   %s\n"+
+			"Local networking:    %s\n"+
+			"Auto-updates:        %s\n"+
+			"Monitoring feed:     %s\n"+
+			"Payment processors:  %s\n"+
+			"Shared storage:      %d GB\n",
+		state.NodeName, modeLabel, state.DataDir, coopLabel,
 		boolStr(state.P2PEnabled), boolStr(state.UpdatesEnabled),
 		boolStr(state.MetricsEnabled), boolStr(state.PaymentsEnabled),
 		state.StorageLimitGB,
@@ -1582,17 +1695,21 @@ func wizardReviewPage(state *wizardState, next, prev func()) fyne.CanvasObject {
 	summaryLabel := widget.NewLabel(summary)
 	summaryLabel.Wrapping = fyne.TextWrapWord
 
+	note := widget.NewLabel("Everything above can be changed later in Settings. Click 'Install Now' to save your configuration and open the dashboard.")
+	note.Wrapping = fyne.TextWrapWord
+
 	return container.NewBorder(
-		widget.NewLabelWithStyle("Review & Install", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Review Your Settings", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		container.NewHBox(
 			widget.NewButton("← Back", prev),
 			layout.NewSpacer(),
 			widget.NewButton("Install Now →", next),
 		),
 		nil, nil,
-		container.NewScroll(container.NewPadded(
-			widget.NewCard("Configuration Summary", "", summaryLabel),
-		)),
+		container.NewScroll(container.NewPadded(container.NewVBox(
+			widget.NewCard("Your configuration", "", summaryLabel),
+			note,
+		))),
 	)
 }
 
@@ -1671,18 +1788,26 @@ func wizardInstallPage(w fyne.Window, state *wizardState, cfg *config.Config, s 
 }
 
 func wizardCompletePage(w fyne.Window, onComplete func()) fyne.CanvasObject {
+	msg := widget.NewLabel(
+		"Your node is configured and ready to earn.\n\n" +
+			"The dashboard will show:\n" +
+			"  • Live node status and earnings summary\n" +
+			"  • Incoming job requests and completions\n" +
+			"  • Hardware usage and storage pool activity\n" +
+			"  • Billing history and payout records\n\n" +
+			"Tip: To earn whenever your computer is on, look for 'Run at Login' in\n" +
+			"Settings → Node once the dashboard opens.",
+	)
+	msg.Wrapping = fyne.TextWrapWord
+
 	content := container.NewVBox(
-		widget.NewLabelWithStyle("Setup Complete!", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("You're all set!", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
-		widget.NewLabel("SoHoLINK has been configured successfully.\n\n"+
-			"Next steps:\n"+
-			"  1. If joining a cooperative: open ports 1812/1813 UDP for cooperative auth\n"+
-			"  2. Start the SoHoLINK service: soholink start\n"+
-			"  3. The dashboard will show live node status\n"),
+		msg,
 		layout.NewSpacer(),
 		container.NewHBox(
 			layout.NewSpacer(),
-			widget.NewButton("Open Dashboard", func() {
+			widget.NewButton("Open Dashboard →", func() {
 				if onComplete != nil {
 					onComplete()
 				} else {
