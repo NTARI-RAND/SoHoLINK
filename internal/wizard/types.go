@@ -35,16 +35,16 @@ type CPUInfo struct {
 
 // MemoryInfo contains RAM details.
 type MemoryInfo struct {
-	TotalGB     int
-	AvailableGB int
+	TotalGB     float64
+	AvailableGB float64
 	UsedGB      int
 	UsedPercent float64
 }
 
 // StorageInfo contains storage details.
 type StorageInfo struct {
-	TotalGB      int
-	AvailableGB  int
+	TotalGB      float64
+	AvailableGB  float64
 	UsedGB       int
 	UsedPercent  float64
 	Filesystem   string

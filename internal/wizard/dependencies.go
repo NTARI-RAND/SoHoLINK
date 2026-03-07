@@ -354,13 +354,13 @@ func (r *DependencyReport) ExportMarkdown() string {
 	sb.WriteString(fmt.Sprintf("- **Virtualization:** %s\n\n", r.Hardware.CPU.VirtualizationTech))
 
 	sb.WriteString("### Memory\n")
-	sb.WriteString(fmt.Sprintf("- **Total:** %d GB\n", r.Hardware.Memory.TotalGB))
-	sb.WriteString(fmt.Sprintf("- **Available:** %d GB\n", r.Hardware.Memory.AvailableGB))
+	sb.WriteString(fmt.Sprintf("- **Total:** %.1f GB\n", r.Hardware.Memory.TotalGB))
+	sb.WriteString(fmt.Sprintf("- **Available:** %.1f GB\n", r.Hardware.Memory.AvailableGB))
 	sb.WriteString(fmt.Sprintf("- **Used:** %.1f%%\n\n", r.Hardware.Memory.UsedPercent))
 
 	sb.WriteString("### Storage\n")
-	sb.WriteString(fmt.Sprintf("- **Total:** %d GB\n", r.Hardware.Storage.TotalGB))
-	sb.WriteString(fmt.Sprintf("- **Available:** %d GB\n", r.Hardware.Storage.AvailableGB))
+	sb.WriteString(fmt.Sprintf("- **Total:** %.1f GB\n", r.Hardware.Storage.TotalGB))
+	sb.WriteString(fmt.Sprintf("- **Available:** %.1f GB\n", r.Hardware.Storage.AvailableGB))
 	sb.WriteString(fmt.Sprintf("- **Filesystem:** %s\n", r.Hardware.Storage.Filesystem))
 	sb.WriteString(fmt.Sprintf("- **Type:** %s\n\n", r.Hardware.Storage.DriveType))
 
@@ -574,8 +574,8 @@ func (r *DependencyReport) ValidateDependencies() (bool, []string) {
 func (r *DependencyReport) GetSummary() string {
 	alloc := &ResourceAllocation{
 		TotalCPUCores:  r.Hardware.CPU.Cores,
-		TotalMemoryGB:  r.Hardware.Memory.TotalGB,
-		TotalStorageGB: r.Hardware.Storage.TotalGB,
+		TotalMemoryGB:  int(r.Hardware.Memory.TotalGB),
+		TotalStorageGB: int(r.Hardware.Storage.TotalGB),
 	}
 
 	// Simple allocation (same logic as detection.go)
@@ -587,7 +587,7 @@ func (r *DependencyReport) GetSummary() string {
 		maxVMs = maxVMsByMem
 	}
 
-	return fmt.Sprintf("%s | %d cores | %d GB RAM | %s | Max %d VMs",
+	return fmt.Sprintf("%s | %d cores | %.1f GB RAM | %s | Max %d VMs",
 		r.Platform.Distribution,
 		r.Hardware.CPU.Cores,
 		r.Hardware.Memory.TotalGB,

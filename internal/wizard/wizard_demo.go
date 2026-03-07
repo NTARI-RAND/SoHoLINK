@@ -180,13 +180,13 @@ func printSystemCapabilities(caps *SystemCapabilities) {
 	fmt.Printf("   Frequency: %.0f MHz\n", caps.CPU.FrequencyMHz)
 	fmt.Printf("   Virtualization: %s\n\n", caps.CPU.VirtualizationTech)
 
-	fmt.Printf("✅ Memory: %d GB total\n", caps.Memory.TotalGB)
-	fmt.Printf("   Available: %d GB (%.1f%% used)\n\n",
+	fmt.Printf("✅ Memory: %.1f GB total\n", caps.Memory.TotalGB)
+	fmt.Printf("   Available: %.1f GB (%.1f%% used)\n\n",
 		caps.Memory.AvailableGB,
 		caps.Memory.UsedPercent)
 
-	fmt.Printf("✅ Storage: %d GB total\n", caps.Storage.TotalGB)
-	fmt.Printf("   Available: %d GB (%.1f%% used)\n",
+	fmt.Printf("✅ Storage: %.1f GB total\n", caps.Storage.TotalGB)
+	fmt.Printf("   Available: %.1f GB (%.1f%% used)\n",
 		caps.Storage.AvailableGB,
 		caps.Storage.UsedPercent)
 	fmt.Printf("   Type: %s\n", caps.Storage.DriveType)

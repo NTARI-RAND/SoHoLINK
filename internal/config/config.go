@@ -370,7 +370,11 @@ func EnsureDirectories(cfg *Config) error {
 		cfg.Storage.BasePath,
 		filepath.Join(cfg.Storage.BasePath, "accounting"),
 		filepath.Join(cfg.Storage.BasePath, "merkle"),
-		cfg.Policy.Directory,
+	}
+	// Policy.Directory is empty when using embedded FS (the default).
+	// os.MkdirAll("") fails on Windows — skip it.
+	if cfg.Policy.Directory != "" {
+		dirs = append(dirs, cfg.Policy.Directory)
 	}
 
 	for _, dir := range dirs {

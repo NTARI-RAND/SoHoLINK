@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -355,8 +356,8 @@ func buildHardwareTab(w fyne.Window) *container.TabItem {
 
 		memCard := widget.NewCard("Memory", "",
 			container.NewVBox(
-				labelPair("Total", fmt.Sprintf("%d GB", caps.Memory.TotalGB)),
-				labelPair("Available", fmt.Sprintf("%d GB", caps.Memory.AvailableGB)),
+				labelPair("Total", fmt.Sprintf("%.1f GB", caps.Memory.TotalGB)),
+				labelPair("Available", fmt.Sprintf("%.1f GB", caps.Memory.AvailableGB)),
 				labelPair("Used", fmt.Sprintf("%.1f%%", caps.Memory.UsedPercent)),
 				labelPair("Allocatable", fmt.Sprintf("%d GB", alloc.AllocatableMemoryGB)),
 				labelPair("Reserved (host)", fmt.Sprintf("%d GB", alloc.ReservedMemoryGB)),
@@ -365,8 +366,8 @@ func buildHardwareTab(w fyne.Window) *container.TabItem {
 
 		storCard := widget.NewCard("Storage", "",
 			container.NewVBox(
-				labelPair("Total", fmt.Sprintf("%d GB", caps.Storage.TotalGB)),
-				labelPair("Available", fmt.Sprintf("%d GB", caps.Storage.AvailableGB)),
+				labelPair("Total", fmt.Sprintf("%.1f GB", caps.Storage.TotalGB)),
+				labelPair("Available", fmt.Sprintf("%.1f GB", caps.Storage.AvailableGB)),
 				labelPair("Type", caps.Storage.DriveType),
 				labelPair("Filesystem", caps.Storage.Filesystem),
 				labelPair("Allocatable", fmt.Sprintf("%d GB", alloc.AllocatableStorageGB)),
@@ -1582,15 +1583,15 @@ func wizardHardwarePage(state *wizardState, next, prev func()) fyne.CanvasObject
 		state.Capabilities = caps
 
 		// ── Smart storage default: 50% of free space, rounded to nearest 10 GB ──
-		free := caps.Storage.AvailableGB
-		suggested := (free / 2 / 10) * 10
+		free := caps.Storage.AvailableGB // float64
+		suggested := math.Floor(free/2/10) * 10
 		if suggested < 10 {
 			suggested = 10
 		}
 		if suggested > 1000 {
 			suggested = 1000
 		}
-		state.StorageLimitGB = suggested
+		state.StorageLimitGB = int(suggested)
 
 		status.SetText("Here's what we found on this computer:")
 
@@ -1605,7 +1606,7 @@ func wizardHardwarePage(state *wizardState, next, prev func()) fyne.CanvasObject
 		))
 
 		// Memory
-		vmCount := caps.Memory.AvailableGB / 2
+		vmCount := int(caps.Memory.AvailableGB / 2)
 		if vmCount < 1 {
 			vmCount = 1
 		}
@@ -1614,7 +1615,7 @@ func wizardHardwarePage(state *wizardState, next, prev func()) fyne.CanvasObject
 		results.Add(wizardHardwareCard(
 			"🧠  Memory (RAM)",
 			fmt.Sprintf("%.1f GB total  /  %.1f GB available",
-				float64(caps.Memory.TotalGB), float64(caps.Memory.AvailableGB)),
+				caps.Memory.TotalGB, caps.Memory.AvailableGB),
 			memNote,
 		))
 
@@ -1625,10 +1626,10 @@ func wizardHardwarePage(state *wizardState, next, prev func()) fyne.CanvasObject
 		}
 		storNote := fmt.Sprintf(
 			"We suggest sharing %d GB (50%% of your free space). You'll set the exact amount on the next screen.",
-			suggested)
+			int(suggested))
 		results.Add(wizardHardwareCard(
 			"💾  Storage",
-			fmt.Sprintf("%s  ·  %d GB free of %d GB total", driveType, caps.Storage.AvailableGB, caps.Storage.TotalGB),
+			fmt.Sprintf("%s  ·  %.1f GB free of %.1f GB total", driveType, caps.Storage.AvailableGB, caps.Storage.TotalGB),
 			storNote,
 		))
 
@@ -1732,13 +1733,22 @@ func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject
 	paymentsHint.Wrapping = fyne.TextWrapWord
 
 	// ── Shared storage pool ───────────────────────────────────────────────────
-	storageLimitSlider := widget.NewSlider(10, 2000)
+	sliderMax := 2000.0
+	if state.Capabilities != nil && state.Capabilities.Storage.AvailableGB > 0 {
+		sliderMax = state.Capabilities.Storage.AvailableGB
+	}
+	storageLimitSlider := widget.NewSlider(10, sliderMax)
 	storageLimitSlider.SetValue(float64(state.StorageLimitGB))
 	storageLimitLabel := widget.NewLabel(fmt.Sprintf("%d GB", state.StorageLimitGB))
 	storageLimitSlider.OnChanged = func(v float64) {
 		state.StorageLimitGB = int(v)
 		storageLimitLabel.SetText(fmt.Sprintf("%d GB", int(v)))
 	}
+	sliderNote := widget.NewLabel("slider range matches your actual free disk space")
+	if state.Capabilities != nil {
+		sliderNote.SetText(fmt.Sprintf("%.1f GB available on this computer", state.Capabilities.Storage.AvailableGB))
+	}
+	sliderNote.Wrapping = fyne.TextWrapWord
 	storageHint := widget.NewLabel(
 		"The maximum amount of your hard drive that clients can use to store files.\n" +
 			"Your own files are untouched — SoHoLINK only uses the space you allocate here,\n" +
@@ -1770,6 +1780,7 @@ func wizardAdvancedPage(state *wizardState, next, prev func()) fyne.CanvasObject
 		// Storage
 		widget.NewLabelWithStyle("Shared storage space", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		container.NewHBox(storageLimitSlider, storageLimitLabel),
+		sliderNote,
 		storageHint,
 	)
 

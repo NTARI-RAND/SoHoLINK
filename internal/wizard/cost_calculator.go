@@ -51,7 +51,7 @@ func (c *CostCalculator) estimateIdlePower() float64 {
 	power += cpuTDP * 0.15
 
 	// RAM: ~3W per 8GB
-	ramPower := float64(c.capabilities.Memory.TotalGB) / 8.0 * 3.0
+	ramPower := c.capabilities.Memory.TotalGB / 8.0 * 3.0
 	power += ramPower
 
 	// Storage: 2-5W per drive
@@ -80,7 +80,7 @@ func (c *CostCalculator) estimateLoadPower() float64 {
 	power += cpuTDP
 
 	// RAM: ~3W per 8GB
-	ramPower := float64(c.capabilities.Memory.TotalGB) / 8.0 * 3.0
+	ramPower := c.capabilities.Memory.TotalGB / 8.0 * 3.0
 	power += ramPower
 
 	// Storage under load: 5-8W

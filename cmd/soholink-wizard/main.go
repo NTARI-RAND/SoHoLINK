@@ -128,8 +128,8 @@ func showConfigurationScreen(w fyne.Window, caps *wizard.SystemCapabilities, all
 	summary := widget.NewLabel(fmt.Sprintf(
 		"System Detected:\n"+
 		"• CPU: %s (%d cores)\n"+
-		"• RAM: %d GB\n"+
-		"• Storage: %d GB available\n"+
+		"• RAM: %.1f GB\n"+
+		"• Storage: %.1f GB available\n"+
 		"• Hypervisor: %s\n"+
 		"• Max VMs: %d\n",
 		caps.CPU.Model,

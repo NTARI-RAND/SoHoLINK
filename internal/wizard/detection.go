@@ -148,9 +148,9 @@ func detectMemory() (MemoryInfo, error) {
 	}
 
 	return MemoryInfo{
-		TotalGB:     int(vmem.Total / (1024 * 1024 * 1024)),     // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
-		AvailableGB: int(vmem.Available / (1024 * 1024 * 1024)), // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
-		UsedGB:      int(vmem.Used / (1024 * 1024 * 1024)),      // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
+		TotalGB:     float64(vmem.Total) / (1024 * 1024 * 1024),
+		AvailableGB: float64(vmem.Available) / (1024 * 1024 * 1024),
+		UsedGB:      int(vmem.Used / (1024 * 1024 * 1024)), // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
 		UsedPercent: vmem.UsedPercent,
 	}, nil
 }
@@ -174,9 +174,9 @@ func detectStorage() (StorageInfo, error) {
 	}
 
 	return StorageInfo{
-		TotalGB:     int(usage.Total / (1024 * 1024 * 1024)),     // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
-		AvailableGB: int(usage.Free / (1024 * 1024 * 1024)),      // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
-		UsedGB:      int(usage.Used / (1024 * 1024 * 1024)),      // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
+		TotalGB:     float64(usage.Total) / (1024 * 1024 * 1024),
+		AvailableGB: float64(usage.Free) / (1024 * 1024 * 1024),
+		UsedGB:      int(usage.Used / (1024 * 1024 * 1024)), // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
 		UsedPercent: usage.UsedPercent,
 		Filesystem:  usage.Fstype,
 		MountPoint:  mountPoint,
@@ -289,9 +289,9 @@ func detectVirtualization() (VirtualizationInfo, error) {
 // Strategy: Reserve 50% for host system, allocate 50% to marketplace.
 func (s *SystemCapabilities) CalculateAvailableResources() *ResourceAllocation {
 	alloc := &ResourceAllocation{
-		TotalCPUCores: s.CPU.Cores,
-		TotalMemoryGB: s.Memory.TotalGB,
-		TotalStorageGB: s.Storage.TotalGB,
+		TotalCPUCores:  s.CPU.Cores,
+		TotalMemoryGB:  int(s.Memory.TotalGB),
+		TotalStorageGB: int(s.Storage.TotalGB),
 	}
 
 	// CPU: Reserve 50% for host
@@ -299,18 +299,18 @@ func (s *SystemCapabilities) CalculateAvailableResources() *ResourceAllocation {
 	alloc.AllocatableCores = s.CPU.Cores - alloc.ReservedCores
 
 	// Memory: Reserve 50% for host
-	alloc.ReservedMemoryGB = s.Memory.TotalGB / 2
-	alloc.AllocatableMemoryGB = s.Memory.TotalGB - alloc.ReservedMemoryGB
+	alloc.ReservedMemoryGB = int(s.Memory.TotalGB / 2)
+	alloc.AllocatableMemoryGB = int(s.Memory.TotalGB) - alloc.ReservedMemoryGB
 
 	// Storage: Reserve at least 200GB for host, allocate rest
 	minReserved := 200
 	if s.Storage.TotalGB < 400 {
 		// If less than 400GB total, reserve 50%
-		alloc.ReservedStorageGB = s.Storage.TotalGB / 2
+		alloc.ReservedStorageGB = int(s.Storage.TotalGB / 2)
 	} else {
 		alloc.ReservedStorageGB = minReserved
 	}
-	alloc.AllocatableStorageGB = s.Storage.TotalGB - alloc.ReservedStorageGB
+	alloc.AllocatableStorageGB = int(s.Storage.TotalGB) - alloc.ReservedStorageGB
 
 	// Calculate max VMs
 	// Limited by CPU (assume 4 cores per VM) or Memory (assume 4GB per VM)
@@ -357,11 +357,11 @@ func (s *SystemCapabilities) ValidateProviderCapability() error {
 	}
 
 	if s.Memory.TotalGB < 8 {
-		return fmt.Errorf("minimum 8 GB RAM required (found %d GB)", s.Memory.TotalGB)
+		return fmt.Errorf("minimum 8 GB RAM required (found %.1f GB)", s.Memory.TotalGB)
 	}
 
 	if s.Storage.AvailableGB < 100 {
-		return fmt.Errorf("minimum 100 GB free storage required (found %d GB)", s.Storage.AvailableGB)
+		return fmt.Errorf("minimum 100 GB free storage required (found %.1f GB)", s.Storage.AvailableGB)
 	}
 
 	return nil
