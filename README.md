@@ -33,6 +33,7 @@ SoHoLINK is a federated compute marketplace for Small Office/Home Office (SOHO) 
 - **ML-Driven Scheduling** — `LinUCBBandit` contextual bandit replaces round-robin node selection in `ScheduleMobile`; per-node UCB scores learned from HTLC settle/cancel outcomes; `TelemetryRecorder` streams JSONL dispatch events to disk for offline training; falls back to uniform random if no bandit is wired
 - **Setup Wizard (8 steps)** — Guided onboarding: hardware review → pricing → network → payments → K8s edges → IPFS → provisioning limits → policies
 - **Dashboard (8 tabs)** — Overview, Hardware, Orchestration, Storage, Billing, Users, Policies, Logs; all live data, no page refresh needed
+- **Federation & Marketplace Settings** — Dedicated settings dialog (Settings → Federation & Marketplace…) covers coordinator role, fee %, coordinator URL, region, CPU-hour pricing, and heartbeat interval; supports both private cooperative groups and open-marketplace participation from the same UI
 - **3D Globe Visualization** — WebSocket-connected Three.js globe; topology mode and geographic mode (real lat/lon from node metadata); animated data flow arcs
 - **Zero-Dependency Installers** — Statically linked Windows `.exe` + NSIS setup wizard; macOS universal `.pkg`; Linux `.deb`, `.rpm`, AppImage — produced by GoReleaser in one command
 - **P2P LAN Mesh Discovery** — Nodes on the same network automatically find each other via Ed25519-signed multicast UDP announcements (group `239.255.42.99:7946`; RFC 2365, stays on LAN); discovered peers instantly visible to the scheduler and accessible via `GET /api/peers`; topology follows the Watts–Strogatz small-world model — dense local clusters, short global paths
@@ -130,7 +131,7 @@ make dist
 | `internal/wasm/` | Wasm task executor interface + stub (wazero implementation: v0.3) |
 | `internal/rental/` | Auto-accept engine for incoming resource requests |
 | `internal/wizard/` | Hardware detection, cost calculator, pricing, policy config |
-| `internal/gui/dashboard/` | Fyne dashboard (~1,650 lines): 8 tabs, 7 settings dialogs, 8-step wizard |
+| `internal/gui/dashboard/` | Fyne dashboard (~1,750 lines): 8 tabs, 8 settings dialogs, 8-step wizard |
 | `internal/central/` | 1% platform fee calculation and ledger recording |
 | `internal/store/` | SQLite via `modernc.org/sqlite`; all persistent state |
 | `internal/lbtas/` | Trust and reputation scoring |

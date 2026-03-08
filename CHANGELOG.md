@@ -11,6 +11,71 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.2] — 2026-03-08
+
+### Added — Federation & Marketplace Settings Dialog
+
+The GUI dashboard now exposes all federation and marketplace configuration through a new
+**Settings → Federation & Marketplace…** dialog, making private group (cooperative) and
+open-marketplace setup accessible without hand-editing `config.yaml`.
+
+**Modified files:**
+- `internal/gui/dashboard/dashboard.go` — new `showFederationSettingsDialog` function
+  (~80 lines); new "Federation & Marketplace…" menu item wired into `buildMenuBar`
+
+**Dialog fields:**
+
+| Card | Field | Config key |
+|------|-------|-----------|
+| Coordinator Role | Acts as coordinator (checkbox) | `federation.is_coordinator` |
+| Coordinator Role | Coordinator fee (%) | `federation.fee_percent` |
+| Provider Settings | Coordinator URL | `federation.coordinator_url` |
+| Provider Settings | Region | `federation.region` |
+| Provider Settings | Price / CPU-hour (sats) | `federation.price_per_cpu_hour_sats` |
+| Provider Settings | Heartbeat interval | `federation.heartbeat_interval` |
+
+**UX notes:**
+- Coordinator URL auto-disables when "acts as coordinator" is checked, guiding users
+  toward the correct configuration without preventing nested-federation setups
+- Heartbeat interval is validated with `time.ParseDuration` on save; invalid values show
+  an inline error dialog rather than silently accepting bad input
+- All values are written to the in-memory `Config` immediately; a restart reminder is shown
+  because the federation announcer and RADIUS server read config at startup
+
+**Upgrade path:** No config migration required. Existing installations that previously set
+`federation.*` fields manually in `config.yaml` will see those values pre-populated when the
+dialog opens.
+
+### Fixed — Vendor Directory & Build Environment
+
+- **`golang.org/x/net/netutil` missing from vendor**: `go mod vendor` was not run after
+  `httpapi/server.go` gained a `netutil.LimitListener` import. Ran `go mod vendor`; the
+  `netutil` package is now present in `vendor/golang.org/x/net/netutil/`.
+- **Node DID not written to config on first install**: `fedaaa install` generates a DID and
+  prints it to stdout but does not write it back to `config.yaml`. Added `node.did` to
+  `%APPDATA%\SoHoLINK\config.yaml` manually. A future release should have `install` write
+  this field automatically.
+- **MinGW PATH not persistent**: GCC is installed at `C:\msys64\mingw64\bin` (MSYS2 already
+  present) but was not on `PATH`, causing `go build -tags gui` to fail with the `go-gl` CGO
+  error. Added `export PATH="/c/msys64/mingw64/bin:$PATH"` to `~/.bash_profile`.
+
+### Diagnosed — Benign Fyne Cold-Start Warning
+
+`soholink.exe` logs the following on every fresh start:
+
+```
+Fyne error:  Attempt to access current Fyne app when none is started
+  At: vendor/fyne.io/fyne/v2/app.go:97
+```
+
+**Root cause:** `getOrCreateApp()` in `dashboard.go` calls `fyne.CurrentApp()` to check for an
+existing app instance before calling `fyneApp.NewWithID()`. Fyne's `CurrentApp()` logs this
+warning internally when no app has been registered yet, then returns `nil`. Our code handles
+`nil` correctly and immediately creates the app. This is not a crash; the GUI initialises
+normally. The warning fires once per process at startup and is safe to ignore.
+
+---
+
 ## [0.1.1] — 2026-03-06
 
 ### Added — Secure Auto-Update System

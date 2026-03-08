@@ -141,6 +141,9 @@ func buildMenuBar(w fyne.Window, application *app.App) *fyne.MainMenu {
 		fyne.NewMenuItem("Network…", func() {
 			showNetworkSettingsDialog(w, application)
 		}),
+		fyne.NewMenuItem("Federation & Marketplace…", func() {
+			showFederationSettingsDialog(w, application)
+		}),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Payment Processors…", func() {
 			showPaymentSettingsDialog(w, application)
@@ -1078,6 +1081,134 @@ func showNetworkSettingsDialog(w fyne.Window, application *app.App) {
 		cfg.ResourceSharing.HTTPAPIAddress = httpAPI.Text
 		dialog.ShowInformation("Saved", "Network settings updated.\nRestart the service to apply.", w)
 	}, w)
+}
+
+// showFederationSettingsDialog opens a dialog for configuring the federation
+// and marketplace layer. It covers two complementary roles:
+//
+//   - Coordinator: one machine per group that runs the node registry and
+//     routes external jobs to member nodes. Set is_coordinator = true and
+//     optionally charge a fee_percent.
+//
+//   - Provider: every other machine that registers with a coordinator and
+//     advertises its capacity at a given price. Set coordinator_url to the
+//     coordinator's HTTP API address.
+//
+// A single machine can act as both coordinator and provider simultaneously,
+// which is the recommended setup for small groups (e.g. a school office).
+func showFederationSettingsDialog(w fyne.Window, application *app.App) {
+	cfg := application.Config
+
+	// ── Coordinator card ──────────────────────────────────────────────────
+	coordCheck := widget.NewCheck("This node acts as a coordinator (runs the group registry)", nil)
+	coordCheck.SetChecked(cfg.Federation.IsCoordinator)
+
+	feeEntry := widget.NewEntry()
+	feeEntry.SetText(fmt.Sprintf("%.2f", cfg.Federation.FeePercent))
+	feeEntry.SetPlaceHolder("1.00")
+
+	coordHint := widget.NewLabel(
+		"Enable on one machine per group — it runs the directory that all other " +
+			"nodes and external clients use to discover available resources. " +
+			"A small group (e.g. a school) can run coordinator and provider on the same machine.")
+	coordHint.Wrapping = fyne.TextWrapWord
+
+	// ── Provider card ─────────────────────────────────────────────────────
+	coordURL := widget.NewEntry()
+	coordURL.SetText(cfg.Federation.CoordinatorURL)
+	coordURL.SetPlaceHolder("http://school-server:8080")
+
+	regionEntry := widget.NewEntry()
+	regionEntry.SetText(cfg.Federation.Region)
+	regionEntry.SetPlaceHolder("ca-ontario")
+
+	priceEntry := widget.NewEntry()
+	if cfg.Federation.PricePerCPUHourSats > 0 {
+		priceEntry.SetText(fmt.Sprintf("%d", cfg.Federation.PricePerCPUHourSats))
+	}
+	priceEntry.SetPlaceHolder("100")
+
+	heartbeatEntry := widget.NewEntry()
+	heartbeatEntry.SetText(cfg.Federation.HeartbeatInterval)
+	heartbeatEntry.SetPlaceHolder("30s")
+
+	providerHint := widget.NewLabel(
+		"Enter the coordinator's HTTP API address so this node can register itself " +
+			"and receive job assignments. Leave blank only if this is a standalone " +
+			"coordinator that does not also contribute resources.")
+	providerHint.Wrapping = fyne.TextWrapWord
+
+	// Disable the coordinator URL when this node IS the coordinator, but
+	// re-enable it if the operator also wants to register with a parent
+	// coordinator (nested federation). For now we grey it out as a hint.
+	updateCoordState := func(isCoord bool) {
+		if isCoord {
+			coordURL.Disable()
+		} else {
+			coordURL.Enable()
+		}
+	}
+	updateCoordState(cfg.Federation.IsCoordinator)
+	coordCheck.OnChanged = updateCoordState
+
+	content := container.NewVBox(
+		widget.NewCard("Coordinator Role", "",
+			container.NewVBox(
+				coordCheck,
+				coordHint,
+				widget.NewSeparator(),
+				widget.NewForm(
+					widget.NewFormItem("Coordinator fee (%)", feeEntry),
+				),
+			),
+		),
+		widget.NewCard("Provider Settings", "",
+			container.NewVBox(
+				providerHint,
+				widget.NewForm(
+					widget.NewFormItem("Coordinator URL", coordURL),
+					widget.NewFormItem("Region", regionEntry),
+					widget.NewFormItem("Price / CPU-hour (sats)", priceEntry),
+					widget.NewFormItem("Heartbeat interval", heartbeatEntry),
+				),
+			),
+		),
+		widget.NewButton("Save", func() {
+			cfg.Federation.IsCoordinator = coordCheck.Checked
+
+			if feeEntry.Text != "" {
+				if v, err := strconv.ParseFloat(strings.TrimSpace(feeEntry.Text), 64); err == nil {
+					cfg.Federation.FeePercent = v
+				}
+			}
+
+			cfg.Federation.CoordinatorURL = strings.TrimSpace(coordURL.Text)
+			cfg.Federation.Region = strings.TrimSpace(regionEntry.Text)
+
+			if priceEntry.Text != "" {
+				if v, err := strconv.ParseInt(strings.TrimSpace(priceEntry.Text), 10, 64); err == nil {
+					cfg.Federation.PricePerCPUHourSats = v
+				}
+			}
+
+			if hb := strings.TrimSpace(heartbeatEntry.Text); hb != "" {
+				if _, err := time.ParseDuration(hb); err == nil {
+					cfg.Federation.HeartbeatInterval = hb
+				} else {
+					dialog.ShowError(fmt.Errorf("invalid heartbeat interval %q — use e.g. 30s, 1m", hb), w)
+					return
+				}
+			}
+
+			dialog.ShowInformation("Saved",
+				"Federation settings updated.\nRestart the service to apply.", w)
+		}),
+	)
+
+	d := dialog.NewCustom("Federation & Marketplace", "Close",
+		container.NewScroll(content), w)
+	d.Resize(fyne.NewSize(520, 540))
+	d.Show()
 }
 
 func showPaymentSettingsDialog(w fyne.Window, application *app.App) {
