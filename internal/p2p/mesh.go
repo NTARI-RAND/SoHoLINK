@@ -113,16 +113,21 @@ func (a *Announcement) Verify() error {
 
 // Peer is a discovered, verified SoHoLINK peer.
 type Peer struct {
-	DID      string
-	PubKey   []byte
-	APIAddr  string
-	IPFSAddr string
-	CPU      float64
-	RAMGB    float64
-	DiskGB   int64
-	GPU      string
-	Region   string
-	LastSeen time.Time
+	DID                string
+	PubKey             []byte
+	APIAddr            string
+	IPFSAddr           string
+	CPU                float64
+	RAMGB              float64
+	DiskGB             int64
+	GPU                string
+	GPUVRAMFree        int64   // MB
+	GPUVRAMTotal       int64   // MB
+	GPUComputeCapability string // e.g. "8.6", "9.0"
+	GPUTemperature     float32 // Celsius
+	GPUPCIeBandwidth   int64   // MB/s
+	Region             string
+	LastSeen           time.Time
 }
 
 // Config holds the local node's identity and capabilities for announcement.
@@ -135,6 +140,11 @@ type Config struct {
 	RAMGB      float64
 	DiskGB     int64
 	GPU        string
+	GPUVRAMFree        int64   // MB
+	GPUVRAMTotal       int64   // MB
+	GPUComputeCapability string // e.g. "8.6", "9.0"
+	GPUTemperature     float32 // Celsius
+	GPUPCIeBandwidth   int64   // MB/s
 	Region     string
 	Store      *store.Store // if non-nil, discovered peers are persisted
 

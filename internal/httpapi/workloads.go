@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestration"
 )
 
 // handleListWorkloads returns all workloads (GET /api/workloads)
@@ -374,4 +375,83 @@ func (s *Server) routeWorkload(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleValidatePlacement validates workload placement compatibility against available nodes
+// (POST /api/workloads/validate-placement)
+//
+// Request body: workload spec with capability requirements
+// Response: capability_qualified list of compatible nodes, capability_mismatches list of rejections
+func (s *Server) handleValidatePlacement(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.scheduler == nil {
+		http.Error(w, "Scheduler not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Decode workload spec
+	var workload orchestration.Workload
+	if err := json.NewDecoder(r.Body).Decode(&workload); err != nil {
+		http.Error(w, "Invalid workload JSON", http.StatusBadRequest)
+		return
+	}
+
+	// If no capability requirements specified, return all nodes
+	if workload.Spec.RuntimeRequired == "" &&
+		!workload.Spec.GPURequired &&
+		len(workload.Spec.AcceleratorsNeeded) == 0 &&
+		workload.Spec.PythonVersion == "" &&
+		workload.Spec.NetworkPolicy == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "no capability requirements specified",
+		})
+		return
+	}
+
+	// Query all candidate nodes based on basic resource requirements
+	candidates, err := s.scheduler.FindNodes(r.Context(), orchestration.NodeQuery{
+		MinCPU:    workload.Spec.CPUCores,
+		MinMemory: workload.Spec.MemoryMB,
+		MinDisk:   workload.Spec.DiskGB,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to find candidates: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Check each candidate against capability requirements
+	type CapabilityMismatch struct {
+		NodeDID  string `json:"node_did"`
+		Reason   string `json:"reason"`
+		NodeAddr string `json:"node_address,omitempty"`
+	}
+
+	var qualified []*orchestration.Node
+	var mismatches []CapabilityMismatch
+
+	for _, node := range candidates {
+		if err := s.scheduler.CanRunJob(&workload, node); err != nil {
+			mismatches = append(mismatches, CapabilityMismatch{
+				NodeDID:  node.DID,
+				NodeAddr: node.Address,
+				Reason:   err.Error(),
+			})
+		} else {
+			qualified = append(qualified, node)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_candidates":       len(candidates),
+		"capability_qualified":   qualified,
+		"qualified_count":        len(qualified),
+		"capability_mismatches":  mismatches,
+		"mismatch_count":         len(mismatches),
+	})
 }

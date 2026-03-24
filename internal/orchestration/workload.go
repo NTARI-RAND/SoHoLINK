@@ -58,6 +58,14 @@ type WorkloadSpec struct {
 	Entrypoint []string
 	Environment map[string]string
 
+	// Execution environment requirements (for capability negotiation)
+	RuntimeRequired    string   // "wasm", "container", "vm" (required runtime)
+	GPUComputeMin      string   // e.g. "8.6" (minimum CUDA compute capability)
+	GPUMemoryMinMB     int64    // Minimum GPU VRAM required in MB
+	AcceleratorsNeeded []string // e.g. ["cuda", "cudnn", "vulkan"]
+	PythonVersion      string   // e.g. "3.11", "3.10" (if applicable)
+	NetworkPolicy      string   // "outbound_allowed", "outbound_denied", "restricted"
+
 	// Runtime
 	Timeout    time.Duration
 	MaxRetries int

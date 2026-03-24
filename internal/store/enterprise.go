@@ -10,23 +10,28 @@ import (
 
 // FederationNodeRow represents a federation node in the database.
 type FederationNodeRow struct {
-	NodeDID           string
-	Address           string
-	Region            string
-	TotalCPU          float64
-	AvailableCPU      float64
-	TotalMemoryMB     int64
-	AvailableMemoryMB int64
-	TotalDiskGB       int64
-	AvailableDiskGB   int64
-	GPUModel          string
-	PricePerCPUHour   int64
-	ReputationScore   int
-	UptimePercent     float64
-	FailureRate       float64
-	Status            string
-	LastHeartbeat     time.Time
-	PublicKey         string // base64-encoded Ed25519 public key (32 bytes)
+	NodeDID               string
+	Address               string
+	Region                string
+	TotalCPU              float64
+	AvailableCPU          float64
+	TotalMemoryMB         int64
+	AvailableMemoryMB     int64
+	TotalDiskGB           int64
+	AvailableDiskGB       int64
+	GPUModel              string
+	GPUVRAMFree           int64   // MB
+	GPUVRAMTotal          int64   // MB
+	GPUComputeCapability  string  // e.g. "8.6", "9.0"
+	GPUTemperature        float32 // Celsius
+	GPUPCIeBandwidth      int64   // MB/s
+	PricePerCPUHour       int64
+	ReputationScore       int
+	UptimePercent         float64
+	FailureRate           float64
+	Status                string
+	LastHeartbeat         time.Time
+	PublicKey             string // base64-encoded Ed25519 public key (32 bytes)
 }
 
 // GetOnlineNodes returns all federation nodes with status "online".
@@ -36,7 +41,9 @@ func (s *Store) GetOnlineNodes(ctx context.Context) ([]FederationNodeRow, error)
 			   total_cpu, available_cpu,
 			   total_memory_mb, available_memory_mb,
 			   total_disk_gb, available_disk_gb,
-			   gpu_model, price_per_cpu_hour,
+			   gpu_model, gpu_vram_free, gpu_vram_total,
+			   gpu_compute_capability, gpu_temperature, gpu_pcie_bandwidth,
+			   price_per_cpu_hour,
 			   reputation_score, uptime_percent, failure_rate,
 			   status, last_heartbeat, public_key
 		FROM federation_nodes WHERE status = 'online'`)
@@ -53,7 +60,9 @@ func (s *Store) GetOnlineNodes(ctx context.Context) ([]FederationNodeRow, error)
 			&n.TotalCPU, &n.AvailableCPU,
 			&n.TotalMemoryMB, &n.AvailableMemoryMB,
 			&n.TotalDiskGB, &n.AvailableDiskGB,
-			&n.GPUModel, &n.PricePerCPUHour,
+			&n.GPUModel, &n.GPUVRAMFree, &n.GPUVRAMTotal,
+			&n.GPUComputeCapability, &n.GPUTemperature, &n.GPUPCIeBandwidth,
+			&n.PricePerCPUHour,
 			&n.ReputationScore, &n.UptimePercent, &n.FailureRate,
 			&n.Status, &n.LastHeartbeat, &n.PublicKey,
 		)
@@ -73,10 +82,12 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 			total_cpu, available_cpu,
 			total_memory_mb, available_memory_mb,
 			total_disk_gb, available_disk_gb,
-			gpu_model, price_per_cpu_hour,
+			gpu_model, gpu_vram_free, gpu_vram_total,
+			gpu_compute_capability, gpu_temperature, gpu_pcie_bandwidth,
+			price_per_cpu_hour,
 			reputation_score, uptime_percent, failure_rate,
 			status, last_heartbeat, public_key
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(node_did) DO UPDATE SET
 			address=excluded.address,
 			region=excluded.region,
@@ -87,6 +98,11 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 			total_disk_gb=excluded.total_disk_gb,
 			available_disk_gb=excluded.available_disk_gb,
 			gpu_model=excluded.gpu_model,
+			gpu_vram_free=excluded.gpu_vram_free,
+			gpu_vram_total=excluded.gpu_vram_total,
+			gpu_compute_capability=excluded.gpu_compute_capability,
+			gpu_temperature=excluded.gpu_temperature,
+			gpu_pcie_bandwidth=excluded.gpu_pcie_bandwidth,
 			price_per_cpu_hour=excluded.price_per_cpu_hour,
 			reputation_score=excluded.reputation_score,
 			uptime_percent=excluded.uptime_percent,
@@ -98,7 +114,9 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 		n.TotalCPU, n.AvailableCPU,
 		n.TotalMemoryMB, n.AvailableMemoryMB,
 		n.TotalDiskGB, n.AvailableDiskGB,
-		n.GPUModel, n.PricePerCPUHour,
+		n.GPUModel, n.GPUVRAMFree, n.GPUVRAMTotal,
+		n.GPUComputeCapability, n.GPUTemperature, n.GPUPCIeBandwidth,
+		n.PricePerCPUHour,
 		n.ReputationScore, n.UptimePercent, n.FailureRate,
 		n.Status, n.LastHeartbeat, n.PublicKey,
 	)

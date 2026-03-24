@@ -1,3 +1,22 @@
+// Package ml provides machine learning primitives for the SoHoLINK scheduler,
+// including contextual bandit algorithms and telemetry collection for offline training.
+//
+// # Multi-Dimensional Reward System (Sprint 3.3)
+//
+// The scheduler now computes composite reward signals from multiple dimensions
+// of job execution, enabling the LinUCB bandit to learn more nuanced node selection
+// strategies. Instead of binary settle/fail signals, rewards are composed from:
+//
+//   - Settlement signal (50%): whether the HTLC payment settled
+//   - Accuracy signal (25%): how close actual duration matched estimate
+//   - Thermal signal (15%): whether the node stayed cool during execution
+//   - Reliability signal (10%): network stability and task success
+//
+// Example: a job that settles but runs 3x longer than estimated and heats the node
+// significantly yields a lower composite reward than a job settling quickly on a cool node.
+//
+// Use ComputeMultiDimensionalReward(event) to compute rewards for bandit updates.
+// The JSONL telemetry file now includes all necessary fields for offline analysis.
 package ml
 
 import (
@@ -48,10 +67,20 @@ type SchedulerEvent struct {
 	TaskFeatures   []float64 `json:"task_features"`    // length TaskFeatureDim
 	SystemFeatures []float64 `json:"system_features"`  // length SystemFeatureDim
 
+	// ---- Node state at dispatch (for multi-dimensional reward) ----
+	NodeGPUTempStart float32 `json:"node_gpu_temp_start,omitempty"` // GPU temp when task dispatched
+	NodeGPULoadStart string  `json:"node_gpu_load_start,omitempty"` // "idle", "low", "medium", "high"
+
+	// ---- Job metadata ----
+	JobType string `json:"job_type,omitempty"` // "batch", "inference", "encoding", etc.
+
 	// ---- Outcome (filled in on resolution) ----
-	Outcome    Outcome `json:"outcome"`
-	DurationMs int64   `json:"duration_ms,omitempty"`
-	Reward     float64 `json:"reward,omitempty"` // scalar reward signal for bandit update
+	Outcome        Outcome `json:"outcome"`
+	DurationMs     int64   `json:"duration_ms,omitempty"`
+	EstimatedMs    int64   `json:"estimated_ms,omitempty"`     // estimated job duration
+	NetworkJitterMs float64 `json:"network_jitter_ms,omitempty"` // observed network latency variance
+	NodeGPUTempEnd  float32 `json:"node_gpu_temp_end,omitempty"` // GPU temp when task ended
+	Reward          float64 `json:"reward,omitempty"`            // scalar reward signal for bandit update
 }
 
 // RewardFor maps an Outcome to a scalar reward signal in [0, 1].
@@ -85,6 +114,89 @@ func RewardFor(o Outcome, durationMs int64, maxDurationMs int64) float64 {
 	default:
 		return 0.0
 	}
+}
+
+// ComputeMultiDimensionalReward computes a composite reward signal from multiple
+// dimensions of the SchedulerEvent for improved bandit learning.
+//
+// Weights multiple signals:
+//   - Settlement signal (0.5): whether outcome is HTLC settlement
+//   - Accuracy signal (0.25): actual duration vs. estimated duration
+//   - Thermal signal (0.15): node temperature change during task
+//   - Reliability signal (0.10): network jitter and task completion
+//
+// Returns a scalar in [0, 1] suitable for LinUCBBandit.Update.
+func ComputeMultiDimensionalReward(ev SchedulerEvent) float64 {
+	weights := struct {
+		settlement  float64
+		accuracy    float64
+		thermal     float64
+		reliability float64
+	}{
+		settlement:  0.50,
+		accuracy:    0.25,
+		thermal:     0.15,
+		reliability: 0.10,
+	}
+
+	// 1. Settlement signal: did the HTLC settle (base outcome reward)?
+	settlementReward := RewardFor(ev.Outcome, ev.DurationMs, ev.EstimatedMs)
+
+	// 2. Accuracy signal: how close was actual duration to estimated?
+	// Reward fast completions (actual < estimated), penalize slow ones.
+	accuracyReward := 0.5 // neutral
+	if ev.EstimatedMs > 0 && ev.DurationMs >= 0 {
+		ratio := float64(ev.DurationMs) / float64(ev.EstimatedMs)
+		if ratio <= 1.0 {
+			// Faster than estimated: bonus up to 1.0
+			accuracyReward = 0.5 + 0.5*ratio
+		} else if ratio <= 2.0 {
+			// Slower but within 2x: partial credit down to 0.0
+			accuracyReward = 1.0 - 0.5*(ratio-1.0)
+		} else {
+			// Way slower: penalty
+			accuracyReward = 0.0
+		}
+	}
+
+	// 3. Thermal signal: did the node stay cool during execution?
+	// Penalize if node heated significantly during task.
+	thermalReward := 0.5 // neutral
+	if ev.NodeGPUTempStart > 0 && ev.NodeGPUTempEnd > 0 {
+		tempDelta := ev.NodeGPUTempEnd - ev.NodeGPUTempStart
+		if tempDelta <= 5.0 {
+			// Minimal heating: full reward
+			thermalReward = 1.0
+		} else if tempDelta <= 15.0 {
+			// Moderate heating: partial credit
+			thermalReward = 0.5
+		} else {
+			// Significant heating: penalize
+			thermalReward = 0.0
+		}
+	}
+
+	// 4. Reliability signal: network stability and task success?
+	reliabilityReward := 0.5 // neutral
+	if ev.Outcome == OutcomeHTLCSettle || ev.Outcome == OutcomeCompleted {
+		reliabilityReward = 0.8
+		// Bonus for low jitter
+		if ev.NetworkJitterMs >= 0 && ev.NetworkJitterMs < 50 {
+			reliabilityReward = 1.0
+		}
+	} else if ev.Outcome == OutcomeError {
+		reliabilityReward = 0.2
+	} else if ev.Outcome == OutcomePreempted || ev.Outcome == OutcomeHTLCCancel {
+		reliabilityReward = 0.0
+	}
+
+	// Composite reward
+	total := (settlementReward * weights.settlement) +
+		(accuracyReward * weights.accuracy) +
+		(thermalReward * weights.thermal) +
+		(reliabilityReward * weights.reliability)
+
+	return clamp(total, 0, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,11 +364,34 @@ func (b *EventBuilder) WithSystemFeatures(f []float64) *EventBuilder {
 	return b
 }
 
-// Resolve sets the outcome and duration, computes the scalar reward, and
-// returns the final SchedulerEvent ready to be passed to Record().
-func (b *EventBuilder) Resolve(outcome Outcome, durationMs int64, maxDurationMs int64) SchedulerEvent {
+// WithJobMetadata attaches job type and estimated duration.
+func (b *EventBuilder) WithJobMetadata(jobType string, estimatedMs int64) *EventBuilder {
+	b.ev.JobType = jobType
+	b.ev.EstimatedMs = estimatedMs
+	return b
+}
+
+// WithNodeStateStart attaches node state at dispatch time.
+func (b *EventBuilder) WithNodeStateStart(gpuTempStart float32, gpuLoadStart string) *EventBuilder {
+	b.ev.NodeGPUTempStart = gpuTempStart
+	b.ev.NodeGPULoadStart = gpuLoadStart
+	return b
+}
+
+// WithNetworkMetrics attaches network telemetry from execution.
+func (b *EventBuilder) WithNetworkMetrics(jitterMs float64) *EventBuilder {
+	b.ev.NetworkJitterMs = jitterMs
+	return b
+}
+
+// Resolve sets the outcome and duration, computes the multi-dimensional reward,
+// and returns the final SchedulerEvent ready to be passed to Record().
+// Uses ComputeMultiDimensionalReward which considers accuracy, thermal, and reliability signals.
+func (b *EventBuilder) Resolve(outcome Outcome, durationMs int64, gpuTempEnd float32) SchedulerEvent {
 	b.ev.Outcome = outcome
 	b.ev.DurationMs = durationMs
-	b.ev.Reward = RewardFor(outcome, durationMs, maxDurationMs)
+	b.ev.NodeGPUTempEnd = gpuTempEnd
+	// Use multi-dimensional reward computation
+	b.ev.Reward = ComputeMultiDimensionalReward(b.ev)
 	return b.ev
 }

@@ -4,6 +4,44 @@ import (
 	"time"
 )
 
+// GPUProfile contains detailed GPU hardware information for scheduling decisions.
+type GPUProfile struct {
+	Model              string  // e.g. "RTX 4090", "A100"
+	VRAMFree           int64   // MB
+	VRAMTotal          int64   // MB
+	ComputeCapability  string  // e.g. "8.6", "9.0" for NVIDIA
+	Temperature        float32 // Celsius
+	PCIeBandwidth      int64   // MB/s (theoretical)
+	CUDASupportLevel   string  // "cuda:8.6", "cuda:9.0", etc.
+}
+
+// CapabilitySet describes the execution environments and features a node supports.
+// Used for pre-dispatch capability negotiation to prevent silent job failures.
+type CapabilitySet struct {
+	// Runtime environments
+	RuntimesSupported []string // "wasm", "container", "vm", "unikernel"
+
+	// Accelerators / libraries
+	AcceleratorsSupported []string // "cuda", "cudnn", "openmpi", "vulkan", etc.
+
+	// Language runtimes
+	PythonVersions []string // ["3.11", "3.10", "3.9"]
+	NodeVersions   []string // ["18.0", "20.0"]
+	JavaVersions   []string // ["11", "17", "21"]
+
+	// Network policies
+	NetworkIsolation string // "none", "restricted", "isolated"
+	OutboundAllowed  bool   // Can job access external networks?
+
+	// Storage
+	PersistentStorageSupported bool
+	StorageQuotaMB             int64
+
+	// Attestation
+	AttestationLevel string // "none", "basic", "enhanced"
+	LastCheckedAt    time.Time
+}
+
 // Node represents a federation node that can accept workloads.
 type Node struct {
 	DID     string
@@ -19,9 +57,11 @@ type Node struct {
 	AvailableDiskGB   int64
 
 	// GPU
-	HasGPU      bool
-	GPUModel    string
-	GPUMemoryMB int64
+	HasGPU     bool
+	GPUProfile *GPUProfile // Detailed GPU profiling (nil if no GPU)
+
+	// Execution environment capabilities
+	Capabilities *CapabilitySet // Node's supported runtimes, accelerators, etc.
 
 	// Network
 	BandwidthMbps int
@@ -43,14 +83,16 @@ type Node struct {
 
 // NodeQuery describes filter criteria for node discovery.
 type NodeQuery struct {
-	MinCPU         float64
-	MinMemory      int64
-	MinDisk        int64
-	GPURequired    bool
-	GPUModel       string
-	Regions        []string
-	MinReputation  int
-	MaxCostPerHour int64
+	MinCPU               float64
+	MinMemory            int64
+	MinDisk              int64
+	GPURequired          bool
+	GPUModel             string
+	MinGPUVRAM           int64  // Minimum GPU VRAM in MB (0 = no requirement)
+	MinComputeCapability string // e.g. "8.6" for NVIDIA (empty = no requirement)
+	Regions              []string
+	MinReputation        int
+	MaxCostPerHour       int64
 }
 
 // NodeCapacity is a snapshot of a node's available resources.

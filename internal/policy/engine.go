@@ -21,8 +21,9 @@ type Engine struct {
 	mu        sync.RWMutex
 }
 
-// AuthzInput is the input provided to the OPA policy for authorization.
+// AuthzInput is the input provided to the OPA policy for authorization and workload scheduling.
 type AuthzInput struct {
+	// Authentication fields
 	User          string            `json:"user"`
 	DID           string            `json:"did"`
 	Role          string            `json:"role"`
@@ -31,12 +32,41 @@ type AuthzInput struct {
 	Resource      string            `json:"resource,omitempty"`
 	Timestamp     time.Time         `json:"timestamp"`
 	Attributes    map[string]string `json:"attributes,omitempty"`
+
+	// Workload scheduling fields (for job placement decisions)
+	WorkloadID       string  `json:"workload_id,omitempty"`        // Job identifier
+	WorkloadType     string  `json:"workload_type,omitempty"`      // "batch", "inference", "encoding"
+	RequesterDID     string  `json:"requester_did,omitempty"`      // Who's requesting the job
+	EstimatedDuration int64  `json:"estimated_duration_seconds,omitempty"` // Estimated job duration
+	RequiredCPU      float64 `json:"required_cpu,omitempty"`       // CPU cores needed
+	RequiredMemoryMB int64   `json:"required_memory_mb,omitempty"` // Memory needed
+
+	// Node state fields (for placement evaluation)
+	Node *NodeState `json:"node,omitempty"`
+}
+
+// NodeState represents the current state of a node for scheduling decisions.
+type NodeState struct {
+	NodeDID           string  `json:"node_did"`
+	AvailableCPU      float64 `json:"available_cpu"`
+	AvailableMemoryMB int64   `json:"available_memory_mb"`
+	GPUTemperature    float32 `json:"gpu_temperature"`      // Current GPU temp in Celsius
+	GPULoad           string  `json:"gpu_load"`             // "idle", "low", "medium", "high"
+	IsGPUNode         bool    `json:"is_gpu_node"`
+	CurrentJobCount   int     `json:"current_job_count"`
+	UptimeSecs        int64   `json:"uptime_secs"`
 }
 
 // AuthzResult is the result of a policy evaluation.
 type AuthzResult struct {
 	Allow       bool     `json:"allow"`
 	DenyReasons []string `json:"deny_reasons,omitempty"`
+}
+
+// SchedulingResult is the result of a workload scheduling policy evaluation.
+type SchedulingResult struct {
+	AllowPlacement bool     `json:"allow_placement"`
+	DenyReasons    []string `json:"deny_reasons,omitempty"`
 }
 
 // NewEngine creates a new OPA policy engine.
@@ -160,6 +190,50 @@ func (e *Engine) Evaluate(ctx context.Context, input *AuthzInput) (*AuthzResult,
 			if allow, ok := resultMap["allow"].(bool); ok {
 				result.Allow = allow
 			}
+			if reasons, ok := resultMap["deny_reasons"]; ok {
+				if reasonSet, ok := reasons.([]interface{}); ok {
+					for _, r := range reasonSet {
+						if s, ok := r.(string); ok {
+							result.DenyReasons = append(result.DenyReasons, s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// EvaluateWorkloadScheduling evaluates workload scheduling policies.
+// Returns a SchedulingResult indicating whether a job can be placed on a node
+// based on provider-defined thermal budgets and resource constraints.
+// Uses the soholink.scheduling package from the loaded .rego files.
+func (e *Engine) EvaluateWorkloadScheduling(ctx context.Context, input *AuthzInput) (*SchedulingResult, error) {
+	e.mu.RLock()
+	prepared := e.prepared
+	e.mu.RUnlock()
+
+	results, err := prepared.Eval(ctx, rego.EvalInput(input))
+	if err != nil {
+		return nil, fmt.Errorf("workload scheduling policy evaluation failed: %w", err)
+	}
+
+	result := &SchedulingResult{AllowPlacement: true} // default to allow
+
+	if len(results) == 0 {
+		return result, nil
+	}
+
+	// Look for scheduling policy results in the soholink.scheduling package
+	if len(results[0].Expressions) > 0 {
+		expr := results[0].Expressions[0].Value
+		if resultMap, ok := expr.(map[string]interface{}); ok {
+			// Check allow_placement
+			if allowPlacement, ok := resultMap["allow_placement"].(bool); ok {
+				result.AllowPlacement = allowPlacement
+			}
+			// Check deny_reasons
 			if reasons, ok := resultMap["deny_reasons"]; ok {
 				if reasonSet, ok := reasons.([]interface{}); ok {
 					for _, r := range reasonSet {

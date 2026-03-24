@@ -29,14 +29,18 @@ func (s *FedScheduler) ScaleWorkload(ctx context.Context, workloadID string, rep
 	return nil
 }
 
-// DeleteWorkload removes a workload from the active set.
+// DeleteWorkload removes a workload from the active set and releases its ports.
 func (s *FedScheduler) DeleteWorkload(ctx context.Context, workloadID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.ActiveWorkloads[workloadID]; !ok {
+		s.mu.Unlock()
 		return fmt.Errorf("workload %s not found", workloadID)
 	}
 	delete(s.ActiveWorkloads, workloadID)
+	s.mu.Unlock()
+
+	// Release all ports allocated to this workload
+	s.ReleaseWorkloadPorts(workloadID)
 	return nil
 }
 

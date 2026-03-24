@@ -121,7 +121,16 @@ func (d *NodeDiscovery) matchesQuery(node *Node, q NodeQuery) bool {
 	if q.GPURequired && !node.HasGPU {
 		return false
 	}
-	if q.GPUModel != "" && node.GPUModel != q.GPUModel {
+	if q.GPURequired && node.GPUProfile != nil {
+		// GPU-specific filters when GPU is required
+		if q.MinGPUVRAM > 0 && node.GPUProfile.VRAMFree < q.MinGPUVRAM {
+			return false
+		}
+		if q.MinComputeCapability != "" && !compareComputeCapability(node.GPUProfile.ComputeCapability, q.MinComputeCapability) {
+			return false
+		}
+	}
+	if q.GPUModel != "" && node.GPUProfile != nil && node.GPUProfile.Model != q.GPUModel {
 		return false
 	}
 	if q.MinReputation > 0 && node.ReputationScore < q.MinReputation {
@@ -145,7 +154,44 @@ func (d *NodeDiscovery) matchesQuery(node *Node, q NodeQuery) bool {
 	return true
 }
 
+// compareComputeCapability returns true if nodeCapability >= minCapability.
+// Parses versions like "8.6", "9.0" and compares numerically.
+// Returns false if either version cannot be parsed.
+func compareComputeCapability(nodeCapability, minCapability string) bool {
+	nodeVer := parseComputeVersion(nodeCapability)
+	minVer := parseComputeVersion(minCapability)
+	if nodeVer < 0 || minVer < 0 {
+		return false
+	}
+	return nodeVer >= minVer
+}
+
+// parseComputeVersion converts "8.6" to 86 for numeric comparison.
+// Returns -1 if parsing fails.
+func parseComputeVersion(version string) int {
+	if len(version) < 3 {
+		return -1
+	}
+	major := int(version[0] - '0')
+	minor := int(version[2] - '0')
+	if major < 0 || major > 9 || minor < 0 || minor > 9 {
+		return -1
+	}
+	return major*10 + minor
+}
+
 func nodeFromRow(row *store.FederationNodeRow) *Node {
+	var gpuProfile *GPUProfile
+	if row.GPUModel != "" {
+		gpuProfile = &GPUProfile{
+			Model:             row.GPUModel,
+			VRAMFree:          row.GPUVRAMFree,
+			VRAMTotal:         row.GPUVRAMTotal,
+			ComputeCapability: row.GPUComputeCapability,
+			Temperature:       row.GPUTemperature,
+			PCIeBandwidth:     row.GPUPCIeBandwidth,
+		}
+	}
 	return &Node{
 		DID:               row.NodeDID,
 		Address:           row.Address,
@@ -157,7 +203,7 @@ func nodeFromRow(row *store.FederationNodeRow) *Node {
 		TotalDiskGB:       row.TotalDiskGB,
 		AvailableDiskGB:   row.AvailableDiskGB,
 		HasGPU:            row.GPUModel != "",
-		GPUModel:          row.GPUModel,
+		GPUProfile:        gpuProfile,
 		PricePerCPUHour:   row.PricePerCPUHour,
 		ReputationScore:   row.ReputationScore,
 		UptimePercent:     row.UptimePercent,

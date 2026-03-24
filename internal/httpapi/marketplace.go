@@ -15,6 +15,14 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
+// getGPUModel extracts GPU model name from node's GPU profile.
+func getGPUModel(n *orchestration.Node) string {
+	if n.GPUProfile != nil {
+		return n.GPUProfile.Model
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // Pricing constants (sats)  — platform default rates used for estimation.
 // Actual rates are determined by provider bids when order is placed.
@@ -104,7 +112,7 @@ func (s *Server) handleMarketplaceNodes(w http.ResponseWriter, r *http.Request) 
 			AvailableMemoryMB:   n.AvailableMemoryMB,
 			AvailableDiskGB:     n.AvailableDiskGB,
 			HasGPU:              n.HasGPU,
-			GPUModel:            n.GPUModel,
+			GPUModel:            getGPUModel(n),
 			PricePerCPUHourSats: n.PricePerCPUHour,
 			ReputationScore:     n.ReputationScore,
 			UptimePct:           n.UptimePercent,

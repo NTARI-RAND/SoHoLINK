@@ -105,6 +105,7 @@ type Server struct {
 	coordMeta      *coordinatorMeta    // non-nil when this node acts as a federation coordinator
 	paymentLedger  *payment.Ledger     // optional, enables real payout dispatch
 	catalog        *services.Catalog   // optional, enables marketplace service endpoints
+	reputationMgr  interface{}         // *reputation.ReputationManager, optional for reputation scoring
 	// Content safety (Items 1-3)
 	hashChecker    *moderation.CSAMHashChecker // optional — nil = no hash blocking
 	blocklist      *moderation.DIDBlocklist    // optional — nil = no DID blocking
@@ -261,6 +262,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Workload orchestration endpoints (Phase 2 + Phase 4)
 	mux.HandleFunc("/api/workloads/submit", s.handleSubmitWorkload)
+	mux.HandleFunc("/api/workloads/validate-placement", s.handleValidatePlacement) // Capability validation
 	mux.HandleFunc("/api/workloads/", s.routeWorkload) // Phase 4: comprehensive routing
 	mux.HandleFunc("/api/workloads", s.routeWorkload)  // Phase 4: list/create
 
@@ -283,6 +285,17 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Topology endpoints (Sprint 3.5 - two-tier federation)
+	mux.HandleFunc("/api/topology/cluster/members", s.handleGetClusterMembers)
+	mux.HandleFunc("/api/topology/mesh/peers", s.handleGetMeshPeers)
+	mux.HandleFunc("/api/topology/routing-table", s.handleGetRoutingTable)
+
+	// Reputation ledger endpoints (Sprint 3.6)
+	mux.HandleFunc("/api/reputation/ledger", s.handleGetReputationLedger)
+	mux.HandleFunc("/api/reputation/stats", s.handleGetReputationStats)
+	mux.HandleFunc("/api/reputation/nodes/", s.routeReputationNode) // Handles /nodes/{node_did}, /nodes/{node_did}/pricing
+	mux.HandleFunc("/api/reputation/verify/", s.handleVerifyChain)
 
 	// Governance endpoints (Phase 2)
 	mux.HandleFunc("/api/governance/proposals", s.handleGovernanceProposals)
