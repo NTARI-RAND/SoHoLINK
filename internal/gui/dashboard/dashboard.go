@@ -48,18 +48,17 @@ var windowSize = fyne.NewSize(1200, 760)
 // Entry points
 // ─────────────────────────────────────────────────────────────────────────────
 
-// RunSetupWizard launches the first-time setup wizard.
+// RunSetupWizard launches the first-time setup experience.
 // Called by the CLI when no configuration exists.
+// Uses the simplified 3-screen flow by default.
 func RunSetupWizard(cfg *config.Config, s *store.Store) {
 	a := getOrCreateApp()
-	w := a.NewWindow("SoHoLINK — Setup Wizard")
+	w := a.NewWindow("SoHoLINK")
 	w.Resize(fyne.NewSize(900, 640))
 	w.CenterOnScreen()
 	w.SetFixedSize(false)
 
-	// onComplete is called when the user clicks "Open Dashboard →".
-	// It loads the freshly written config and transitions the same window
-	// to the full dashboard — no process restart required.
+	// onComplete transitions from setup to the simple earnings dashboard.
 	onComplete := func() {
 		go func() {
 			newCfg, err := config.Load("")
@@ -72,35 +71,38 @@ func RunSetupWizard(cfg *config.Config, s *store.Store) {
 				dialog.ShowError(fmt.Errorf("services could not start: %w\n\nPlease restart SoHoLINK.", err), w)
 				return
 			}
-			// Transition the wizard window to the full operator dashboard.
+			// Transition to the simple earnings-focused dashboard.
 			w.SetTitle("SoHoLINK")
 			w.Resize(windowSize)
-			w.SetMainMenu(buildMenuBar(w, application))
-			w.SetContent(buildDashboard(w, application))
+			w.SetMainMenu(buildSimpleMenuBar(w, application))
+			w.SetContent(buildSimpleDashboard(w, application))
 		}()
 	}
 
-	showWizard(w, cfg, s, onComplete)
+	// Use the simplified setup flow (3 screens instead of 9 steps).
+	w.SetContent(RunSimpleSetup(cfg, s, onComplete))
 	w.ShowAndRun()
 }
 
-// RunDashboard launches the full operator dashboard.
+// RunDashboard launches the earnings-focused dashboard.
 // Called by the CLI after a node is configured and running.
+// Defaults to the simple view — advanced view available via View menu.
 func RunDashboard(application *app.App) {
 	a := getOrCreateApp()
 	w := a.NewWindow("SoHoLINK")
 	w.Resize(windowSize)
 	w.CenterOnScreen()
 
-	// If application is nil (first run without full init), show wizard
+	// If application is nil (first run without full init), show simple setup
 	if application == nil {
-		showWizard(w, nil, nil, nil)
+		w.SetContent(RunSimpleSetup(nil, nil, nil))
 		w.ShowAndRun()
 		return
 	}
 
-	w.SetMainMenu(buildMenuBar(w, application))
-	w.SetContent(buildDashboard(w, application))
+	// Default to the simple, earnings-focused view
+	w.SetMainMenu(buildSimpleMenuBar(w, application))
+	w.SetContent(buildSimpleDashboard(w, application))
 	w.ShowAndRun()
 }
 
