@@ -534,6 +534,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Ping verifies the database connection is alive.
+// Used by health checks and readiness probes.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
 // DB returns the underlying *sql.DB for advanced operations.
 func (s *Store) DB() *sql.DB {
 	return s.db

@@ -39,16 +39,24 @@ func TestServer_HandleHealth(t *testing.T) {
 		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var response map[string]string
+	var response struct {
+		Status string                       `json:"status"`
+		Time   string                       `json:"time"`
+		Uptime string                       `json:"uptime"`
+		Checks map[string]json.RawMessage   `json:"checks"`
+	}
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	if response["status"] != "ok" {
-		t.Errorf("Status = %q, want %q", response["status"], "ok")
+	if response.Status != "healthy" {
+		t.Errorf("Status = %q, want %q", response.Status, "healthy")
 	}
-	if response["time"] == "" {
+	if response.Time == "" {
 		t.Error("Expected non-empty time field")
+	}
+	if response.Checks == nil {
+		t.Error("Expected checks map in health response")
 	}
 }
 

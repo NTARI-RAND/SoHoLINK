@@ -13,6 +13,7 @@ import (
 	"crypto/ed25519"
 
 	soholink "github.com/NetworkTheoryAppliedResearchInstitute/soholink"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/logging"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/accounting"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/blockchain"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/cdn"
@@ -107,6 +108,18 @@ type App struct {
 
 // New creates a new App instance, initializing all subsystems.
 func New(cfg *config.Config) (*App, error) {
+	// Initialize structured logging before anything else.
+	// All existing log.Printf calls are automatically bridged through slog.
+	logFormat := "text"
+	logLevel := "info"
+	if os.Getenv("SOHOLINK_LOG_FORMAT") != "" {
+		logFormat = os.Getenv("SOHOLINK_LOG_FORMAT")
+	}
+	if os.Getenv("SOHOLINK_LOG_LEVEL") != "" {
+		logLevel = os.Getenv("SOHOLINK_LOG_LEVEL")
+	}
+	logging.Init(logFormat, logLevel, os.Stderr)
+
 	app := &App{Config: cfg}
 
 	// Initialize store

@@ -11,7 +11,9 @@ import (
 // via Ed25519 signatures embedded in the request body, not device tokens.
 var publicPaths = map[string]bool{
 	"/api/health":                    true,
+	"/api/ready":                     true, // readiness probe — public for load balancers/k8s
 	"/api/version":                   true, // build-time version info — public, no token required
+	"/api/status":                    true, // node status snapshot — public for mobile dashboard
 	"/api/auth/challenge":            true,
 	"/api/auth/connect":              true,
 	"/api/federation/info":           true,

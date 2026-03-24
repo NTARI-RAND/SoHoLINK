@@ -236,8 +236,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Stripe webhook — public (verified by Stripe-Signature, not device token)
 	mux.HandleFunc("/api/webhooks/stripe", s.handleStripeWebhook)
 
-	// Health, version, and discovery
+	// Health, readiness, version, and discovery
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/ready", s.handleReady)
 	mux.HandleFunc("/api/version", s.handleVersion)
 	mux.HandleFunc("/api/resources/discover", s.handleDiscoverResources)
 	mux.HandleFunc("/api/status", s.handleStatus)
@@ -341,12 +342,13 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.server = &http.Server{
 		Addr: s.listenAddr,
-		// errorScrubMiddleware (outermost) prevents 5xx bodies from leaking
-		// internal errors to clients (T-005).
-		// metricsMiddleware instruments all requests for Prometheus.
-		// limitBodySize caps request bodies at 4 MB (DoS protection).
-		// authMiddleware enforces device token authentication.
-		Handler:        errorScrubMiddleware(metricsMiddleware(limitBodySize(s.authMiddleware(mux)))),
+		// Middleware chain (outermost → innermost):
+		// 1. requestIDMiddleware — assigns X-Request-ID for tracing
+		// 2. errorScrubMiddleware — prevents 5xx bodies from leaking internals (T-005)
+		// 3. metricsMiddleware — instruments all requests for Prometheus
+		// 4. limitBodySize — caps request bodies at 4 MB (DoS protection)
+		// 5. authMiddleware — enforces device token authentication
+		Handler:        requestIDMiddleware(errorScrubMiddleware(metricsMiddleware(limitBodySize(s.authMiddleware(mux))))),
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   60 * time.Second,
 		IdleTimeout:    120 * time.Second,
@@ -389,12 +391,96 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// handleHealth serves GET /api/health with real subsystem checks.
+// Returns "healthy" only if all critical subsystems are operational.
+// Kubernetes, load balancers, and monitoring tools can rely on this.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	type checkResult struct {
+		Status string `json:"status"` // "ok" or "degraded" or "down"
+		Detail string `json:"detail,omitempty"`
+	}
+
+	checks := make(map[string]checkResult)
+	overallHealthy := true
+
+	// Database check — ping the store
+	if s.store != nil {
+		if err := s.store.Ping(r.Context()); err != nil {
+			checks["database"] = checkResult{Status: "down", Detail: err.Error()}
+			overallHealthy = false
+		} else {
+			checks["database"] = checkResult{Status: "ok"}
+		}
+	} else {
+		checks["database"] = checkResult{Status: "down", Detail: "store not initialized"}
+		overallHealthy = false
+	}
+
+	// Scheduler check
+	if s.scheduler != nil {
+		checks["scheduler"] = checkResult{Status: "ok"}
+	} else {
+		checks["scheduler"] = checkResult{Status: "down", Detail: "not configured"}
+	}
+
+	// Payment ledger check
+	if s.paymentLedger != nil {
+		checks["payments"] = checkResult{Status: "ok"}
+	} else {
+		checks["payments"] = checkResult{Status: "degraded", Detail: "ledger not configured"}
+	}
+
+	// P2P mesh check
+	if s.p2pMesh != nil {
+		peerCount := s.p2pMesh.PeerCount()
+		if peerCount > 0 {
+			checks["network"] = checkResult{Status: "ok", Detail: fmt.Sprintf("%d peers", peerCount)}
+		} else {
+			checks["network"] = checkResult{Status: "degraded", Detail: "no peers connected"}
+		}
+	} else {
+		checks["network"] = checkResult{Status: "degraded", Detail: "mesh not configured"}
+	}
+
+	status := "healthy"
+	httpStatus := http.StatusOK
+	if !overallHealthy {
+		status = "unhealthy"
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	resp := struct {
+		Status  string                 `json:"status"`
+		Time    string                 `json:"time"`
+		Uptime  string                 `json:"uptime"`
+		Checks  map[string]checkResult `json:"checks"`
+	}{
+		Status:  status,
+		Time:    time.Now().UTC().Format(time.RFC3339),
+		Uptime:  time.Since(nodeStartTime).Round(time.Second).String(),
+		Checks:  checks,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-		"time":   time.Now().UTC().Format(time.RFC3339),
-	})
+	w.WriteHeader(httpStatus)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleReady serves GET /api/ready — a lightweight readiness probe.
+// Returns 200 only when the server is ready to accept traffic.
+// Use this for Kubernetes readinessProbe or load balancer health checks.
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	// Check that the database is reachable — that's the minimum for readiness
+	if s.store == nil {
+		http.Error(w, `{"ready":false}`, http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.store.Ping(r.Context()); err != nil {
+		http.Error(w, `{"ready":false}`, http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ready":true}`))
 }
 
 // handlePeers serves GET /api/peers.
