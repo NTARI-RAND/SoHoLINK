@@ -94,11 +94,23 @@ func (a *App) validateConfig() error {
 		log.Printf("[INFO] orchestration.enabled=true but payment.enabled=false. Workloads will run but no billing will occur.")
 	}
 
-	// 9. TLS not configured — plain HTTP in production is unsafe.
-	if cfg.ResourceSharing.Enabled &&
-		(cfg.ResourceSharing.TLSCertFile == "" || cfg.ResourceSharing.TLSKeyFile == "") {
-		log.Printf("[WARN] TLS is not configured (resource_sharing.tls_cert_file/tls_key_file are empty). " +
-			"The API runs over plain HTTP — set these fields for HTTPS in production.")
+	// 9. TLS enforcement — auto-cert provides development TLS,
+	//    but production deployments MUST use real certificates.
+	if cfg.ResourceSharing.Enabled {
+		if cfg.ResourceSharing.TLSCertFile == "" && cfg.ResourceSharing.TLSKeyFile == "" {
+			log.Printf("[WARN] TLS: using auto-generated self-signed certificate. " +
+				"Set resource_sharing.tls_cert_file and tls_key_file for production deployment.")
+		} else if cfg.ResourceSharing.TLSCertFile == "" || cfg.ResourceSharing.TLSKeyFile == "" {
+			log.Printf("[WARN] TLS: only one of tls_cert_file/tls_key_file is set — both are required. " +
+				"TLS will fall back to auto-generated self-signed certificate.")
+		}
+	}
+
+	// 10. Reject SOHOLINK_INSECURE_NO_TLS=1 in production.
+	//     This env var disables TLS entirely — only for CI/testing.
+	if os.Getenv("SOHOLINK_INSECURE_NO_TLS") == "1" {
+		log.Printf("[WARN] SECURITY: SOHOLINK_INSECURE_NO_TLS=1 disables TLS entirely. " +
+			"Do NOT use this in production.")
 	}
 
 	return nil

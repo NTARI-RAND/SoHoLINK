@@ -344,11 +344,12 @@ func (s *Server) Start(ctx context.Context) error {
 		Addr: s.listenAddr,
 		// Middleware chain (outermost → innermost):
 		// 1. requestIDMiddleware — assigns X-Request-ID for tracing
-		// 2. errorScrubMiddleware — prevents 5xx bodies from leaking internals (T-005)
-		// 3. metricsMiddleware — instruments all requests for Prometheus
-		// 4. limitBodySize — caps request bodies at 4 MB (DoS protection)
-		// 5. authMiddleware — enforces device token authentication
-		Handler:        requestIDMiddleware(errorScrubMiddleware(metricsMiddleware(limitBodySize(s.authMiddleware(mux))))),
+		// 2. securityHeadersMiddleware — sets X-Content-Type-Options, HSTS, CSP, etc.
+		// 3. errorScrubMiddleware — prevents 5xx bodies from leaking internals (T-005)
+		// 4. metricsMiddleware — instruments all requests for Prometheus
+		// 5. limitBodySize — caps request bodies at 4 MB (DoS protection)
+		// 6. authMiddleware — enforces device token authentication
+		Handler:        requestIDMiddleware(securityHeadersMiddleware(errorScrubMiddleware(metricsMiddleware(limitBodySize(s.authMiddleware(mux)))))),
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   60 * time.Second,
 		IdleTimeout:    120 * time.Second,
