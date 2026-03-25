@@ -144,7 +144,7 @@ sudo apt install freeradius-utils
 ./fedaaa users add testuser
 
 # Note the token from output, then:
-echo "User-Name=testuser,User-Password=<token>" | radclient -x localhost:1812 auth testing123
+echo "User-Name=testuser,User-Password=<token>" | radclient -x localhost:1812 auth $YOUR_SECRET
 
 # Expected: Access-Accept with Reply-Message
 ```
@@ -162,7 +162,7 @@ import (
 )
 
 func main() {
-    packet := radius.New(radius.CodeAccessRequest, []byte("testing123"))
+    packet := radius.New(radius.CodeAccessRequest, []byte(os.Getenv("RADIUS_SECRET")))
     rfc2865.UserName_SetString(packet, "alice")
     rfc2865.UserPassword_SetString(packet, "<token>")
 

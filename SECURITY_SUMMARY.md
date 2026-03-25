@@ -173,7 +173,7 @@ os.WriteFile(userProvidedPath, data, 0644) // No validation!
 ### Automated (Recommended)
 
 ```bash
-cd "C:\Users\Jodson Graves\Documents\SoHoLINK"
+cd /path/to/SoHoLINK
 
 # Create security branch
 git checkout -b security/critical-fixes

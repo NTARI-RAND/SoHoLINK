@@ -212,7 +212,7 @@ resource_sharing:
 radius:
   auth_address: "0.0.0.0:1812"
   acct_address: "0.0.0.0:1813"
-  shared_secret: "testing123"
+  shared_secret: ""
 
 storage:
   base_path: "%s"

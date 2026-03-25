@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 # update-binary.ps1 — stop service, replace binary, restart service
 param(
-    [string]$SourceExe = "C:\Users\Jodson Graves\Documents\SoHoLINK\fedaaa.exe",
+    [string]$SourceExe = ".\fedaaa.exe",
     [string]$InstallDir = "C:\Program Files\SoHoLINK",
     [string]$TaskName = "SoHoLINK Node"
 )

@@ -142,7 +142,7 @@ Sample credential token (for testing):
   ZGVhZGJlZWYxMjM0NTY3ODlhYmNkZWZnaGlqa2xtbm9...
 
 Test with radclient:
-  echo "User-Name=alice,User-Password=ZGVhZGJl..." | radclient -x localhost:1812 auth testing123
+  echo "User-Name=alice,User-Password=ZGVhZGJl..." | radclient -x localhost:1812 auth $YOUR_SECRET
 ```
 
 ### 5. Start the Server
@@ -165,7 +165,7 @@ The server will:
 | `node.location` | string | "" | Physical location |
 | `radius.auth_address` | string | "0.0.0.0:1812" | Auth listener address |
 | `radius.acct_address` | string | "0.0.0.0:1813" | Accounting listener address |
-| `radius.shared_secret` | string | "testing123" | RADIUS shared secret |
+| `radius.shared_secret` | string | "" (must be set) | RADIUS shared secret |
 | `auth.credential_ttl` | int | 3600 | Token lifetime (seconds) |
 | `auth.max_nonce_age` | int | 300 | Nonce cache duration (seconds) |
 | `auth.clock_skew_tolerance` | int | 300 | Clock drift tolerance (seconds) |

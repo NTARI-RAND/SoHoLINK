@@ -36,7 +36,7 @@
 ### Option 1: Copy Entire Folder
 
 ```
-1. Copy C:\Users\Jodson Graves\Documents\SoHoLINK\build\ to USB
+1. Copy <your-soholink-directory>\build\ to USB
 2. Move to laptop
 3. Double-click soholink-wizard.exe
 4. Wizard starts!
@@ -47,7 +47,7 @@
 **Run this on your current machine:**
 
 ```cmd
-cd C:\Users\Jodson Graves\Documents\SoHoLINK
+cd <your-soholink-directory>
 create-installer.bat
 ```
 
@@ -284,7 +284,7 @@ The wizard **passes** the test if:
 ### Quick Test Path:
 
 ```
-1. Navigate to: C:\Users\Jodson Graves\Documents\SoHoLINK\build\
+1. Navigate to: <your-soholink-directory>\build\
 2. See: soholink-wizard.exe (6.1 MB)
 3. Copy this file to USB drive
 4. Move to laptop

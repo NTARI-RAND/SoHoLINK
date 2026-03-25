@@ -19,7 +19,7 @@ You asked for:
 ### Quick Build (Windows)
 
 ```powershell
-cd "C:\Users\Jodson Graves\Documents\SoHoLINK"
+cd "<your-soholink-directory>"
 .\build-simple.ps1
 ```
 
@@ -204,7 +204,7 @@ Before zipping and testing on your laptop:
 
 ```powershell
 # Navigate to project
-cd "C:\Users\Jodson Graves\Documents\SoHoLINK"
+cd "<your-soholink-directory>"
 
 # Build the installer
 .\build-simple.ps1

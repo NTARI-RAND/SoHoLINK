@@ -53,6 +53,20 @@ config.local.yaml
 *.tar.gz
 *.zip
 
+# Claude settings (machine-specific)
+.claude/settings.local.json
+
+# Flutter machine-specific files
+mobile/flutter-app/.flutter-plugins
+mobile/flutter-app/.flutter-plugins-dependencies
+mobile/flutter-app/android/local.properties
+
+# Private keys
+*.pem
+
+# Environment files
+.env*
+
 # OS specific
 Thumbs.db
 ehthumbs.db

@@ -126,7 +126,7 @@ func runUsersAdd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s\n", token)
 	fmt.Println()
 	fmt.Println("Test with radclient:")
-	fmt.Printf("  echo \"User-Name=%s,User-Password=%s\" | radclient -x localhost:1812 auth testing123\n", username, token)
+	fmt.Printf("  echo \"User-Name=%s,User-Password=%s\" | radclient -x localhost:1812 auth $YOUR_SECRET\n", username, token)
 
 	return nil
 }

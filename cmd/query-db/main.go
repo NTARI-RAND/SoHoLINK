@@ -4,12 +4,18 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
-	dbPath := `C:\Users\Jodson Graves\AppData\Local\SoHoLINK\data\soholink.db`
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("[!] Failed to determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+	dbPath := filepath.Join(homeDir, "AppData", "Local", "SoHoLINK", "data", "soholink.db")
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {

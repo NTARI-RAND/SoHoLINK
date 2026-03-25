@@ -27,7 +27,7 @@ cd /path/to/soholink
 
 ```bash
 # Apply patch
-cd C:\Users\Jodson\ Graves\Documents\SoHoLINK
+cd /path/to/SoHoLINK
 git apply security-fixes/FIX_1_APPARMOR_INJECTION.patch
 
 # OR manually edit internal/compute/apparmor.go

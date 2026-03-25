@@ -440,7 +440,7 @@ make build-cli
 ./bin/fedaaa install
 ./bin/fedaaa start
 # Run authentication test
-echo "User-Name=alice,User-Password=..." | radclient localhost:1812 auth testing123
+echo "User-Name=alice,User-Password=..." | radclient localhost:1812 auth $YOUR_SECRET
 ```
 
 **Windows:**
@@ -492,7 +492,7 @@ make build-cli
    - Only escalate privileges when necessary (Hyper-V, KVM)
 
 3. **Review configuration before starting**
-   - Change default shared secret: `testing123` → strong secret
+   - Change default shared secret: empty default → must set a strong secret
    - Bind to localhost (127.0.0.1) if not needed publicly
    - Enable firewall rules
 

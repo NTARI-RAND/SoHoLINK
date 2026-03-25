@@ -268,7 +268,7 @@ Configuration Files:
 Run the demo to see it in action:
 
 ```bash
-cd C:\Users\Jodson Graves\Documents\SoHoLINK
+cd /path/to/SoHoLINK
 go run cmd/wizard-demo/main.go
 ```
 

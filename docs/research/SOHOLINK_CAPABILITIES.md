@@ -544,7 +544,7 @@ or development. Production deployments should have zero warnings before shipping
 
 | Check | Warning Trigger | Risk if Ignored |
 |---|---|---|
-| RADIUS secret | Value is `""` or `"testing123"` | Any client can authenticate |
+| RADIUS secret | Value is `""` or `""` | Any client can authenticate |
 | Payment processor | `payment.enabled=true` but no Stripe or Lightning | Only barter credits work |
 | Stripe env var | Processor type=`stripe` but `$SECRET_KEY_ENV` not set | All Stripe charges fail |
 | LND cert path | `lnd_host` set but `lnd_tls_cert_path` empty | TLS unverified — MITM possible |

@@ -5,7 +5,7 @@
 set -e
 
 SERVER="${1:-localhost:1812}"
-SECRET="${2:-testing123}"
+SECRET="${2:?ERROR: RADIUS shared secret required}"
 FEDAAA="${FEDAAA:-./fedaaa}"
 
 echo "=== SoHoLINK RADIUS Integration Tests ==="

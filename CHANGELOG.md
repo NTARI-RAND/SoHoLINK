@@ -280,7 +280,7 @@ migrated on startup.
 **Gap 5 — Startup Configuration Validation**
 - New file `internal/app/validate.go`: `(App).validateConfig()` called at the top of `Start()`
   before any service starts; all checks are non-fatal log warnings to support development workflows
-- Warns on: default RADIUS shared secret (`testing123` or empty); `payment.enabled` without a
+- Warns on: default RADIUS shared secret (empty); `payment.enabled` without a
   real processor; Stripe processor with unset `$SECRET_KEY_ENV`; Lightning processor without
   `lnd_tls_cert_path`; `federation.is_coordinator` without `resource_sharing.enabled`; empty
   `node.did`; `orchestration.enabled` without `payment.enabled`

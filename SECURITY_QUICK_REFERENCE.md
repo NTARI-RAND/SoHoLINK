@@ -39,7 +39,7 @@
 ## ⚡ Quick Apply All Fixes
 
 ```bash
-cd "C:/Users/Jodson Graves/Documents/SoHoLINK"
+cd /path/to/SoHoLINK
 
 # 1. Command injection
 git apply security-fixes/FIX_1_APPARMOR_INJECTION.patch
