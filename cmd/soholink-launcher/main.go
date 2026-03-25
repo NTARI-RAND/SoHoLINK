@@ -143,7 +143,24 @@ func firstTimeSetup() error {
 		return fmt.Errorf("cannot load even default config: %w", err)
 	}
 
-	// Create directories.
+	// Guard: ensure paths are populated even if config defaults didn't apply.
+	if cfg.Storage.BasePath == "" {
+		cfg.Storage.BasePath = config.DefaultDataDir()
+		log.Printf("[launcher] storage.base_path was empty, using default: %s", cfg.Storage.BasePath)
+	}
+
+	// Pre-create the base data directory (the parent may not exist on a fresh machine).
+	if err := os.MkdirAll(cfg.Storage.BasePath, 0750); err != nil {
+		return fmt.Errorf("create data dir %s: %w", cfg.Storage.BasePath, err)
+	}
+
+	// Also pre-create the config directory so config.yaml can be written later.
+	configDir := config.DefaultConfigDir()
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		return fmt.Errorf("create config dir %s: %w", configDir, err)
+	}
+
+	// Create all remaining directories.
 	if err := config.EnsureDirectories(cfg); err != nil {
 		return fmt.Errorf("create directories: %w", err)
 	}
