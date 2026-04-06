@@ -1,0 +1,13 @@
+[Unit]
+Description=SoHoLINK Node (fedaaa)
+After=network.target
+
+[Service]
+User=nobody
+WorkingDirectory=/opt/soholink
+ExecStart=/opt/soholink/bin/fedaaa
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
