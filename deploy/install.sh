@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # SoHoLINK — full server deployment script (Ubuntu 24, single command)
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/NetworkTheoryAppliedResearchInstitute/soholink/master/deploy/install.sh)
+# Usage on a fresh server:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/NetworkTheoryAppliedResearchInstitute/soholink/master/deploy/install.sh)
 # Make executable: chmod +x deploy/install.sh
 set -euo pipefail
 
-# ── Clone the repo ────────────────────────────────────────────────────────────
-git clone https://github.com/NetworkTheoryAppliedResearchInstitute/soholink /opt/soholink
+# ── Clone the repo (or pull if already present) ───────────────────────────────
+if [ -d /opt/soholink/.git ]; then
+  echo "Repo already present — pulling latest instead of cloning"
+  git -C /opt/soholink pull
+else
+  git clone https://github.com/NetworkTheoryAppliedResearchInstitute/soholink /opt/soholink
+fi
 cd /opt/soholink
 
 # ── Install Go 1.24.2 ─────────────────────────────────────────────────────────
