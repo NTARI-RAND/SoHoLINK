@@ -7,14 +7,14 @@ soholink.org {
 
 	# Globe interface — serve single HTML file at /globe
 	handle /globe {
-		root * ui/globe-interface
+		root * /opt/soholink/ui/globe-interface
 		rewrite * /ntarios-globe.html
 		file_server
 	}
 
 	# Flutter web SPA — serves everything else
 	handle {
-		root * mobile/flutter-app/build/web
+		root * /opt/soholink/mobile/flutter-app/build/web
 		try_files {path} /index.html
 		file_server
 	}
