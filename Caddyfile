@@ -1,18 +1,22 @@
 soholink.org {
-	# WebSocket proxy — must be declared before the catch-all file_server
-	reverse_proxy /ws/graph localhost:8080
-
-	# API proxy
-	reverse_proxy /api/* localhost:8080
-
-	# Globe interface — serve single HTML file at /globe
 	handle /globe {
-		root * /opt/soholink/ui/globe-interface
 		rewrite * /ntarios-globe.html
+		root * /opt/soholink/ui/globe-interface
 		file_server
 	}
 
-	# Flutter web SPA — serves everything else
+	handle /api/* {
+		reverse_proxy localhost:8080
+	}
+
+	handle /ws/graph {
+		reverse_proxy localhost:8080 {
+			header_up Host {host}
+			header_up Upgrade {http.request.header.Upgrade}
+			header_up Connection {http.request.header.Connection}
+		}
+	}
+
 	handle {
 		root * /opt/soholink/mobile/flutter-app/build/web
 		try_files {path} /index.html
