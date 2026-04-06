@@ -22,7 +22,7 @@ import '../models/workload.dart';
 /// To change the default for a new build, update this constant and rebuild.
 /// See README → "Mobile App: Changing the Node Address" for details.
 /// ─────────────────────────────────────────────────────────────────────────────
-const kNodeUrl = 'http://192.168.1.220:4000';
+const kNodeUrl = 'https://soholink.org';
 
 const _kBaseUrl     = 'node_base_url';
 const _kDeviceToken = 'device_token';   // key used in flutter_secure_storage (encrypted)
@@ -70,8 +70,14 @@ class SoHoLinkClient {
 
   String get baseUrl => _prefs.getString(_kBaseUrl) ?? kNodeUrl;
 
+  /// WebSocket URL derived from the base HTTP URL.
+  String get wsUrl => baseUrl.replaceFirst(RegExp(r'^http'), 'ws') + '/ws/nodes';
+
   /// True once the device has a persisted encrypted device token.
   bool get hasConfiguredUrl => _cachedToken != null;
+
+  /// The node DID stored in the device token (used for WebSocket registration).
+  String get nodeDid => _cachedToken ?? '';
 
   String? get _deviceToken => _cachedToken;
 
@@ -324,6 +330,16 @@ class SoHoLinkClient {
   /// Cancel an active order and receive a proportional refund.
   Future<Map<String, dynamic>> cancelOrder(String orderId) async {
     return _post('/api/orders/$orderId/cancel', {});
+  }
+
+  // ── FCM token registration ────────────────────────────────────────────────
+
+  /// Post the FCM device token to the node so it can send background wakeups.
+  Future<void> registerFcmToken(String fcmToken) async {
+    await _post('/api/v1/nodes/mobile/fcm-token', {
+      'node_did':  nodeDid,
+      'fcm_token': fcmToken,
+    });
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

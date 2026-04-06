@@ -1,6 +1,6 @@
 module github.com/NetworkTheoryAppliedResearchInstitute/soholink
 
-go 1.25.7
+go 1.24.2
 
 require (
 	fyne.io/fyne/v2 v2.5.4
