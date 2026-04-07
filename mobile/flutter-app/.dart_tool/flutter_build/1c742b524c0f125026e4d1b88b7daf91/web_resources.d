@@ -1,1 +1,0 @@
- build\\web\\manifest.json:  C:\\Users\\Jodson\ Graves\\Documents\\SoHoLINK\\mobile\\flutter-app\\web\\index.html C:\\Users\\Jodson\ Graves\\Documents\\SoHoLINK\\mobile\\flutter-app\\web\\manifest.json
