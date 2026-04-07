@@ -80,15 +80,18 @@ resource_sharing:
     session_timeout: 86400
 
 payment:
-  enabled: false
+  enabled: true
   processors:
-    - type: barter
+    - type: stripe
       priority: 1
+      secret_key_env: STRIPE_SECRET_KEY
+    - type: barter
+      priority: 2
       federation_only: true
   offline_settlement_interval: "5m"
   max_offline_queue: 1000
-  # Stripe webhook signing secret (from Stripe Dashboard → Webhooks).
-  # Set via env SOHOLINK_PAYMENT_STRIPE_WEBHOOK_SECRET.
+  # Stripe webhook signing secret — set via env SOHOLINK_PAYMENT_STRIPE_WEBHOOK_SECRET.
+  # Never paste the value here; the env var is read at startup.
   stripe_webhook_secret: ""
 
 lbtas:

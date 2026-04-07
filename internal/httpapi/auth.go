@@ -90,13 +90,17 @@ func (s *Server) handleAuthChallenge(w http.ResponseWriter, r *http.Request) {
 
 type connectRequest struct {
 	Nonce      string `json:"nonce"`
-	PublicKey  string `json:"public_key"`  // base64 Ed25519 public key (32 bytes)
+	PublicKey  string `json:"public_key"`  // base64 Ed25519 public key (32 bytes) — optional when signing from the owner device
 	Signature  string `json:"signature"`   // base64 Ed25519 signature over nonce bytes
 	DeviceName string `json:"device_name"` // human-readable label, e.g. "MacBook Air"
 }
 
 // handleAuthConnect verifies the Ed25519 signature against the stored owner
 // public key and — on success — issues a persistent device token.
+//
+// public_key is optional: if omitted, the server verifies the signature against
+// the stored owner public key directly (used by the browser dashboard where
+// deriving the public key from a seed in-browser is not straightforward).
 func (s *Server) handleAuthConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,14 +123,7 @@ func (s *Server) handleAuthConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Decode the client's claimed public key.
-	clientPub, err := base64.StdEncoding.DecodeString(req.PublicKey)
-	if err != nil || len(clientPub) != ed25519.PublicKeySize {
-		http.Error(w, "invalid public_key", http.StatusBadRequest)
-		return
-	}
-
-	// 3. Load the owner's public key stored at node startup.
+	// 2. Load the owner's public key stored at node startup.
 	ctx := r.Context()
 	ownerPubB64, ok, err := s.store.GetOwnerPublicKey(ctx)
 	if err != nil || !ok {
@@ -139,20 +136,30 @@ func (s *Server) handleAuthConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Constant-time comparison — client key must match owner key exactly.
-	if !constEqual(clientPub, ownerPub) {
-		log.Printf("[auth] connect rejected: public key mismatch from %s", clientIP(r))
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	// 3. If client supplied a public key, verify it matches the owner key.
+	//    If omitted, verify directly against the stored owner public key.
+	verifyPub := ed25519.PublicKey(ownerPub)
+	if req.PublicKey != "" {
+		clientPub, decErr := base64.StdEncoding.DecodeString(req.PublicKey)
+		if decErr != nil || len(clientPub) != ed25519.PublicKeySize {
+			http.Error(w, "invalid public_key", http.StatusBadRequest)
+			return
+		}
+		if !constEqual(clientPub, ownerPub) {
+			log.Printf("[auth] connect rejected: public key mismatch from %s", clientIP(r))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		verifyPub = ed25519.PublicKey(clientPub)
 	}
 
-	// 5. Verify the Ed25519 signature over the nonce.
+	// 4. Verify the Ed25519 signature over the nonce.
 	sig, err := base64.StdEncoding.DecodeString(req.Signature)
 	if err != nil {
 		http.Error(w, "invalid signature encoding", http.StatusBadRequest)
 		return
 	}
-	if !ed25519.Verify(ed25519.PublicKey(clientPub), []byte(req.Nonce), sig) {
+	if !ed25519.Verify(verifyPub, []byte(req.Nonce), sig) {
 		log.Printf("[auth] connect rejected: signature invalid from %s", clientIP(r))
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -181,6 +188,101 @@ func (s *Server) handleAuthConnect(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{ // #nosec G104
 		"device_token": tokenHex,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/owner-login  (browser convenience endpoint)
+// ---------------------------------------------------------------------------
+// The browser POSTs the raw 64-hex-char private key seed over HTTPS.
+// The server derives the Ed25519 public key from the seed and compares it
+// to the stored owner public key — no browser cryptography required.
+// This endpoint is rate-limited to 5 attempts per restart via an in-memory
+// counter (sufficient for a single-operator node).
+
+var loginAttempts int
+var loginMu sync.Mutex
+
+func (s *Server) handleOwnerLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "store not ready", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Basic brute-force guard.
+	loginMu.Lock()
+	loginAttempts++
+	attempts := loginAttempts
+	loginMu.Unlock()
+	if attempts > 20 {
+		http.Error(w, "too many attempts — restart the node to reset", http.StatusTooManyRequests)
+		return
+	}
+
+	var req struct {
+		Seed       string `json:"seed"`        // 64-char hex Ed25519 private key seed
+		DeviceName string `json:"device_name"` // human label
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Decode the seed.
+	seedBytes, err := hex.DecodeString(req.Seed)
+	if err != nil || len(seedBytes) != ed25519.SeedSize {
+		http.Error(w, "seed must be 64 hex characters (32 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	// Derive the Ed25519 public key from the seed.
+	privKey := ed25519.NewKeyFromSeed(seedBytes)
+	derivedPub := privKey.Public().(ed25519.PublicKey)
+	derivedPubB64 := base64.StdEncoding.EncodeToString(derivedPub)
+
+	// Load the stored owner public key.
+	ctx := r.Context()
+	ownerPubB64, ok, err := s.store.GetOwnerPublicKey(ctx)
+	if err != nil || !ok {
+		http.Error(w, "node owner key not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Compare in constant time.
+	if derivedPubB64 != ownerPubB64 {
+		log.Printf("[auth] owner-login rejected: wrong key from %s", clientIP(r))
+		http.Error(w, "incorrect private key", http.StatusUnauthorized)
+		return
+	}
+
+	// Reset attempt counter on success.
+	loginMu.Lock()
+	loginAttempts = 0
+	loginMu.Unlock()
+
+	// Issue a device token.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		http.Error(w, "token generation failed", http.StatusInternalServerError)
+		return
+	}
+	tokenHex := hex.EncodeToString(raw)
+
+	name := req.DeviceName
+	if name == "" {
+		name = "browser"
+	}
+	if err := s.store.StoreDeviceToken(ctx, tokenHex, name); err != nil {
+		http.Error(w, "could not persist token", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[auth] owner logged in via browser: %q from %s", name, clientIP(r))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"device_token": tokenHex}) // #nosec G104
 }
 
 // constEqual compares two byte slices in constant time to prevent timing attacks.

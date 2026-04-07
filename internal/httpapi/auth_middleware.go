@@ -22,6 +22,7 @@ var publicPaths = map[string]bool{
 	"/api/federation/heartbeat":      true,
 	"/api/federation/deregister":     true,
 	"/api/federation/blocklist":      true, // Item 2: public peer pull — no token required
+	"/api/auth/owner-login":          true, // Browser seed login — no token needed to obtain a token
 	"/api/webhooks/stripe":           true, // Stripe webhook: verified by Stripe-Signature, not device token
 	"/metrics":                       true, // Prometheus scrape endpoint — no auth required
 }
@@ -76,6 +77,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// Skip auth for public endpoints.
 		if publicPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip auth for all static SPA assets (anything not under /api/ or /ws/).
+		// The browser dashboard HTML/JS/CSS must load without a token; auth happens
+		// at the API layer when the SPA makes authenticated API calls.
+		if !strings.HasPrefix(r.URL.Path, "/api/") &&
+			!strings.HasPrefix(r.URL.Path, "/ws/") &&
+			!strings.HasPrefix(r.URL.Path, "/metrics") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -69,6 +69,11 @@ type WorkloadSpec struct {
 	// Runtime
 	Timeout    time.Duration
 	MaxRetries int
+
+	// AllowedPeers lists peer workloads this workload may reach (east-west).
+	// The scheduler resolves host IPs and ports at placement time.
+	// An empty list means outbound to other workloads is denied by default.
+	AllowedPeers []PeerRef
 }
 
 // PortMapping maps a container port to a host protocol.
@@ -76,6 +81,16 @@ type PortMapping struct {
 	ContainerPort int
 	HostPort      int
 	Protocol      string // "tcp", "udp"
+}
+
+// PeerRef identifies a peer workload this workload is permitted to reach
+// (east-west micro-segmentation). Populated by the scheduler at placement time
+// once the peer's host IP and port are resolved.
+type PeerRef struct {
+	WorkloadDID string // DID of the peer workload's owner
+	HostIP      string // Resolved host IP of the peer node
+	HostPort    int    // Allocated host port of the peer workload
+	Protocol    string // "tcp" or "udp"
 }
 
 // PlacementConstraints control where workloads are scheduled.
@@ -92,6 +107,12 @@ type PlacementConstraints struct {
 
 	// Cost
 	MaxCostPerHour int64 // Cents
+
+	// Compliance — require nodes that belong to a specific compliance group
+	// (e.g. "high-security", "data-residency", "gpu-tier").
+	// Empty means no compliance constraint; any node may be used.
+	ComplianceGroup string
+	SLATier         string // "best-effort", "standard", "premium"
 
 	// Affinity / anti-affinity
 	Affinity     *Affinity

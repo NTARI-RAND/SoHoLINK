@@ -22,7 +22,8 @@ type MeshPeer struct {
 	CoordinatorAddr  string
 	LastSeen         time.Time
 	Capacity         ClusterCapacity
-	Distance         int // Hop count from this node
+	Distance         int    // Hop count from this node
+	TLSCert          []byte // DER-encoded X.509 cert for mTLS identity verification
 }
 
 // ClusterCapacity snapshot of a cluster's resources.
@@ -76,7 +77,10 @@ func NewMeshGossiper(localClusterID string, clusterMgr *ClusterManager, gossipIn
 }
 
 // AddPeer adds a discovered peer cluster to the mesh.
-func (mg *MeshGossiper) AddPeer(clusterID string, coordinatorDID string, coordinatorAddr string) error {
+// tlsCert is the DER-encoded X.509 certificate for the peer's coordinator node;
+// it is stored and used for mTLS identity verification on outbound gossip connections.
+// Pass nil when the cert is not yet known (it can be updated later via UpdatePeerCert).
+func (mg *MeshGossiper) AddPeer(clusterID string, coordinatorDID string, coordinatorAddr string, tlsCert []byte) error {
 	if clusterID == mg.localClusterID {
 		return fmt.Errorf("cannot add self as peer")
 	}
@@ -90,9 +94,22 @@ func (mg *MeshGossiper) AddPeer(clusterID string, coordinatorDID string, coordin
 		CoordinatorAddr: coordinatorAddr,
 		LastSeen:        mg.nowFunc(),
 		Distance:        1, // Direct peer
+		TLSCert:         tlsCert,
 	}
 
 	log.Printf("[mesh] added peer cluster %s (coordinator %s)", clusterID, coordinatorDID)
+	return nil
+}
+
+// UpdatePeerCert stores or replaces the mTLS certificate for an existing peer.
+func (mg *MeshGossiper) UpdatePeerCert(clusterID string, tlsCert []byte) error {
+	mg.mu.Lock()
+	defer mg.mu.Unlock()
+	peer, ok := mg.peers[clusterID]
+	if !ok {
+		return fmt.Errorf("peer cluster %s not found", clusterID)
+	}
+	peer.TLSCert = tlsCert
 	return nil
 }
 

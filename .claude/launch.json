@@ -5,13 +5,20 @@
       "name": "SoHoLINK Node (HTTP API)",
       "runtimeExecutable": "./fedaaa.exe",
       "runtimeArgs": ["start"],
-      "port": 8080
+      "port": 8080,
+      "autoPort": false
     },
     {
       "name": "SoHoLINK Captive Portal",
       "runtimeExecutable": "./fedaaa.exe",
       "runtimeArgs": ["start"],
       "port": 8081
+    },
+    {
+      "name": "SPA Static Preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "3001", "--directory", "internal/httpapi/ui"],
+      "port": 3001
     },
     {
       "name": "Globe Interface",

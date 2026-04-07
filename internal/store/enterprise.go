@@ -32,6 +32,13 @@ type FederationNodeRow struct {
 	Status                string
 	LastHeartbeat         time.Time
 	PublicKey             string // base64-encoded Ed25519 public key (32 bytes)
+
+	// Compliance fields (v6 migration)
+	ComplianceLevel      string // "baseline", "high-security", "data-residency", "gpu-tier"
+	ComplianceGroup      string // e.g. "US-East-Secure", "EU-GDPR" (nullable)
+	SLATier              string // "best-effort", "standard", "premium"
+	AttestationData      string // base64url-encoded Ed25519 signature
+	LastComplianceCheck  int64  // Unix timestamp of last compliance check
 }
 
 // GetOnlineNodes returns all federation nodes with status "online".
@@ -121,6 +128,122 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 		n.Status, n.LastHeartbeat, n.PublicKey,
 	)
 	return err
+}
+
+// UpdateNodeCompliance sets the compliance level, group, SLA tier, and
+// attestation signature for a federation node.
+func (s *Store) UpdateNodeCompliance(ctx context.Context, nodeDID, level, group, tier, attestation string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE federation_nodes
+		SET compliance_level = ?,
+		    compliance_group = ?,
+		    sla_tier = ?,
+		    attestation_data = ?,
+		    last_compliance_check = strftime('%s','now')
+		WHERE node_did = ?`,
+		level, group, tier, attestation, nodeDID,
+	)
+	return err
+}
+
+// GetNodesByComplianceGroup returns all online nodes in the given compliance
+// group. Pass "" for group to return all online nodes regardless of group.
+func (s *Store) GetNodesByComplianceGroup(ctx context.Context, group string) ([]FederationNodeRow, error) {
+	query := `
+		SELECT node_did, address, region,
+		       total_cpu, available_cpu,
+		       total_memory_mb, available_memory_mb,
+		       total_disk_gb, available_disk_gb,
+		       gpu_model, gpu_vram_free, gpu_vram_total,
+		       gpu_compute_capability, gpu_temperature, gpu_pcie_bandwidth,
+		       price_per_cpu_hour,
+		       reputation_score, uptime_percent, failure_rate,
+		       status, last_heartbeat, public_key,
+		       compliance_level, compliance_group, sla_tier,
+		       attestation_data, last_compliance_check
+		FROM federation_nodes
+		WHERE status = 'online'`
+	var args []interface{}
+	if group != "" {
+		query += " AND compliance_group = ?"
+		args = append(args, group)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []FederationNodeRow
+	for rows.Next() {
+		var n FederationNodeRow
+		if err := rows.Scan(
+			&n.NodeDID, &n.Address, &n.Region,
+			&n.TotalCPU, &n.AvailableCPU,
+			&n.TotalMemoryMB, &n.AvailableMemoryMB,
+			&n.TotalDiskGB, &n.AvailableDiskGB,
+			&n.GPUModel, &n.GPUVRAMFree, &n.GPUVRAMTotal,
+			&n.GPUComputeCapability, &n.GPUTemperature, &n.GPUPCIeBandwidth,
+			&n.PricePerCPUHour,
+			&n.ReputationScore, &n.UptimePercent, &n.FailureRate,
+			&n.Status, &n.LastHeartbeat, &n.PublicKey,
+			&n.ComplianceLevel, &n.ComplianceGroup, &n.SLATier,
+			&n.AttestationData, &n.LastComplianceCheck,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, n)
+	}
+	return result, rows.Err()
+}
+
+// InsertComplianceAudit writes an append-only compliance check result.
+func (s *Store) InsertComplianceAudit(ctx context.Context, auditID, nodeDID, level string, passed bool, details string) error {
+	passedInt := 0
+	if passed {
+		passedInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO compliance_audit (audit_id, node_did, check_time, level, passed, details)
+		VALUES (?, ?, strftime('%s','now'), ?, ?, ?)`,
+		auditID, nodeDID, level, passedInt, details,
+	)
+	return err
+}
+
+// GetComplianceAudit returns recent compliance audit records for a node.
+func (s *Store) GetComplianceAudit(ctx context.Context, nodeDID string, limit int) ([]ComplianceAuditRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT audit_id, node_did, check_time, level, passed, details
+		FROM compliance_audit
+		WHERE node_did = ?
+		ORDER BY check_time DESC
+		LIMIT ?`, nodeDID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ComplianceAuditRow
+	for rows.Next() {
+		var r ComplianceAuditRow
+		if err := rows.Scan(&r.AuditID, &r.NodeDID, &r.CheckTime, &r.Level, &r.Passed, &r.Details); err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// ComplianceAuditRow is a single compliance check record.
+type ComplianceAuditRow struct {
+	AuditID   string
+	NodeDID   string
+	CheckTime int64
+	Level     string
+	Passed    bool
+	Details   string
 }
 
 // ── Workloads ─────────────────────────────────────────────────────────────────

@@ -34,15 +34,26 @@ class StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: SLColors.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: SLColors.border),
-        ),
+    return Focus(
+      onFocusChange: (focused) {
+        // Visual focus indication for TV D-pad navigation — no setState needed
+        // because Focus rebuilds automatically.
+        (context as Element).markNeedsBuild();
+      },
+      child: Builder(builder: (ctx) {
+        final focused = Focus.of(ctx).hasFocus;
+        return GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: SLColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: focused ? SLColors.cyan : SLColors.border,
+                width: focused ? 2.0 : 1.0,
+              ),
+            ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -77,6 +88,8 @@ class StatCard extends StatelessWidget {
           ],
         ),
       ),
+        );
+      }),
     );
   }
 }

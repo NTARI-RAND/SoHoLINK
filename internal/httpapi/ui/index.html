@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoHoLINK Node Dashboard</title>
+  <style>
+    :root {
+      --bg:#08090e; --surface:#0f1117; --surface-2:#161b27; --border:#1e2535; --border-2:#2a3347;
+      --accent:#4f8ef7; --accent-dim:rgba(79,142,247,0.12); --accent-glow:rgba(79,142,247,0.25);
+      --text:#e8edf5; --text-2:#9aa5b8; --text-3:#5a6478;
+      --green:#22d47a; --green-dim:rgba(34,212,122,0.12);
+      --yellow:#f0b429; --yellow-dim:rgba(240,180,41,0.12);
+      --red:#f0544f; --red-dim:rgba(240,84,79,0.12);
+      --purple:#a78bfa; --purple-dim:rgba(167,139,250,0.12);
+      --font:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;
+      --mono:'JetBrains Mono','Fira Code','Cascadia Code',monospace;
+      --r-sm:4px; --r-md:8px; --r-lg:12px; --r-xl:16px; --r-full:9999px;
+      --dur-fast:120ms; --dur-base:200ms;
+      --sidebar-w:220px; --header-h:56px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%}
+    body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:0.9375rem;line-height:1.6;-webkit-font-smoothing:antialiased}
+    .hidden{display:none!important}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+
+    /* LOGIN */
+    #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--bg)}
+    #login-screen::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(79,142,247,0.06) 0%,transparent 70%);pointer-events:none}
+    .login-card{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r-xl);padding:32px;box-shadow:0 24px 64px rgba(0,0,0,0.5)}
+    .login-logo{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+    .login-logo-icon{width:40px;height:40px;background:var(--accent-dim);border:1px solid rgba(79,142,247,0.3);border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .login-logo-name{font-size:1.25rem;font-weight:700;letter-spacing:-0.02em}
+    .login-logo-name span{color:var(--accent)}
+    .login-card h1{font-size:1.0625rem;font-weight:600;margin-bottom:8px}
+    .login-card p{font-size:0.8125rem;color:var(--text-2);margin-bottom:24px;line-height:1.6}
+    .login-field label{display:block;font-size:0.8125rem;font-weight:500;color:var(--text-2);margin-bottom:8px}
+    .login-field input{width:100%;background:var(--bg);border:1px solid var(--border-2);border-radius:var(--r-md);color:var(--text);padding:11px 12px;font-family:var(--mono);font-size:0.8125rem;transition:border-color var(--dur-fast);min-height:44px}
+    .login-field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+    .login-field input::placeholder{color:var(--text-3)}
+    #login-error{min-height:20px;font-size:0.75rem;color:var(--red);margin-top:8px;margin-bottom:8px}
+    #login-btn{width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:var(--r-md);font-size:0.9375rem;font-weight:600;cursor:pointer;transition:opacity var(--dur-fast),transform var(--dur-fast);min-height:44px}
+    #login-btn:hover{opacity:0.9}
+    #login-btn:active{transform:scale(0.98)}
+    #login-btn:disabled{opacity:0.45;cursor:not-allowed;transform:none}
+    .login-hint{margin-top:20px;padding:12px 16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-md);font-size:0.75rem;color:var(--text-3);line-height:1.6}
+    .login-hint strong{color:var(--text-2)}
+
+    /* APP SHELL */
+    #app{height:100vh;display:grid;grid-template-rows:var(--header-h) 1fr;grid-template-columns:var(--sidebar-w) 1fr;grid-template-areas:"sidebar header" "sidebar main"}
+
+    /* HEADER */
+    #header{grid-area:header;display:flex;align-items:center;gap:12px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--border);z-index:10}
+    #hamburger{display:none;background:none;border:none;color:var(--text-2);cursor:pointer;padding:8px;border-radius:var(--r-sm);min-width:44px;min-height:44px;align-items:center;justify-content:center}
+    #hamburger:hover{background:var(--surface-2);color:var(--text)}
+    #node-did-pill{flex:1;font-family:var(--mono);font-size:0.75rem;color:var(--text-3);background:var(--bg);border:1px solid var(--border);border-radius:var(--r-full);padding:5px 16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-height:32px;display:flex;align-items:center;gap:6px}
+    #node-did-pill .label{color:var(--accent);font-weight:600;flex-shrink:0}
+    #conn-status{display:flex;align-items:center;gap:8px;font-size:0.75rem;color:var(--text-3);white-space:nowrap}
+    #conn-dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0;transition:background var(--dur-base)}
+    #conn-dot.disconnected{background:var(--red)}
+    #conn-dot.connecting{background:var(--yellow);animation:pulse 1.2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+    .hdr-btn{padding:6px 12px;background:transparent;border:1px solid var(--border-2);border-radius:var(--r-md);color:var(--text-2);font-size:0.8125rem;cursor:pointer;transition:background var(--dur-fast),color var(--dur-fast);min-height:32px;white-space:nowrap;display:flex;align-items:center;gap:6px;font-family:var(--font)}
+    .hdr-btn:hover{background:var(--surface-2);color:var(--text)}
+
+    /* SIDEBAR */
+    #sidebar{grid-area:sidebar;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;z-index:20}
+    .sidebar-logo{height:var(--header-h);display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+    .sidebar-logo-icon{width:28px;height:28px;background:var(--accent-dim);border:1px solid rgba(79,142,247,0.3);border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .sidebar-logo-name{font-size:0.9375rem;font-weight:700;letter-spacing:-0.01em}
+    .sidebar-logo-name em{color:var(--accent);font-style:normal}
+    .sidebar-nav{padding:12px 8px;flex:1}
+    .nav-group-label{font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);padding:16px 12px 8px}
+    .nav-item{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:var(--r-md);cursor:pointer;color:var(--text-2);font-size:0.8125rem;font-weight:500;transition:background var(--dur-fast),color var(--dur-fast);user-select:none;min-height:44px;border:none;background:none;width:100%;text-align:left;font-family:var(--font)}
+    .nav-item:hover{background:var(--surface-2);color:var(--text)}
+    .nav-item.active{background:var(--accent-dim);color:var(--accent)}
+    .nav-item svg{flex-shrink:0;opacity:0.7;display:block;width:16px;height:16px}
+    .nav-item.active svg{opacity:1}
+    .sidebar-logo-icon svg{display:block;width:16px;height:16px}
+    .login-logo-icon svg{display:block;width:20px;height:20px}
+    .sidebar-footer{padding:12px 8px;border-top:1px solid var(--border);font-size:0.75rem;color:var(--text-3);text-align:center}
+
+    /* MAIN */
+    #main{grid-area:main;overflow-y:auto;background:var(--bg)}
+    .panel{display:none;padding:24px}
+    .panel.active{display:block}
+
+    /* PAGE HEADER */
+    .page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;gap:16px;flex-wrap:wrap}
+    .page-header h1{font-size:1.25rem;font-weight:700;letter-spacing:-0.02em}
+    .page-header p{font-size:0.8125rem;color:var(--text-2);margin-top:3px}
+
+    /* CARD */
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px;transition:border-color var(--dur-base)}
+    .card:hover{border-color:var(--border-2)}
+    .card-title{font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);margin-bottom:16px}
+
+    /* GRIDS */
+    .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+    .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+
+    /* STAT ROW */
+    .stat-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:16px}
+    .stat-row:last-child{border-bottom:none}
+    .stat-label{font-size:0.8125rem;color:var(--text-2)}
+    .stat-value{font-size:0.8125rem;font-weight:600;color:var(--text);text-align:right}
+
+    /* KPI */
+    .kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px}
+    .kpi-label{font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-3);margin-bottom:8px}
+    .kpi-value{font-size:1.5rem;font-weight:700;letter-spacing:-0.03em;color:var(--text);line-height:1.1}
+    .kpi-sub{font-size:0.75rem;color:var(--text-3);margin-top:4px}
+
+    /* BADGES */
+    .badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:var(--r-full);font-size:0.75rem;font-weight:600;white-space:nowrap}
+    .badge-green{background:var(--green-dim);color:var(--green)}
+    .badge-yellow{background:var(--yellow-dim);color:var(--yellow)}
+    .badge-red{background:var(--red-dim);color:var(--red)}
+    .badge-blue{background:var(--accent-dim);color:var(--accent)}
+    .badge-purple{background:var(--purple-dim);color:var(--purple)}
+
+    /* TABLES */
+    .table-wrap{overflow-x:auto;border-radius:var(--r-lg);border:1px solid var(--border)}
+    table{width:100%;border-collapse:collapse;font-size:0.8125rem}
+    thead tr{border-bottom:1px solid var(--border)}
+    th{padding:10px 16px;text-align:left;font-size:0.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-3);background:var(--surface);white-space:nowrap}
+    td{padding:11px 16px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+    tbody tr:last-child td{border-bottom:none}
+    tbody tr{background:var(--bg);transition:background var(--dur-fast)}
+    tbody tr:hover{background:var(--surface)}
+    .mono-cell{font-family:var(--mono);font-size:0.75rem;color:var(--text-2)}
+
+    /* BUTTONS */
+    .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:var(--r-md);font-size:0.8125rem;font-weight:600;cursor:pointer;transition:opacity var(--dur-fast),background var(--dur-fast);border:1px solid transparent;min-height:36px;white-space:nowrap;font-family:var(--font)}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-primary:hover{opacity:0.88}
+    .btn-secondary{background:var(--surface);border-color:var(--border-2);color:var(--text-2)}
+    .btn-secondary:hover{background:var(--surface-2);color:var(--text)}
+
+    /* TOOLBAR */
+    .toolbar{display:flex;align-items:flex-end;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+    .field-group{display:flex;flex-direction:column;gap:6px}
+    .field-group label{font-size:0.75rem;font-weight:500;color:var(--text-2)}
+    select,input[type=text],input[type=number]{background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r-md);color:var(--text);padding:7px 12px;font-size:0.8125rem;font-family:var(--font);min-height:36px;transition:border-color var(--dur-fast)}
+    select:focus,input[type=text]:focus,input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+
+    /* SKELETON */
+    .skeleton{background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:var(--r-sm);height:1em}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+    /* EMPTY STATE */
+    .empty-state{padding:48px 24px;text-align:center;color:var(--text-3)}
+    .empty-state svg{margin-bottom:12px;opacity:0.4}
+    .empty-state p{font-size:0.8125rem}
+
+    /* SECTION */
+    .section{margin-bottom:24px}
+    .section-title{font-size:0.9375rem;font-weight:600;color:var(--text);margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+
+    /* PAYOUT FORM */
+    #payout-form{display:none;background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--r-lg);padding:20px;margin-bottom:20px}
+    #payout-form.open{display:block}
+    #payout-form h3{font-size:0.9375rem;font-weight:600;margin-bottom:16px}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end}
+
+    /* CANVAS */
+    #topology-canvas{width:100%;height:520px;display:block;border-radius:var(--r-lg);background:var(--surface);border:1px solid var(--border)}
+    #income-chart{width:100%;height:180px;display:block}
+
+    /* ALERT */
+    .alert{padding:12px 16px;border-radius:var(--r-md);font-size:0.8125rem;border:1px solid;margin-bottom:16px}
+    .alert-error{background:var(--red-dim);border-color:rgba(240,84,79,0.25);color:var(--red)}
+    .alert-success{background:var(--green-dim);border-color:rgba(34,212,122,0.25);color:var(--green)}
+
+    /* STATUS BAR */
+    #status-bar{position:sticky;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:6px 20px;font-size:0.75rem;color:var(--text-3);display:flex;align-items:center;gap:20px}
+    #status-text{color:var(--text-2)}
+
+    /* WORKLOAD CARDS */
+    .wl-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:16px 20px;margin-bottom:12px;border-left:3px solid var(--border-2);transition:border-color var(--dur-fast)}
+    .wl-card.running{border-left-color:var(--green)}
+    .wl-card.failed{border-left-color:var(--red)}
+    .wl-card.pending{border-left-color:var(--yellow)}
+    .wl-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+    .wl-name{font-weight:600;font-size:0.9375rem}
+
+    /* RESPONSIVE */
+    @media(max-width:1100px){.grid-4{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:900px){
+      :root{--sidebar-w:60px}
+      .nav-item span{display:none}
+      .nav-group-label,.sidebar-logo-name,.sidebar-footer{display:none}
+      .grid-3{grid-template-columns:repeat(2,1fr)}
+    }
+    @media(max-width:640px){
+      :root{--sidebar-w:0px}
+      #app{grid-template-columns:0 1fr}
+      #sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;transform:translateX(-100%);transition:transform var(--dur-base);z-index:100}
+      #sidebar.open{transform:translateX(0);box-shadow:8px 0 32px rgba(0,0,0,0.5)}
+      #hamburger{display:flex}
+      .grid-4{grid-template-columns:1fr 1fr}
+      .grid-3,.grid-2{grid-template-columns:1fr}
+      .form-grid{grid-template-columns:1fr}
+      .panel{padding:16px}
+    }
+    @media(max-width:440px){.grid-4{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo" aria-hidden="true">
+      <div class="login-logo-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f8ef7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <span class="login-logo-name">Soho<span>LINK</span></span>
+    </div>
+    <h1>Node Dashboard</h1>
+    <p>Enter your 64-character owner private key to authenticate. This was printed to <code style="font-family:var(--mono);font-size:0.8em;color:var(--accent)">app.log</code> the first time your node started.</p>
+    <div class="login-field" style="margin-bottom:4px">
+      <label for="login-privkey">Owner Private Key</label>
+      <input id="login-privkey" type="password" placeholder="64-character hex seed" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" maxlength="64" aria-describedby="login-error">
+    </div>
+    <div id="login-error" role="alert" aria-live="polite"></div>
+    <button id="login-btn" type="button">Connect to Node</button>
+    <div class="login-hint">
+      <strong>Where is my key?</strong> Run in PowerShell:<br>
+      <code style="font-family:var(--mono);font-size:0.8em">Get-Content "$env:LOCALAPPDATA\SoHoLINK\data\app.log" | Select-String "PRIVATE KEY" -Context 3</code>
+    </div>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="app" class="hidden">
+
+  <nav id="sidebar" aria-label="Main navigation">
+    <div class="sidebar-logo" aria-hidden="true">
+      <div class="sidebar-logo-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4f8ef7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <span class="sidebar-logo-name">Soho<em>LINK</em></span>
+    </div>
+    <div class="sidebar-nav">
+      <div class="nav-group-label">Node</div>
+      <button class="nav-item active" data-panel="overview" title="Overview">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span>Overview</span>
+      </button>
+      <button class="nav-item" data-panel="management" title="Earnings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        <span>Earnings</span>
+      </button>
+      <button class="nav-item" data-panel="workloads" title="Workloads">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span>Workloads</span>
+      </button>
+      <div class="nav-group-label">Network</div>
+      <button class="nav-item" data-panel="peers" title="Peers">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Peers</span>
+      </button>
+      <button class="nav-item" data-panel="topology" title="Topology">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        <span>Topology</span>
+      </button>
+      <button class="nav-item" data-panel="marketplace" title="Marketplace">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+        <span>Marketplace</span>
+      </button>
+      <div class="nav-group-label">Trust</div>
+      <button class="nav-item" data-panel="compliance" title="Compliance">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Compliance</span>
+      </button>
+    </div>
+    <div class="sidebar-footer">SoHoLINK v1.0.0</div>
+  </nav>
+
+  <header id="header">
+    <button id="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div id="node-did-pill" title="Node DID">
+      <span class="label">DID</span><span id="header-did">—</span>
+    </div>
+    <div id="conn-status" aria-live="polite">
+      <div id="conn-dot" class="connecting"></div>
+      <span id="conn-label">Connecting...</span>
+    </div>
+    <button class="hdr-btn" id="refresh-btn" aria-label="Refresh current panel">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Refresh
+    </button>
+    <button class="hdr-btn" id="logout-btn">Log out</button>
+  </header>
+
+  <main id="main">
+
+    <section id="panel-overview" class="panel active">
+      <div class="page-header"><div><h1>Overview</h1><p>Node status and resource summary</p></div></div>
+      <div class="grid-4" id="overview-kpis" style="margin-bottom:20px"></div>
+      <div class="grid-2" id="overview-cards"></div>
+    </section>
+
+    <section id="panel-management" class="panel">
+      <div class="page-header">
+        <div><h1>Earnings</h1><p>Revenue, active rentals, and payouts</p></div>
+        <button class="btn btn-primary" id="payout-toggle-btn">+ Request Payout</button>
+      </div>
+      <div id="payout-form">
+        <h3>Request Payout</h3>
+        <div id="payout-alert"></div>
+        <div class="form-grid">
+          <div class="field-group"><label for="payout-amount">Amount (sats)</label><input type="number" id="payout-amount" placeholder="e.g. 10000" min="1"></div>
+          <div class="field-group"><label for="payout-processor">Processor</label><select id="payout-processor"><option value="stripe">Stripe</option><option value="lightning">Lightning</option><option value="barter">Barter</option></select></div>
+          <button class="btn btn-primary" id="payout-submit-btn" style="margin-bottom:0">Submit</button>
+        </div>
+      </div>
+      <div class="grid-3" id="earnings-kpis" style="margin-bottom:24px"></div>
+      <div class="section"><div class="section-title">30-Day Income</div><div class="card" style="padding:16px"><canvas id="income-chart"></canvas></div></div>
+      <div class="section"><div class="section-title">Active Rentals</div><div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Resource</th><th>Type</th><th>Amount</th><th>Since</th></tr></thead><tbody id="rentals-tbody"></tbody></table></div></div>
+      <div class="section"><div class="section-title">Payout History</div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Amount</th><th>Processor</th><th>Status</th><th>Requested</th></tr></thead><tbody id="payouts-tbody"></tbody></table></div></div>
+    </section>
+
+    <section id="panel-workloads" class="panel">
+      <div class="page-header"><div><h1>Workloads</h1><p>Active compute jobs</p></div></div>
+      <div id="workloads-list"></div>
+    </section>
+
+    <section id="panel-peers" class="panel">
+      <div class="page-header"><div><h1>Peers</h1><p>Connected federation nodes</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Node DID</th><th>Region</th><th>CPU</th><th>Memory</th><th>Distance</th><th>Status</th></tr></thead><tbody id="peers-tbody"></tbody></table></div>
+    </section>
+
+    <section id="panel-topology" class="panel">
+      <div class="page-header"><div><h1>Topology</h1><p>Live mesh network graph</p></div></div>
+      <canvas id="topology-canvas"></canvas>
+    </section>
+
+    <section id="panel-marketplace" class="panel">
+      <div class="page-header"><div><h1>Marketplace</h1><p>Available nodes for rent</p></div></div>
+      <div class="toolbar">
+        <div class="field-group"><label for="filter-compliance">Compliance</label><select id="filter-compliance"><option value="">All levels</option><option value="baseline">Baseline</option><option value="high-security">High Security</option><option value="data-residency">Data Residency</option><option value="gpu-tier">GPU Tier</option></select></div>
+        <div class="field-group"><label for="filter-sla">SLA</label><select id="filter-sla"><option value="">All tiers</option><option value="premium">Premium</option><option value="standard">Standard</option><option value="best-effort">Best Effort</option></select></div>
+        <button class="btn btn-secondary" id="market-filter-btn">Apply Filters</button>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Node DID</th><th>Region</th><th>CPU</th><th>Compliance</th><th>SLA</th><th>Price/hr</th><th>Rep</th><th></th></tr></thead><tbody id="marketplace-tbody"></tbody></table></div>
+    </section>
+
+    <section id="panel-compliance" class="panel">
+      <div class="page-header"><div><h1>Compliance</h1><p>Trust levels and group membership</p></div></div>
+      <div class="grid-auto" id="compliance-groups"></div>
+    </section>
+
+    <div id="status-bar" aria-live="polite">
+      <span id="status-text">Ready</span>
+      <span style="margin-left:auto"><a href="/tv" style="color:var(--accent);text-decoration:none">TV Agent</a></span>
+    </div>
+
+  </main>
+</div>
+
+<script src="app.js"></script>
+<script src="topology.js"></script>
+</body>
+</html>

@@ -114,6 +114,60 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_rental_audit_request ON rental_audit(request_id);
 	CREATE INDEX IF NOT EXISTS idx_rental_audit_user ON rental_audit(user_did, decided_at);`,
 
+	// v6: compliance framework — adds compliance level, group, SLA tier, and
+	// attestation fields to federation_nodes; adds compliance_audit log table.
+	`ALTER TABLE federation_nodes ADD COLUMN compliance_level TEXT NOT NULL DEFAULT 'baseline';
+	ALTER TABLE federation_nodes ADD COLUMN compliance_group TEXT;
+	ALTER TABLE federation_nodes ADD COLUMN sla_tier TEXT NOT NULL DEFAULT 'best-effort';
+	ALTER TABLE federation_nodes ADD COLUMN attestation_data TEXT;
+	ALTER TABLE federation_nodes ADD COLUMN last_compliance_check INTEGER;
+
+	CREATE TABLE IF NOT EXISTS compliance_audit (
+		audit_id    TEXT    PRIMARY KEY,
+		node_did    TEXT    NOT NULL,
+		check_time  INTEGER NOT NULL,
+		level       TEXT    NOT NULL DEFAULT 'baseline',
+		passed      INTEGER NOT NULL DEFAULT 0,
+		details     TEXT    NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS idx_compliance_audit_node ON compliance_audit(node_did, check_time);`,
+
+	// v7: FCM device token registry — stores Android FCM tokens so the server
+	// can send background wakeup pushes when a mobile node's WebSocket is
+	// disconnected and a task needs to be dispatched.
+	`CREATE TABLE IF NOT EXISTS device_fcm_tokens (
+		node_did   TEXT     PRIMARY KEY,
+		fcm_token  TEXT     NOT NULL,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);`,
+
+	// v8: TPM 2.0 attestation — adds hardware-bound attestation columns to
+	// federation_nodes and an append-only TPM attestation log table.
+	//
+	// tpm_ek_cert:     DER-encoded Endorsement Key certificate (base64).
+	// tpm_pcr_quote:   Last TPMS_ATTEST quote blob (base64).
+	// tpm_quote_sig:   TPM signature over the quote (base64).
+	// tpm_quote_nonce: Anti-replay nonce used for the last quote (base64).
+	// tpm_quote_ts:    Unix timestamp of the last TPM quote.
+	`ALTER TABLE federation_nodes ADD COLUMN tpm_ek_cert TEXT NOT NULL DEFAULT '';
+	ALTER TABLE federation_nodes ADD COLUMN tpm_pcr_quote TEXT NOT NULL DEFAULT '';
+	ALTER TABLE federation_nodes ADD COLUMN tpm_quote_sig TEXT NOT NULL DEFAULT '';
+	ALTER TABLE federation_nodes ADD COLUMN tpm_quote_nonce TEXT NOT NULL DEFAULT '';
+	ALTER TABLE federation_nodes ADD COLUMN tpm_quote_ts INTEGER NOT NULL DEFAULT 0;
+
+	CREATE TABLE IF NOT EXISTS tpm_attestations (
+		attestation_id  TEXT    PRIMARY KEY,
+		node_did        TEXT    NOT NULL,
+		level           TEXT    NOT NULL DEFAULT 'baseline',
+		tpm_ek_cert     TEXT    NOT NULL DEFAULT '',
+		tpm_pcr_quote   TEXT    NOT NULL DEFAULT '',
+		tpm_quote_sig   TEXT    NOT NULL DEFAULT '',
+		nonce           TEXT    NOT NULL DEFAULT '',
+		software_sig    TEXT    NOT NULL DEFAULT '',
+		attested_at     INTEGER NOT NULL DEFAULT 0,
+		verified        INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_tpm_attestations_node ON tpm_attestations(node_did, attested_at);`,
 }
 
 // runMigrations applies any unapplied migrations to the database.

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -17,7 +17,7 @@ func main() {
 	}
 	dbPath := filepath.Join(homeDir, "AppData", "Local", "SoHoLINK", "data", "soholink.db")
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		fmt.Printf("[!] Failed to open database: %v\n", err)
 		os.Exit(1)

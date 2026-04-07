@@ -39,6 +39,11 @@ type FedScheduler struct {
 	// Stored as the interface type to avoid an import cycle with httpapi.
 	mobileHub MobileHub
 
+	// fcmNotifier is set via SetFCMNotifier and used by ScheduleMobile when
+	// PushTask fails (node WebSocket is disconnected). Stored as an interface
+	// to avoid an import cycle with the notification package.
+	fcmNotifier mobileFCMSender
+
 	// mlBandit is the contextual bandit used by ScheduleMobile for node
 	// selection.  If nil, the scheduler falls back to random round-robin.
 	mlBandit *ml.LinUCBBandit
@@ -390,12 +395,27 @@ type MobileHub interface {
 	ActiveNodes() []MobileNodeInfo
 }
 
+// mobileFCMSender is the interface the scheduler uses to send FCM push
+// notifications to offline Android nodes. *notification.FCMNotifier satisfies
+// this interface. Defined here to avoid an import cycle.
+type mobileFCMSender interface {
+	SendJobRequest(ctx context.Context, fcmToken, taskID, workloadID string) error
+}
+
 // SetMobileHub wires the mobile WebSocket hub into the scheduler so that
 // ScheduleMobile can push task descriptors to connected mobile nodes.
 func (s *FedScheduler) SetMobileHub(hub MobileHub) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mobileHub = hub
+}
+
+// SetFCMNotifier wires an FCM notifier so the scheduler can wake disconnected
+// Android nodes via push notification when PushTask returns false.
+func (s *FedScheduler) SetFCMNotifier(n mobileFCMSender) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fcmNotifier = n
 }
 
 // SetMLBandit attaches a contextual bandit for node selection in ScheduleMobile.
@@ -441,6 +461,117 @@ func (s *FedScheduler) GetClusterManager() *ClusterManager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.clusterMgr
+}
+
+// RescheduleFailed finds all placements with status "failed" for the given
+// workload and replaces them on freshly-selected nodes. It is called by
+// WorkloadMonitor when it detects unhealthy or degraded workloads.
+func (s *FedScheduler) RescheduleFailed(ctx context.Context, workloadID string) error {
+	// Snapshot under read-lock: grab failed placements, currently-used nodes, and spec.
+	s.mu.RLock()
+	ws, ok := s.ActiveWorkloads[workloadID]
+	if !ok {
+		s.mu.RUnlock()
+		return nil // workload already removed
+	}
+	var failedPlacements []Placement
+	usedNodes := make(map[string]bool)
+	for _, p := range ws.Placements {
+		if p.Status == "running" {
+			usedNodes[p.NodeDID] = true
+		} else if p.Status == "failed" {
+			failedPlacements = append(failedPlacements, p)
+		}
+	}
+	spec := ws.Workload.Spec
+	constraints := ws.Workload.Constraints
+	s.mu.RUnlock()
+
+	if len(failedPlacements) == 0 {
+		return nil
+	}
+
+	log.Printf("[orchestration] rescheduling %d failed placement(s) for workload %s",
+		len(failedPlacements), workloadID)
+
+	// Find replacement candidates outside any lock.
+	candidates, err := s.discovery.FindNodes(ctx, NodeQuery{
+		MinCPU:         spec.CPUCores,
+		MinMemory:      spec.MemoryMB,
+		MinDisk:        spec.DiskGB,
+		GPURequired:    spec.GPURequired,
+		GPUModel:       spec.GPUModel,
+		Regions:        constraints.Regions,
+		MinReputation:  constraints.MinProviderScore,
+		MaxCostPerHour: constraints.MaxCostPerHour,
+	})
+	if err != nil || len(candidates) == 0 {
+		return fmt.Errorf("no nodes available to replace failed placements for %s", workloadID)
+	}
+
+	scores := s.placer.ScoreNodes(candidates, ws.Workload)
+	sort.Slice(candidates, func(i, j int) bool {
+		return scores[candidates[i].DID] > scores[candidates[j].DID]
+	})
+
+	// Pair each failed placement with a replacement node (prefer unused nodes).
+	replacements := make([]Placement, 0, len(failedPlacements))
+	for _, failed := range failedPlacements {
+		var chosen *Node
+		for _, c := range candidates {
+			if !usedNodes[c.DID] {
+				chosen = c
+				break
+			}
+		}
+		if chosen == nil {
+			chosen = candidates[0] // all nodes in use; pick best
+		}
+		replacements = append(replacements, Placement{
+			PlacementID: fmt.Sprintf("pl_%s_%d_%d", workloadID, failed.ReplicaNum, time.Now().UnixNano()),
+			WorkloadID:  workloadID,
+			ReplicaNum:  failed.ReplicaNum,
+			NodeDID:     chosen.DID,
+			NodeAddress: chosen.Address,
+			Status:      "running",
+			StartedAt:   time.Now(),
+		})
+		usedNodes[chosen.DID] = true
+	}
+
+	// Apply replacements under write-lock: swap failed entries in-place.
+	s.mu.Lock()
+	ws, ok = s.ActiveWorkloads[workloadID]
+	if !ok {
+		s.mu.Unlock()
+		return nil // workload removed while we were finding candidates
+	}
+	ri := 0
+	for i := range ws.Placements {
+		if ws.Placements[i].Status == "failed" && ri < len(replacements) {
+			ws.Placements[i] = replacements[ri]
+			ri++
+		}
+	}
+	ws.Health = HealthStatus{Status: "recovering"}
+	s.mu.Unlock()
+
+	// Persist new placements and reserve capacity.
+	for _, p := range replacements {
+		_ = s.store.CreatePlacement(ctx, &store.PlacementRow{
+			PlacementID: p.PlacementID,
+			WorkloadID:  p.WorkloadID,
+			ReplicaNum:  p.ReplicaNum,
+			NodeDID:     p.NodeDID,
+			NodeAddress: p.NodeAddress,
+			Status:      p.Status,
+			StartedAt:   p.StartedAt,
+		})
+		s.reserveCapacity(p.NodeDID, spec)
+	}
+
+	log.Printf("[orchestration] workload %s: %d replacement placement(s) created", workloadID, len(replacements))
+	return nil
 }
 
 // GetMeshGossiper returns the mesh gossiper (for API access).
@@ -765,7 +896,20 @@ func (s *FedScheduler) ScheduleMobile(ctx context.Context, w *Workload, class No
 	}
 
 	if !hub.PushTask(target.NodeDID, taskDesc) {
-		log.Printf("[orchestration] ScheduleMobile: PushTask failed for %s, falling back", target.NodeDID)
+		log.Printf("[orchestration] ScheduleMobile: PushTask failed for %s, trying FCM wakeup", target.NodeDID)
+		// Try FCM push to wake the offline Android node before falling back.
+		s.mu.RLock()
+		fcm := s.fcmNotifier
+		s.mu.RUnlock()
+		if fcm != nil {
+			if tok, err := s.store.GetFCMToken(ctx, target.NodeDID); err == nil && tok != "" {
+				if fcmErr := fcm.SendJobRequest(ctx, tok, taskDesc.TaskID, w.WorkloadID); fcmErr != nil {
+					log.Printf("[orchestration] ScheduleMobile: FCM wakeup error for %s: %v", target.NodeDID, fcmErr)
+				} else {
+					log.Printf("[orchestration] ScheduleMobile: FCM wakeup sent to %s", target.NodeDID)
+				}
+			}
+		}
 		// Treat push failure as an error outcome for bandit learning.
 		if bandit != nil {
 			banditCtx := BuildContext(MobileNodeInfo{}, provisionalTask, sysState)

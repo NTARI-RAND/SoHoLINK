@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.soholink.pfhelper — SoHoLINK pf(4) privilege helper
+  =========================================================
+  Install:
+    sudo cp /path/to/soholink-pfhelper /usr/local/bin/
+    sudo chmod 755 /usr/local/bin/soholink-pfhelper
+    sudo cp com.soholink.pfhelper.plist /Library/LaunchDaemons/
+    sudo launchctl load -w /Library/LaunchDaemons/com.soholink.pfhelper.plist
+
+  Uninstall:
+    sudo launchctl unload /Library/LaunchDaemons/com.soholink.pfhelper.plist
+    sudo rm /Library/LaunchDaemons/com.soholink.pfhelper.plist
+    sudo rm /usr/local/bin/soholink-pfhelper
+-->
+<plist version="1.0">
+<dict>
+
+  <!-- Unique reverse-DNS label required by launchd -->
+  <key>Label</key>
+  <string>com.soholink.pfhelper</string>
+
+  <!-- Absolute path to the privilege helper binary -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/soholink-pfhelper</string>
+  </array>
+
+  <!-- Must run as root to call pfctl -->
+  <key>UserName</key>
+  <string>root</string>
+
+  <!-- Start immediately when loaded and restart on crash -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Throttle rapid restart loops (seconds between restart attempts) -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- Log output; launchd rotates these automatically -->
+  <key>StandardOutPath</key>
+  <string>/var/log/soholink-pfhelper.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/soholink-pfhelper.log</string>
+
+</dict>
+</plist>

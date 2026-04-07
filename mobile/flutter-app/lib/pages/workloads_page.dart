@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../api/soholink_client.dart';
+import '../models/task.dart';
 import '../models/workload.dart';
+import '../services/websocket_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/section_header.dart';
 import 'home_page.dart';
@@ -20,20 +24,35 @@ class _WorkloadsPageState extends State<WorkloadsPage> {
   bool               _loading = true;
   String?            _error;
 
+  // Incoming tasks pushed via WebSocket.
+  final List<MobileTaskDescriptor> _pushedTasks = [];
+  StreamSubscription<MobileTaskDescriptor>? _taskSub;
+
   @override
   void initState() {
     super.initState();
     _fetch();
     refreshNotifier.addListener(_onRefresh);
+    _taskSub = WebSocketService.instance.taskStream.listen(_onIncomingTask);
   }
 
   @override
   void dispose() {
     refreshNotifier.removeListener(_onRefresh);
+    _taskSub?.cancel();
     super.dispose();
   }
 
   void _onRefresh() => _fetch();
+
+  void _onIncomingTask(MobileTaskDescriptor task) {
+    if (!mounted) return;
+    setState(() => _pushedTasks.insert(0, task));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Task received: ${task.taskId.length > 12 ? task.taskId.substring(0, 12) : task.taskId}…'),
+      duration: const Duration(seconds: 3),
+    ));
+  }
 
   Future<void> _fetch() async {
     if (!mounted) return;

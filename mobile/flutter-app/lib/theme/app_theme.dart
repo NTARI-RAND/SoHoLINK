@@ -166,4 +166,26 @@ class AppTheme {
       ),
     );
   }
+
+  /// TV theme — identical colour scheme to [dark] but with all text sizes
+  /// scaled 1.5× and icons enlarged for comfortable viewing at 3 metres.
+  static ThemeData get tv {
+    final base = dark;
+    return base.copyWith(
+      textTheme: base.textTheme.copyWith(
+        displayLarge: base.textTheme.displayLarge?.copyWith(fontSize: 48),
+        displayMedium: base.textTheme.displayMedium?.copyWith(fontSize: 36),
+        titleLarge: base.textTheme.titleLarge?.copyWith(fontSize: 30),
+        titleMedium: base.textTheme.titleMedium?.copyWith(fontSize: 24),
+        bodyLarge: base.textTheme.bodyLarge?.copyWith(fontSize: 21),
+        bodyMedium: base.textTheme.bodyMedium?.copyWith(fontSize: 19),
+        labelLarge: base.textTheme.labelLarge?.copyWith(fontSize: 19),
+        labelSmall: base.textTheme.labelSmall?.copyWith(fontSize: 16),
+      ),
+      iconTheme: const IconThemeData(color: SLColors.cyan, size: 36),
+      cardTheme: base.cardTheme.copyWith(
+        margin: const EdgeInsets.all(12),
+      ),
+    );
+  }
 }

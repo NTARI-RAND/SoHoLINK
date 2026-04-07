@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -19,10 +21,17 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestration"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/p2p"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/tpm"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/services"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// uiFiles contains the embedded SPA assets (ui/index.html, ui/app.js, ui/topology.js).
+// Served at "/" so the browser-based mesh navigator is available without a separate build step.
+
+//go:embed ui
+var uiFiles embed.FS
 
 const (
 	// maxConnections caps the number of concurrent TCP connections accepted
@@ -110,6 +119,12 @@ type Server struct {
 	hashChecker    *moderation.CSAMHashChecker // optional — nil = no hash blocking
 	blocklist      *moderation.DIDBlocklist    // optional — nil = no DID blocking
 	safetyPolicy   *moderation.SafetyPolicy    // optional — nil = no OPA policy check
+	// Compliance framework (Phase 2)
+	complianceMgr  complianceManager           // optional — nil = no compliance endpoints
+	// TPM attestation (Phase 3)
+	tpmAttester    tpm.Attester                // optional — nil = TPM endpoints return 503
+	// FCM notifier for Android background wakeup (optional)
+	fcmNotifier    fcmSender
 	listenAddr     string
 	server         *http.Server
 	workloadSem    chan struct{}        // S1-3: limits concurrent workload submissions (T-003)
@@ -187,6 +202,39 @@ func (s *Server) SetSafetyPolicy(sp *moderation.SafetyPolicy) {
 	s.safetyPolicy = sp
 }
 
+// complianceManager is the interface the Server uses to interact with the
+// compliance package. *compliance.Manager satisfies this interface.
+type complianceManager interface {
+	GetGroupMembers(ctx context.Context, group string) ([]string, error)
+	CheckAndAttestRaw(ctx context.Context, nodeDID string) (string, string, []string, bool, error)
+	CheckAndAttestTPMRaw(ctx context.Context, nodeDID string, attester tpm.Attester, nonce []byte) (string, string, []string, bool, interface{}, error)
+}
+
+// SetComplianceManager attaches the compliance manager.
+// When set, /api/compliance/* endpoints become available.
+func (s *Server) SetComplianceManager(cm complianceManager) {
+	s.complianceMgr = cm
+}
+
+// SetTPMAttester attaches the TPM attester.
+// When set, /api/compliance/tpm-attest/* and /api/compliance/tpm-verify/*
+// endpoints become available.
+func (s *Server) SetTPMAttester(a tpm.Attester) {
+	s.tpmAttester = a
+}
+
+// fcmSender is the interface the Server uses to send FCM push notifications.
+// *notification.FCMNotifier satisfies this interface.
+type fcmSender interface {
+	SendJobRequest(ctx context.Context, fcmToken, taskID, workloadID string) error
+}
+
+// SetFCMNotifier attaches the FCM notifier for Android background wakeup pushes.
+// When set, POST /api/v1/nodes/mobile/fcm-token stores tokens used by the scheduler.
+func (s *Server) SetFCMNotifier(n fcmSender) {
+	s.fcmNotifier = n
+}
+
 // SetTLSConfig sets the TLS certificate and key paths.
 // When both are non-empty, Start() uses ListenAndServeTLS instead of ListenAndServe.
 func (s *Server) SetTLSConfig(certFile, keyFile string) {
@@ -232,6 +280,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.handleAuthChallenge(w, r)
 	})
 	mux.HandleFunc("/api/auth/connect", s.handleAuthConnect)
+	mux.HandleFunc("/api/auth/owner-login", s.handleOwnerLogin)
 
 	// Stripe webhook — public (verified by Stripe-Signature, not device token)
 	mux.HandleFunc("/api/webhooks/stripe", s.handleStripeWebhook)
@@ -307,6 +356,19 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/ws/nodes", s.handleMobileWS)
 	mux.HandleFunc("/api/v1/nodes/mobile/register", s.handleMobileRegister)
 	mux.HandleFunc("/api/v1/nodes/mobile", s.handleListMobileNodes)
+	// FCM device token registry — rate-limited to 10/min per IP.
+	mux.HandleFunc("/api/v1/nodes/mobile/fcm-token", func(w http.ResponseWriter, r *http.Request) {
+		if !s.rateLimiter.Allow(r, 10) {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			return
+		}
+		s.handleFCMTokenRegister(w, r)
+	})
+
+	// Tizen / webOS TV web agent — self-contained single-page agent.
+	mux.HandleFunc("/tv", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, uiFiles, "ui/tv-agent.html")
+	})
 
 	// P2P LAN peer discovery (v0.2.0)
 	mux.HandleFunc("/api/peers", s.handlePeers)
@@ -336,6 +398,23 @@ func (s *Server) Start(ctx context.Context) error {
 	// Prometheus metrics — public, no auth required.
 	// GET /metrics returns the default Prometheus registry in text exposition format.
 	mux.Handle("/metrics", promhttp.Handler())
+
+	// Compliance endpoints (Phase 2)
+	mux.HandleFunc("/api/compliance/groups", s.handleComplianceGroups)
+	mux.HandleFunc("/api/compliance/nodes/", s.handleComplianceNode)
+	mux.HandleFunc("/api/compliance/attest/", s.handleComplianceAttest)
+	mux.HandleFunc("/api/compliance/tpm-attest/", s.handleTPMAttest)
+	mux.HandleFunc("/api/compliance/tpm-verify/", s.handleTPMVerify)
+	mux.HandleFunc("/api/peers/", s.handlePeerDashboard) // /api/peers/{did}/dashboard
+
+	// Browser-based mesh navigator SPA — served at "/" (catch-all, lowest priority).
+	// All /api/ routes registered above take precedence.
+	uiSub, err := fs.Sub(uiFiles, "ui")
+	if err == nil {
+		mux.Handle("/", http.FileServer(http.FS(uiSub)))
+	} else {
+		log.Printf("[server] WARNING: failed to serve SPA assets: %v", err)
+	}
 
 	// Content safety admin + federation blocklist pull (Item 1 & 2)
 	s.setupAdminRoutes(mux)
@@ -1122,6 +1201,38 @@ func (s *Server) handleMobileRegister(w http.ResponseWriter, r *http.Request) {
 
 // handleListMobileNodes handles GET /api/v1/nodes/mobile.
 // Returns the list of currently connected mobile nodes from the hub.
+// handleFCMTokenRegister handles POST /api/v1/nodes/mobile/fcm-token.
+// Stores or updates the FCM device token for a mobile node so the scheduler
+// can wake it up via push notification when its WebSocket is disconnected.
+func (s *Server) handleFCMTokenRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		NodeDID  string `json:"node_did"`
+		FCMToken string `json:"fcm_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.NodeDID == "" || req.FCMToken == "" {
+		http.Error(w, "Missing node_did or fcm_token", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.UpsertFCMToken(r.Context(), req.NodeDID, req.FCMToken); err != nil {
+		log.Printf("[httpapi] FCM token upsert error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleListMobileNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

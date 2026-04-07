@@ -138,3 +138,39 @@ func (p *SafetyPolicy) Allow(ctx context.Context, manifest WorkloadManifest, cid
 
 	return allowed, denyReasons, nil
 }
+
+// CheckEgress evaluates whether a workload is permitted to make outbound
+// connections to destIP. Returns (allowed bool, error).
+//
+// This is called at workload start time to build the static iptables OUTPUT
+// ACCEPT list — destinations not in the allowed list are blocked by the
+// default-deny OUTPUT DROP rule applied by the WorkloadExecutor.
+//
+// A destination is denied when deny_private_network is true for that IP
+// (RFC 1918, loopback, link-local, or IPv6 ULA space).
+func (p *SafetyPolicy) CheckEgress(ctx context.Context, destIP string) (bool, error) {
+	if !p.enabled {
+		return true, nil
+	}
+
+	input := map[string]interface{}{
+		"manifest": map[string]interface{}{
+			"external_endpoints": []string{destIP},
+			"network_access":     "declared_only",
+		},
+	}
+
+	results, err := p.egressQuery.Eval(ctx, rego.EvalInput(input))
+	if err != nil {
+		return false, fmt.Errorf("egress policy eval: %w", err)
+	}
+
+	if len(results) > 0 && len(results[0].Expressions) > 0 {
+		if denied, ok := results[0].Expressions[0].Value.(bool); ok && denied {
+			log.Printf("[moderation/policy] egress to %s DENIED by network_egress policy", destIP)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}

@@ -905,6 +905,42 @@ func (s *Store) GetDailyRevenueLast30Days(ctx context.Context) ([]DailyRevenueRo
 	return result, rows.Err()
 }
 
+// GetPayoutsByStatus returns pending/processing payouts across all providers,
+// used by the PayoutSettler to retry failed dispatches.
+func (s *Store) GetPayoutsByStatus(ctx context.Context, status string, limit int) ([]PayoutRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT payout_id, provider_did, amount_sats, processor,
+		       status, external_id, error_msg, requested_at, settled_at
+		  FROM payouts
+		 WHERE status = ?
+		 ORDER BY requested_at ASC LIMIT ?`, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []PayoutRow
+	for rows.Next() {
+		var p PayoutRow
+		var settledAt sql.NullTime
+		if err := rows.Scan(
+			&p.PayoutID, &p.ProviderDID, &p.AmountSats, &p.Processor,
+			&p.Status, &p.ExternalID, &p.ErrorMsg, &p.RequestedAt, &settledAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan payout row: %w", err)
+		}
+		if settledAt.Valid {
+			t := settledAt.Time
+			p.SettledAt = &t
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
 // GetRecentAlerts returns the most recent rating alerts.
 func (s *Store) GetRecentAlerts(ctx context.Context, limit int) ([]AlertRow, error) {
 	rows, err := s.db.QueryContext(ctx,

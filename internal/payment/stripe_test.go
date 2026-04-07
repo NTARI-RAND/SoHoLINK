@@ -187,11 +187,16 @@ func TestStripeProcessor_CreateCharge(t *testing.T) {
 				return
 			}
 
-			// For tests with mock server, we can't easily override the base URL
-			// without modifying the implementation. Skip the actual API call test.
-			// This is a limitation of testing direct HTTP clients.
-			// In production, you'd inject the base URL as a field.
-			t.Skip("Skipping actual HTTP call test - would need base URL injection")
+			// Inject the mock server URL so the request hits our test handler.
+			p.baseURL = server.URL
+			result, err := p.CreateCharge(context.Background(), tt.request)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CreateCharge() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && result != nil && result.Status != tt.wantStatus {
+				t.Errorf("CreateCharge() status = %q, want %q", result.Status, tt.wantStatus)
+			}
 		})
 	}
 }

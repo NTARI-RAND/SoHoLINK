@@ -15,6 +15,16 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- FCM background wakeup -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
+    <!-- POST_NOTIFICATIONS required on Android 13+ for visible notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- TV hardware declarations: touchscreen is optional, leanback is supported -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
     <application
         android:label="SoHoLINK"
         android:name="${applicationName}"
@@ -49,7 +59,33 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Android TV / Fire TV launcher -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+
+            <!-- Amazon Fire TV launcher -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="amazon.intent.category.AMAZON_TV_LAUNCHER" />
+            </intent-filter>
         </activity>
+
+        <!-- FCM message receiver service -->
+        <service
+            android:name="com.google.firebase.messaging.FirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Fire TV launcher banner (320×180 px) -->
+        <meta-data
+            android:name="amazon.image.banner"
+            android:resource="@drawable/banner" />
 
         <!-- Don't delete the meta-data below. Flutter needs it. -->
         <meta-data

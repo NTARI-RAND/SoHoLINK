@@ -79,6 +79,11 @@ type Node struct {
 	// Status
 	Status        string // "online", "busy", "offline"
 	LastHeartbeat time.Time
+
+	// Compliance (Phase 2)
+	ComplianceLevel string // "baseline", "high-security", "data-residency", "gpu-tier"
+	ComplianceGroup string // e.g. "US-East-Secure", "EU-GDPR"
+	SLATier         string // "best-effort", "standard", "premium"
 }
 
 // NodeQuery describes filter criteria for node discovery.
@@ -93,6 +98,10 @@ type NodeQuery struct {
 	Regions              []string
 	MinReputation        int
 	MaxCostPerHour       int64
+
+	// Compliance filters (Phase 2)
+	ComplianceGroup string // filter to nodes in a specific compliance group
+	SLATier         string // filter to nodes with a minimum SLA tier
 }
 
 // NodeCapacity is a snapshot of a node's available resources.

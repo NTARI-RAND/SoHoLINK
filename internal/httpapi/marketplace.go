@@ -35,6 +35,22 @@ const (
 	platformFeePct      = 0.01       // 1 % platform fee
 )
 
+// compliancePriceMultiplier maps compliance levels to price multipliers.
+// Nodes in higher-trust groups command a premium for guaranteed security standards.
+var compliancePriceMultiplier = map[string]float64{
+	"baseline":       1.00,
+	"high-security":  1.15,
+	"data-residency": 1.25,
+	"gpu-tier":       1.30,
+}
+
+// slaTierOrder maps SLA tier names to an ordinal for comparison.
+var slaTierOrder = map[string]int{
+	"best-effort": 0,
+	"standard":    1,
+	"premium":     2,
+}
+
 // ---------------------------------------------------------------------------
 // Node browsing
 // ---------------------------------------------------------------------------
@@ -75,6 +91,12 @@ func (s *Server) handleMarketplaceNodes(w http.ResponseWriter, r *http.Request) 
 			q.MinReputation = n
 		}
 	}
+	if v := r.URL.Query().Get("compliance_group"); v != "" {
+		q.ComplianceGroup = v
+	}
+	if v := r.URL.Query().Get("sla_tier"); v != "" {
+		q.SLATier = v
+	}
 
 	nodes, err := s.scheduler.FindNodes(r.Context(), q)
 	if err != nil {
@@ -100,10 +122,27 @@ func (s *Server) handleMarketplaceNodes(w http.ResponseWriter, r *http.Request) 
 		ReputationScore      int     `json:"reputation_score"`
 		UptimePct            float64 `json:"uptime_pct"`
 		Status               string  `json:"status"`
+		ComplianceLevel      string  `json:"compliance_level"`
+		ComplianceGroup      string  `json:"compliance_group"`
+		SLATier              string  `json:"sla_tier"`
+		PriceMultiplier      float64 `json:"price_multiplier"`
 	}
 
 	views := make([]nodeView, 0, len(nodes))
 	for _, n := range nodes {
+		// Apply compliance group filter (client-side, since scheduler may not have compliance data)
+		if q.ComplianceGroup != "" && n.ComplianceGroup != q.ComplianceGroup {
+			continue
+		}
+		if q.SLATier != "" {
+			if slaTierOrder[n.SLATier] < slaTierOrder[q.SLATier] {
+				continue
+			}
+		}
+		multiplier := compliancePriceMultiplier[n.ComplianceLevel]
+		if multiplier == 0 {
+			multiplier = 1.0
+		}
 		views = append(views, nodeView{
 			NodeDID:             n.DID,
 			Address:             n.Address,
@@ -113,10 +152,14 @@ func (s *Server) handleMarketplaceNodes(w http.ResponseWriter, r *http.Request) 
 			AvailableDiskGB:     n.AvailableDiskGB,
 			HasGPU:              n.HasGPU,
 			GPUModel:            getGPUModel(n),
-			PricePerCPUHourSats: n.PricePerCPUHour,
+			PricePerCPUHourSats: int64(float64(n.PricePerCPUHour) * multiplier),
 			ReputationScore:     n.ReputationScore,
 			UptimePct:           n.UptimePercent,
 			Status:              n.Status,
+			ComplianceLevel:     n.ComplianceLevel,
+			ComplianceGroup:     n.ComplianceGroup,
+			SLATier:             n.SLATier,
+			PriceMultiplier:     multiplier,
 		})
 	}
 
@@ -133,10 +176,11 @@ func (s *Server) handleMarketplaceNodes(w http.ResponseWriter, r *http.Request) 
 
 // estimateRequest is the JSON body for POST /api/marketplace/estimate.
 type estimateRequest struct {
-	CPUCores      float64 `json:"cpu_cores"`
-	MemoryMB      int64   `json:"memory_mb"`
-	DiskGB        int64   `json:"disk_gb"`
-	DurationHours int     `json:"duration_hours"`
+	CPUCores        float64 `json:"cpu_cores"`
+	MemoryMB        int64   `json:"memory_mb"`
+	DiskGB          int64   `json:"disk_gb"`
+	DurationHours   int     `json:"duration_hours"`
+	ComplianceLevel string  `json:"compliance_level,omitempty"` // optional; affects price multiplier
 }
 
 // estimateResult is the JSON response from the estimate endpoint.
@@ -177,10 +221,15 @@ func (s *Server) handleMarketplaceEstimate(w http.ResponseWriter, r *http.Reques
 }
 
 // computeEstimate applies platform pricing rules to produce a cost breakdown.
+// If req.ComplianceLevel is set, the compliance price multiplier is applied.
 func computeEstimate(req estimateRequest) estimateResult {
-	cpuCost := int64(req.CPUCores*float64(defaultCPUHourSats)) * int64(req.DurationHours)
-	memCost := (req.MemoryMB / 1024) * defaultMemHourSats * int64(req.DurationHours)
-	diskCost := req.DiskGB * defaultDiskHourSats * int64(req.DurationHours)
+	multiplier := compliancePriceMultiplier[req.ComplianceLevel]
+	if multiplier == 0 {
+		multiplier = 1.0
+	}
+	cpuCost := int64(float64(int64(req.CPUCores*float64(defaultCPUHourSats))*int64(req.DurationHours)) * multiplier)
+	memCost := int64(float64((req.MemoryMB/1024)*defaultMemHourSats*int64(req.DurationHours)) * multiplier)
+	diskCost := int64(float64(req.DiskGB*defaultDiskHourSats*int64(req.DurationHours)) * multiplier)
 	subtotal := cpuCost + memCost + diskCost
 	fee := int64(float64(subtotal) * platformFeePct)
 	total := subtotal + fee

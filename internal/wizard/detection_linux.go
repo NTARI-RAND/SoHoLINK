@@ -239,14 +239,14 @@ func MeasurePowerDraw() (idle, load float64, err error) {
 			return 0, 0, err
 		}
 
-		energy1, err := strconv.ParseUint(strings.TrimSpace(string(data1)), 10, 64)
-		if err != nil {
+		// Validate the counter is readable before returning the "needs sampling" error.
+		if _, err := strconv.ParseUint(strings.TrimSpace(string(data1)), 10, 64); err != nil {
 			return 0, 0, err
 		}
 
-		// This is a snapshot, not continuous measurement
-		// We'd need to sample over time
-		// For now, return error to use estimation
+		// RAPL gives a one-shot counter; meaningful power draw requires two
+		// readings separated by a time interval. Return an error so the caller
+		// falls back to the estimation path.
 		return 0, 0, fmt.Errorf("RAPL requires continuous sampling")
 	}
 
