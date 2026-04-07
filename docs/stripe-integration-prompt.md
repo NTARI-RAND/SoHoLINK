@@ -7,63 +7,72 @@
 - **Seller account management:** Express Dashboard (Stripe-hosted)
 - **Seller onboarding:** Stripe-hosted onboarding
 
-## Connected Account Creation (V2 API)
-Use the V2 API. Never pass `type` at the top level.
+## Connected Account Creation
+> **Note:** `V2CoreAccountCreateParams` and related V2 account types do not exist in
+> `stripe-go/v82` (v82.5.1). The V2 namespace in this SDK version covers only billing
+> meter events and core event destinations. Use the V1 account API instead.
+
+Create an Express account with application-collected fees/losses and manual payouts:
 ```go
-params := &stripe.V2CoreAccountCreateParams{
-    DisplayName:  stripe.String(displayName),
-    ContactEmail: stripe.String(email),
-    Identity: &stripe.V2CoreAccountCreateIdentityParams{
-        Country: stripe.String("us"),
+params := &stripe.AccountCreateParams{
+    Type:  stripe.String("express"),
+    Email: stripe.String(email),
+    BusinessProfile: &stripe.AccountCreateBusinessProfileParams{
+        Name: stripe.String(displayName),
     },
-    Dashboard: stripe.String("express"),
-    Defaults: &stripe.V2CoreAccountCreateDefaultsParams{
-        Responsibilities: &stripe.V2CoreAccountCreateDefaultsResponsibilitiesParams{
-            FeesCollector:   stripe.String("application"),
-            LossesCollector: stripe.String("application"),
+    Capabilities: &stripe.AccountCreateCapabilitiesParams{
+        Transfers: &stripe.AccountCreateCapabilitiesTransfersParams{
+            Requested: stripe.Bool(true),
         },
     },
-    Configuration: &stripe.V2CoreAccountCreateConfigurationParams{
-        Recipient: &stripe.V2CoreAccountCreateConfigurationRecipientParams{
-            Capabilities: &stripe.V2CoreAccountCreateConfigurationRecipientCapabilitiesParams{
-                StripeBalance: &stripe.V2CoreAccountCreateConfigurationRecipientCapabilitiesStripeBalanceParams{
-                    StripeTransfers: &stripe.V2CoreAccountCreateConfigurationRecipientCapabilitiesStripeBalanceStripeTransfersParams{
-                        Requested: stripe.Bool(true),
-                    },
-                },
+    Controller: &stripe.AccountCreateControllerParams{
+        Fees: &stripe.AccountCreateControllerFeesParams{
+            Payer: stripe.String("application"),
+        },
+        Losses: &stripe.AccountCreateControllerLossesParams{
+            Payments: stripe.String("application"),
+        },
+        StripeDashboard: &stripe.AccountCreateControllerStripeDashboardParams{
+            Type: stripe.String("express"),
+        },
+    },
+    Settings: &stripe.AccountCreateSettingsParams{
+        Payouts: &stripe.AccountCreateSettingsPayoutsParams{
+            Schedule: &stripe.AccountCreateSettingsPayoutsScheduleParams{
+                Interval: stripe.String("manual"),
             },
         },
     },
 }
+acct, err := client.V1Accounts.Create(ctx, params)
 ```
 
-## Onboarding Links (V2 API)
+The `Settings.Payouts.Schedule.Interval = "manual"` replaces the separate post-creation
+update step — manual payouts are configured at account creation time.
+
+## Onboarding Links
 ```go
-params := &stripe.V2CoreAccountLinkCreateParams{
-    Account: stripe.String(accountID),
-    UseCase: &stripe.V2CoreAccountLinkCreateUseCaseParams{
-        Type: stripe.String("account_onboarding"),
-        AccountOnboarding: &stripe.V2CoreAccountLinkCreateUseCaseAccountOnboardingParams{
-            Configurations: []*string{stripe.String("recipient")},
-            RefreshURL:     stripe.String(refreshURL),
-            ReturnURL:      stripe.String(returnURL),
-        },
-    },
+params := &stripe.AccountLinkCreateParams{
+    Account:    stripe.String(accountID),
+    RefreshURL: stripe.String(refreshURL),
+    ReturnURL:  stripe.String(returnURL),
+    Type:       stripe.String("account_onboarding"),
 }
+link, err := client.V1AccountLinks.Create(ctx, params)
+// link.URL is the Stripe-hosted onboarding URL
 ```
 
-## Onboarding Status Check (V2 API)
+## Onboarding Status Check
 ```go
-account, err := client.V2CoreAccounts.Retrieve(accountID, &stripe.V2CoreAccountRetrieveParams{
-    Include: []*string{
-        stripe.String("configuration.recipient"),
-        stripe.String("requirements"),
-    },
-})
+params := &stripe.AccountRetrieveParams{}
+params.AddExpand("capabilities")
+acct, err := client.V1Accounts.GetByID(ctx, accountID, params)
 
-readyToReceivePayments := account.Configuration.Recipient.Capabilities.StripeBalance.StripeTransfers.Status == "active"
-requirementsStatus := account.Requirements.Summary.MinimumDeadline.Status
-onboardingComplete := requirementsStatus != "currently_due" && requirementsStatus != "past_due"
+transfersActive := acct.Capabilities != nil &&
+    acct.Capabilities.Transfers == stripe.AccountCapabilityStatusActive
+requirementsPending := len(acct.Requirements.CurrentlyDue) > 0 ||
+    len(acct.Requirements.PastDue) > 0
+readyToReceivePayments := transfersActive && !requirementsPending
 ```
 
 ## Charges — Destination Charge with Application Fee
