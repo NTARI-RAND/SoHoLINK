@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS resource_profiles;
+DROP TABLE IF EXISTS nodes;
+DROP TABLE IF EXISTS consumers;
+DROP TABLE IF EXISTS providers;
+DROP TYPE IF EXISTS job_status;
+DROP TYPE IF EXISTS workload_type;
+DROP TYPE IF EXISTS node_status;
+DROP TYPE IF EXISTS node_class;
