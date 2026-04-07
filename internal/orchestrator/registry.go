@@ -76,14 +76,14 @@ func (r *NodeRegistry) Evict(nodeID string) {
 	delete(r.nodes, nodeID)
 }
 
-// FindMatch returns the first matching node that satisfies req.
-// Go map iteration is intentionally random, so selection order is
-// non-deterministic. Phase 1 Step 4 (Scheduler) will replace this with
-// scored selection based on price and reputation.
+// FindMatch returns all online nodes that satisfy req.
+// Go map iteration is intentionally random, so candidate order is
+// non-deterministic. Phase 1 Step 4 (Scheduler) scores and ranks this list.
 // CountryConstraint is a hard requirement when non-empty.
-func (r *NodeRegistry) FindMatch(req MatchRequest) (NodeEntry, error) {
+func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var candidates []NodeEntry
 	for _, node := range r.nodes {
 		if node.Status != "online" {
 			continue
@@ -103,9 +103,12 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) (NodeEntry, error) {
 		if node.HardwareProfile.StorageGB < req.StorageGB {
 			continue
 		}
-		return node, nil
+		candidates = append(candidates, node)
 	}
-	return NodeEntry{}, fmt.Errorf("no available node matches request")
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no available nodes match request")
+	}
+	return candidates, nil
 }
 
 // StartEvictionLoop runs a background goroutine that evicts nodes whose last

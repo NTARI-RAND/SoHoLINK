@@ -12,6 +12,20 @@ import (
 
 const jobTokenTTL = 24 * time.Hour
 
+// SLATier controls how many nodes are selected for placement.
+type SLATier int
+
+const (
+	SLAStandard SLATier = 1 // single node
+	SLAReliable SLATier = 2 // two nodes
+	SLAPremium  SLATier = 3 // three nodes
+)
+
+// ScheduleFunc scores and ranks a candidate list, returning the top N nodes
+// for the given tier. Injected at construction to avoid a circular import
+// between the orchestrator and scheduler packages.
+type ScheduleFunc func(candidates []NodeEntry, tier SLATier) ([]NodeEntry, error)
+
 // SubmitJobRequest describes a consumer's workload placement request.
 type SubmitJobRequest struct {
 	ConsumerID        string
@@ -36,20 +50,23 @@ type Orchestrator struct {
 	db          *store.DB
 	registry    *NodeRegistry
 	tokenSecret []byte
+	schedule    ScheduleFunc
 }
 
-// New constructs an Orchestrator. tokenSecret must be a stable secret used to
-// sign job tokens — rotating it will invalidate all outstanding tokens.
-func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte) *Orchestrator {
+// New constructs an Orchestrator. schedule is called during SubmitJob to rank
+// candidates; pass scheduler.Schedule from internal/scheduler.
+func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule ScheduleFunc) *Orchestrator {
 	return &Orchestrator{
 		db:          db,
 		registry:    registry,
 		tokenSecret: tokenSecret,
+		schedule:    schedule,
 	}
 }
 
-// SubmitJob validates the request, finds a matching node, writes the job to
-// PostgreSQL, generates a signed job token, and returns the placement result.
+// SubmitJob validates the request, finds matching nodes, runs them through
+// the scheduler, writes the job to PostgreSQL, generates a signed job token,
+// and returns the placement result.
 func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (SubmitJobResponse, error) {
 	if req.ConsumerID == "" {
 		return SubmitJobResponse{}, fmt.Errorf("submit job: ConsumerID is required")
@@ -58,7 +75,7 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		return SubmitJobResponse{}, fmt.Errorf("submit job: WorkloadType is required")
 	}
 
-	node, err := o.registry.FindMatch(MatchRequest{
+	candidates, err := o.registry.FindMatch(MatchRequest{
 		WorkloadType:      req.WorkloadType,
 		CountryConstraint: req.CountryConstraint,
 		CPUCores:          req.CPUCores,
@@ -67,8 +84,14 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		StorageGB:         req.StorageGB,
 	})
 	if err != nil {
-		return SubmitJobResponse{}, fmt.Errorf("find node: %w", err)
+		return SubmitJobResponse{}, fmt.Errorf("find nodes: %w", err)
 	}
+
+	scheduled, err := o.schedule(candidates, SLAStandard)
+	if err != nil {
+		return SubmitJobResponse{}, fmt.Errorf("schedule: %w", err)
+	}
+	node := scheduled[0]
 
 	jobID := uuid.New().String()
 
