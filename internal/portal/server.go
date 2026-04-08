@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -24,6 +25,7 @@ type PortalServer struct {
 	db            *store.DB
 	sm            *SessionManager
 	payment       *payment.Client
+	orch          *orchestrator.Orchestrator
 	baseURL       string
 	templatePaths []string
 }
@@ -103,10 +105,19 @@ type MarketplaceData struct {
 	RAMRateHr float64
 }
 
+// JobStatusData is the template data for consumer_job_status.html.
+type JobStatusData struct {
+	JobID     string
+	Status    string
+	NodeID    string
+	CreatedAt time.Time
+	Email     string
+}
+
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server.
-func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string) (*PortalServer, error) {
+func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -128,6 +139,7 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		db:            db,
 		sm:            sm,
 		payment:       paymentClient,
+		orch:          orch,
 		baseURL:       baseURL,
 		templatePaths: paths,
 	}
@@ -144,6 +156,10 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderDashboard))))
 	mux.Handle("GET /consumer/marketplace",
 		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleConsumerMarketplace))))
+	mux.Handle("POST /consumer/job",
+		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleSubmitJob))))
+	mux.Handle("GET /consumer/job/{id}",
+		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleJobStatus))))
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeQueue))))
 	mux.Handle("POST /dispute/{id}/resolve",
@@ -496,6 +512,68 @@ func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Reques
 		Email:    claims.Email,
 		Disputes: disputes,
 	})
+}
+
+func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	nodeID := r.FormValue("node_id")
+	if nodeID == "" {
+		http.Error(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+
+	var status string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT status FROM nodes WHERE id = $1`,
+		nodeID,
+	).Scan(&status)
+	if err != nil {
+		http.Error(w, "node not found", http.StatusNotFound)
+		return
+	}
+	if status != "online" {
+		http.Error(w, "node is not online", http.StatusConflict)
+		return
+	}
+
+	resp, err := ps.orch.SubmitJob(r.Context(), orchestrator.SubmitJobRequest{
+		ConsumerID:   claims.UserID,
+		WorkloadType: "app_hosting",
+		CPUCores:     2,
+		RAMMB:        4096,
+	})
+	if err != nil {
+		http.Error(w, "failed to submit job", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/consumer/job/"+resp.JobID, http.StatusSeeOther)
+}
+
+func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var data JobStatusData
+	data.Email = claims.Email
+	data.JobID = jobID
+
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT status, COALESCE(node_id::text, ''), created_at
+		 FROM jobs WHERE id = $1 AND consumer_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&data.Status, &data.NodeID, &data.CreatedAt)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	ps.renderTemplate(w, "consumer_job_status.html", data)
 }
 
 func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Request) {
