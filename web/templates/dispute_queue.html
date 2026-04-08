@@ -1,1 +1,91 @@
-{{define "dispute_queue.html"}}stub{{end}}
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">NTARI Staff</div>
+      <h2>Dispute Queue</h2>
+    </div>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
+      {{if .Disputes}}
+      <span class="badge badge-idle">{{len .Disputes}} open</span>
+      {{else}}
+      <span class="badge badge-online">clear</span>
+      {{end}}
+    </div>
+  </div>
+
+  {{if not .Disputes}}
+  <div class="card">
+    <p>No open disputes.</p>
+  </div>
+  {{else}}
+  <div class="table-wrap" style="margin-bottom:1.5rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Job ID</th>
+          <th>Consumer</th>
+          <th>Node</th>
+          <th>Status</th>
+          <th>Split (consumer %)</th>
+          <th>Payment Intent</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Disputes}}
+        <tr>
+          <td style="white-space:nowrap;">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td><code>{{slice .JobID 0 8}}&hellip;</code></td>
+          <td>{{.ConsumerEmail}}</td>
+          <td>{{.NodeClass}}&nbsp;/&nbsp;{{.CountryCode}}</td>
+          <td>
+            {{if eq .Status "open"}}
+              <span class="badge badge-idle">open</span>
+            {{else}}
+              <span class="badge" style="color:var(--accent);">review</span>
+            {{end}}
+          </td>
+          <td>{{.ConsumerRefundPct}}%</td>
+          <td><code style="font-size:0.72rem;">{{.PaymentIntentID}}</code></td>
+          <td>
+            <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+              <form method="POST" action="/dispute/{{.ID}}/resolve">
+                <input type="hidden" name="consumer_refund_pct" value="100">
+                <button type="submit" class="btn btn-outline btn-sm"
+                        style="color:var(--ok);border-color:var(--ok);">
+                  Accept
+                </button>
+              </form>
+              <form method="POST" action="/dispute/{{.ID}}/resolve">
+                <input type="hidden" name="consumer_refund_pct" value="0">
+                <button type="submit" class="btn btn-outline btn-sm"
+                        style="color:var(--danger);border-color:var(--danger);">
+                  Reject
+                </button>
+              </form>
+              <form method="POST" action="/dispute/{{.ID}}/review">
+                <button type="submit" class="btn btn-outline btn-sm">Review</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="border-color:var(--border);">
+    <p style="font-size:0.78rem;">
+      If a dispute is not resolved within 5 business days, the default
+      50/50 split applies automatically. Use <em>Accept</em> to refund
+      the consumer in full; <em>Reject</em> to award the provider in full.
+      <em>Review</em> moves the dispute to <code>under_review</code> status.
+    </p>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{template "layout" .}}

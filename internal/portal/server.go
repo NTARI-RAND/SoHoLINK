@@ -55,6 +55,26 @@ type provisionData struct {
 	Profiles []ProfileRow
 }
 
+// DisputeRow is a single row in the dispute queue table.
+type DisputeRow struct {
+	ID                string
+	Status            string
+	Reason            string
+	ConsumerRefundPct int
+	CreatedAt         time.Time
+	PaymentIntentID   string
+	JobID             string
+	ConsumerEmail     string
+	NodeClass         string
+	CountryCode       string
+}
+
+// DisputeQueueData is the template data for dispute_queue.html.
+type DisputeQueueData struct {
+	Email    string
+	Disputes []DisputeRow
+}
+
 // NodeListing is a single marketplace node entry.
 type NodeListing struct {
 	ID            string
@@ -126,6 +146,10 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleConsumerMarketplace))))
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeQueue))))
+	mux.Handle("POST /dispute/{id}/resolve",
+		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeResolve))))
+	mux.Handle("POST /dispute/{id}/review",
+		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeReview))))
 
 	mux.Handle("GET /provider/onboarding",
 		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingPage))))
@@ -428,7 +452,58 @@ func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http
 
 func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
-	ps.renderTemplate(w, "dispute_queue.html", claims)
+
+	rows, err := ps.db.Pool.Query(r.Context(),
+		`SELECT
+		     d.id, d.status, d.reason, d.consumer_refund_pct,
+		     d.created_at, d.payment_intent_id,
+		     j.id AS job_id,
+		     c.email AS consumer_email,
+		     n.node_class, n.country_code
+		 FROM disputes d
+		 JOIN jobs j ON j.id = d.job_id
+		 JOIN consumers c ON c.id = d.consumer_id
+		 JOIN nodes n ON n.id = d.node_id
+		 WHERE d.status IN ('open', 'under_review')
+		 ORDER BY d.created_at ASC`,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var disputes []DisputeRow
+	for rows.Next() {
+		var d DisputeRow
+		if err := rows.Scan(
+			&d.ID, &d.Status, &d.Reason, &d.ConsumerRefundPct,
+			&d.CreatedAt, &d.PaymentIntentID,
+			&d.JobID, &d.ConsumerEmail,
+			&d.NodeClass, &d.CountryCode,
+		); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		disputes = append(disputes, d)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ps.renderTemplate(w, "dispute_queue.html", DisputeQueueData{
+		Email:    claims.Email,
+		Disputes: disputes,
+	})
+}
+
+func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+func (ps *PortalServer) handleDisputeReview(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
 func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *http.Request) {
