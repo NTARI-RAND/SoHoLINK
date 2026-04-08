@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -447,5 +448,80 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 }
 
 func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	nodeID     := r.FormValue("node_id")
+	name       := strings.TrimSpace(r.FormValue("name"))
+	isDefault  := r.FormValue("is_default") == "true"
+	cpuEnabled := r.FormValue("cpu_enabled") == "true"
+
+	if nodeID == "" {
+		http.Error(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+	if name == "" {
+		http.Error(w, "profile name is required", http.StatusBadRequest)
+		return
+	}
+
+	ramPct, err := strconv.Atoi(r.FormValue("ram_pct"))
+	if err != nil || ramPct < 1 || ramPct > 100 {
+		http.Error(w, "ram_pct must be between 1 and 100", http.StatusBadRequest)
+		return
+	}
+	storageGB, err := strconv.Atoi(r.FormValue("storage_gb"))
+	if err != nil || storageGB < 0 {
+		http.Error(w, "storage_gb must be 0 or greater", http.StatusBadRequest)
+		return
+	}
+	bandwidthMbps, err := strconv.Atoi(r.FormValue("bandwidth_mbps"))
+	if err != nil || bandwidthMbps < 0 {
+		http.Error(w, "bandwidth_mbps must be 0 or greater", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the node belongs to the authenticated provider.
+	var providerID string
+	err = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT provider_id FROM nodes WHERE id = $1`,
+		nodeID,
+	).Scan(&providerID)
+	if err != nil {
+		http.Error(w, "node not found", http.StatusNotFound)
+		return
+	}
+	if providerID != claims.UserID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Clear any existing default for this node before inserting a new one.
+	if isDefault {
+		_, err = ps.db.Pool.Exec(r.Context(),
+			`UPDATE resource_profiles SET is_default = FALSE WHERE node_id = $1`,
+			nodeID,
+		)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	_, err = ps.db.Pool.Exec(r.Context(),
+		`INSERT INTO resource_profiles
+		 (node_id, name, is_default, cpu_enabled, gpu_pct, ram_pct, storage_gb, bandwidth_mbps)
+		 VALUES ($1, $2, $3, $4, 0, $5, $6, $7)`,
+		nodeID, name, isDefault, cpuEnabled, ramPct, storageGB, bandwidthMbps,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/provider/provision", http.StatusSeeOther)
 }
