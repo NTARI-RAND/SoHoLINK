@@ -1,156 +1,83 @@
 # SoHoLINK v2 — Claude Code Context
 
 ## What This Project Is
-SoHoLINK is a federated marketplace where participants rent idle hardware
-(SOHO servers, mobile GPUs, Smart TVs) to consumers who need compute,
-storage, CDN edge caching, or AI inference. NTARI operates the coordination
-layer. Participants own and control their hardware.
+SoHoLINK is a decentralized compute marketplace. Participants contribute idle
+hardware (SOHO servers, phones, Smart TVs, laptops) and earn fiat dollars.
+Consumers buy compute, storage, and CDN capacity on demand. NTARI operates the
+coordination layer — matching, scheduling, metering, and dispute arbitration.
 
-This is a ground-up rebuild. The old build is preserved on the `legacy-v1`
-branch. Do not attempt to continue or fix the old build. Do not reference
-old patterns unless explicitly told to salvage a specific component.
+No tokens, no wallets. Pure fiat via Stripe Connect.
+Participants own and control their hardware. NTARI never touches the hardware.
+
+This is a ground-up v2 rebuild. The old build is on the `legacy-v1` branch.
+Do not reference it. Do not continue or fix it.
 
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
+- **Module:** `github.com/NetworkTheoryAppliedResearchInstitute/soholink`
 - **Domain:** soholink.org
 - **Trust domain:** spiffe://soholink.org
 - **Working branch:** v2-rebuild
-
-## Architecture — Five Layers
-Consumer Interface  → Marketplace portal, REST API, billing dashboard
-Control Plane       → Orchestrator, Scheduler, Marketplace Engine,
-Metering Service, Reputation Engine, Dispute Terminal
-All hosted by NTARI.
-Overlay Network     → WireGuard mesh, NAT traversal, NGINX ingress,
-CDN edge cache, geo tag index
-Node Runtime        → SoHoLINK Agent, Docker containers, GPU abstraction,
-resource monitor, Watchtower auto-update
-Physical Hardware   → SOHO servers, Android mobile, Smart TVs, NAS devices
+- **Main branch:** master
 
 ## Technology Stack
 | Layer | Technology |
 |---|---|
-| Language | Go — all services and agent |
+| Language | Go 1.24+ — all services and agent |
 | Frontend | Server-rendered HTML/CSS via Go `html/template` — no JS framework, no build step |
-| Database | PostgreSQL 16 + TimescaleDB |
+| Database | PostgreSQL 16 + TimescaleDB, `pgx/v5` driver (no ORM) |
 | Object storage | MinIO (S3-compatible) |
 | Overlay network | WireGuard |
-| Ingress | NGINX |
-| Identity | SPIFFE/SPIRE — mTLS, short-lived X.509 SVIDs |
-| Payments | Stripe Connect (destination charges, split payouts) |
+| Ingress | NGINX — TLS termination in front of portal |
+| Identity | SPIFFE/SPIRE — mTLS, short-lived X.509 SVIDs (1hr TTL) |
+| Payments | Stripe Connect (destination charges, split payouts) via `stripe-go/v82` |
 | Monitoring | Prometheus + Grafana |
 | Config management | Ansible |
 | Container runtime | Docker + Portainer CE |
 | Auto-update | Watchtower |
 | CI/CD | GitHub Actions |
-| Policy engine | OPA (Rego) — reused from v1 |
 
-## Repository Structure (v2 target)
+## Repository Structure (current state)
+```
 cmd/
-orchestrator/     ← Control plane entry point
-agent/            ← Node agent daemon (runs on participant hardware)
-portal/           ← Web portal server (marketplace + provider UI)
-dispute-terminal/ ← NTARI internal dispute management UI
+  agent/          ← Node agent daemon entry point (main.go complete)
+  orchestrator/   ← Control plane entry point (stub)
+  portal/         ← Web portal entry point (stub)
 internal/
-orchestrator/     ← Orchestrator, Scheduler, geo-aware placement
-marketplace/      ← Marketplace Engine, listings, Stripe settlement
-agent/            ← Hardware detection, resource profiles, container lifecycle
-identity/         ← SPIRE integration, mTLS, SVID management
-metering/         ← Signed telemetry, usage reconciliation
-reputation/       ← Node scoring, dispute outcomes
-storage/          ← MinIO S3 client, bucket management
-network/          ← WireGuard bootstrapper, NAT traversal
-dispute/          ← Dispute capture, evidence, arbiter controls
-payment/          ← Stripe Connect, destination charges, escrow holds
-portal/           ← Go html/template handlers, static assets
-policy/           ← OPA Rego policies (salvaged from v1 configs/policies/)
-p2p/              ← LAN mesh discovery (salvaged from v1)
-store/            ← PostgreSQL + TimescaleDB migrations and queries
+  agent/          ← Hardware detection, resource profiles, heartbeat, executor, telemetry
+  api/            ← Control plane HTTP API (node registration, heartbeat, telemetry routes)
+  identity/       ← SPIRE integration, TLSClientConfig, TLSServerConfig, RequireSPIFFE middleware
+  orchestrator/   ← NodeRegistry, job submission, node matching, job token issuance
+  payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
+  portal/         ← Portal HTTP server, session middleware, all handler implementations
+  scheduler/      ← Geo-aware job placement with residency constraints
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–006
+  network/        ← WireGuard bootstrapper (stub)
 web/
-templates/        ← Go html/template .html files
-static/
-css/            ← Plain CSS
-js/             ← Vanilla JS only — no framework
-configs/
-policies/         ← OPA Rego (preserved from v1)
-default.yaml      ← Service config with env-var overrides for secrets
-infra/
-ansible/          ← Node provisioning playbooks
-docker/           ← Docker Compose for local dev services
-docs/
-legacy/           ← Archived v1 documentation (do not reference)
-ARCHITECTURE.md   ← v1.1 system architecture (source of truth)
+  templates/      ← layout.html, index.html, login.html, provider_dashboard.html,
+                     provider_onboarding.html, provider_provision.html,
+                     consumer_marketplace.html, dispute_queue.html
+  static/css/     ← portal.css (complete design system)
+test/integration/ ← Phase 1 end-to-end integration test (build tag: integration)
+```
 
-## What to Salvage from v1
-These specific v1 packages are worth adapting — do not rewrite from scratch:
-
-| v1 location | v2 target | Notes |
+## Database Migrations (internal/store/migrations/)
+| # | File | What it adds |
 |---|---|---|
-| `internal/payment/` (Stripe only) | `internal/payment/` | Remove Lightning/LND entirely |
-| `configs/policies/` | `internal/policy/` | OPA Rego reusable as-is |
-| `internal/p2p/` | `internal/p2p/` | Ed25519 signed multicast UDP |
-| `internal/wizard/` (hardware detection) | `internal/agent/` | gopsutil polling loop |
-| `internal/blockchain/` | `internal/metering/` | Merkle accounting chain |
-| `internal/lbtas/` | `internal/reputation/` | Trust scoring |
-| `internal/auth/` (Ed25519) | `internal/identity/` | Alongside SPIRE |
+| 001 | `001_initial_schema` | providers, consumers, nodes, jobs, resource_profiles, node_class/job_status enums |
+| 002 | `002_add_auth_columns` | `password_hash TEXT`, `is_staff BOOLEAN` on providers; `password_hash TEXT` on consumers |
+| 003 | `003_provider_onboarding` | `onboarding_complete BOOL`, `isp_tier TEXT`, `disclosure_accepted_at TIMESTAMPTZ` on providers |
+| 004 | `004_resource_pricing` | `resource_type` enum, `resource_pricing` table, seeded with 5 initial rates |
+| 005 | `005_resource_profile_pricing` | `price_multiplier NUMERIC(4,3)` on resource_profiles |
+| 006 | `006_disputes` | `dispute_status` enum, `disputes` table with evidence_log JSONB, arbiter fields |
 
-## What to Remove from v1
-Do not carry forward:
-
-- `fyne.io/fyne` — all GUI code is gone
-- Lightning Network / LND / HTLC — removed entirely
-- IPFS / Kubo — replaced by MinIO
-- SQLite / `modernc.org/sqlite` — replaced by PostgreSQL
-- Flutter — replaced by server-rendered HTML portal
-- RADIUS server — not part of v2
-- `golang.org/x/mobile` — not needed
-
-## Key Design Decisions
-**Payment:** Stripe Connect, destination charges, split payouts.
-NTARI collects from consumers and pays out to providers.
-Platform fee deducted at settlement. 24-hour payout hold for dispute window.
-
-**Frontend:** Server-rendered HTML via Go `html/template`.
-No React, no Vue, no Node.js, no npm, no build step.
-Vanilla JS only where strictly necessary (live dashboard updates).
-Must work on a 2019 Android phone on a 3G connection.
-Must work in Smart TV browsers (Tizen, webOS).
-
-**Hardware detection:** Agent-side only using gopsutil.
-Never browser-side. The portal displays what the agent already reported.
-Agent polls every 60 seconds and auto-updates the listing on hardware change.
-
-**Resource profiles:** Every provider has a default profile and can create
-scheduled overrides. Each profile specifies per-resource toggles and capacity
-caps (CPU on/off, GPU %, RAM %, storage GB, bandwidth Mbps).
-cgroup v2 enforces caps on all launched containers.
-
-**Identity:** SPIFFE/SPIRE issues short-lived X.509 SVIDs (1hr TTL).
-All inter-service connections use mTLS. No node trusts another without
-a valid current certificate.
-
-**Geo scheduling:** Every node is geo-tagged at registration.
-Consumer workloads may specify country/region constraints.
-Scheduler refuses to violate a hard residency requirement.
-
-**Disputes:** NTARI arbitrates via an internal Dispute Terminal.
-Signed telemetry is the primary evidence. Arbiter controls
-full/partial payment redistribution. Default 50/50 split
-if unresolved within 5 business days.
-
-**Workload types:**
-- App Hosting (Class A nodes) — Docker + NGINX
-- Object Storage (Class A, D) — MinIO S3
-- CDN Edge Cache (Class A, C, D) — Varnish/Caddy
-- Batch Compute (Class A, B) — Docker CPU/GPU
-- AI Inference (Class B, C) — ONNX Runtime / llama.cpp
-
-**Node classes:**
-- Class A: SOHO servers (full Docker runtime)
-- Class B: Mobile GPU (Android/iOS, idle-only)
-- Class C: Smart TV (Tizen/webOS/AndroidTV, sideload)
-- Class D: NAS/storage devices
+To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
+```
+DATABASE_URL="postgres://postgres:changeme@localhost:5432/postgres?sslmode=disable" \
+  go test -tags integration -v -run TestPhase1EndToEnd ./test/integration/
+```
+golang-migrate is idempotent — safe to run repeatedly.
 
 ## Local Dev Services
 All running in Docker on localhost:
@@ -162,39 +89,122 @@ All running in Docker on localhost:
 | MinIO Console | 9001 | user: admin / pw: changeme |
 | SPIRE Server | 8081 | trust domain: soholink.org |
 
-Stripe test keys are in environment variables — never hardcode them.
+Stripe keys are environment variables — never hardcode them.
 Use `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY`.
 
-## Stripe Integration
-Use the Stripe Connect destination charge model.
-Refer to `docs/stripe-integration-prompt.md` for the exact API patterns,
-V2 account creation properties, and webhook setup.
-Do not use Stripe Products. Use dynamic destination charges based on
-metered usage from the Metering Service.
+## Known TODOs
+These are acknowledged gaps, not bugs — do not silently fix them without discussion:
+
+1. **`cmd/agent/main.go` — telemetry mTLS client**: `runJob` uses a plain
+   `http.Client` for telemetry emission. The control plane wraps every route
+   with `identity.RequireSPIFFE`, which will reject a client with no SVID.
+   Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`
+   in Phase 3. Comment in the file explains this.
+
+2. **`cmd/agent/main.go` — container image placeholder**: `executor.Run` is
+   called with `Image: "alpine:latest"`. Real image must come from the job
+   assignment payload in Phase 3.
+
+3. **`internal/portal/server.go` — `handleDisputeResolve` stub**: Returns 501.
+   Must query the dispute, call `payment.TriggerPayout` with the correct split,
+   update `disputes.status = 'resolved'`, set `resolved_at`.
+
+4. **`internal/portal/server.go` — `handleDisputeReview` stub**: Returns 501.
+   Must update `disputes.status = 'under_review'`, set `arbiter_id` from claims.
+
+5. **`/consumer/job` route not yet implemented**: The marketplace "Request"
+   button POSTs to `/consumer/job`. Route and handler do not exist yet.
+   Phase 3 next step.
+
+## Critical API Notes
+These have caused bugs before — read before touching related code:
+
+**SPIFFE:**
+- Use `spiffeid.RequireFromString(...)` — NOT `RequireIDFromString` (doesn't exist).
+
+**Stripe (`stripe-go/v82`):**
+- Use V1 API only. V2 account creation params (`stripe.V2...`) do not exist in v82.
+- `CreateConnectedAccount(ctx, displayName, email string)` — args in that order.
+- `CreateOnboardingLink(ctx, accountID, refreshURL, returnURL string)`.
+- `CheckOnboardingStatus` returns `OnboardingStatus{TransfersActive, RequirementsPending}`.
+- Do not use Stripe Products. Use dynamic destination charges from metered usage.
+
+**Docker SDK (`docker/docker v28+incompatible`):**
+- Storage quotas: `container.HostConfig.StorageOpt["size"]` (a `map[string]string`).
+  There is no `StorageSizeBytes` field.
+- `dockerclient.IsErrNotFound(err)` to check image presence before pulling.
+- Deferred `ContainerRemove` must use `context.Background()` — the request ctx
+  may be cancelled before the container exits.
+
+**golang-migrate:**
+- Use `stdlib.OpenDBFromPool(pool)` to bridge pgx pool to `database/sql`.
+- Call `defer m.Close()` after `migrate.NewWithDatabaseInstance` to avoid deadlock.
+- Migration source path: `file://internal/store/migrations`.
+
+**Go `html/template`:**
+- All pages define `{{define "content"}}` — if parsed into one shared set, the
+  last-parsed definition wins. Portal uses per-request `template.ParseFiles(layoutPath, pagePath)`
+  to avoid this. Do not revert to a shared parsed set.
+- `template.ParseFiles` names templates by base filename only — subdirectory paths
+  are stripped. Keep template base names unique across all subdirectories.
 
 ## Coding Conventions
-- All errors must be handled explicitly — no blank `_` error discards
+- All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget JSON encoders)
 - All inter-service calls use mTLS via SPIRE SVIDs
-- No secrets in source code or committed config files — use env vars
-- Database queries use `pgx` driver directly — no ORM
+- No secrets in source or committed config — use env vars
+- Database queries use `pgx/v5` directly — no ORM
 - HTML templates use Go `html/template` — never `text/template`
-- All monetary amounts stored and calculated in cents (int64)
-- Telemetry payloads must be cryptographically signed by the agent
-- Resource caps enforced via cgroup v2 — never trust container self-reporting
+- All monetary amounts stored and calculated in cents (`int64`)
+- Telemetry payloads HMAC-SHA256 signed: `base64RawURL(payload) + "." + base64RawURL(HMAC(payload, secret))`
+- Same signing pattern used for job tokens (`internal/orchestrator`) and session tokens (`internal/portal/middleware.go`)
+- JSON struct tags always snake_case — e.g. `json:"node_id"` not `json:"NodeID"`
+- `RequireAuth(sm, RequireRole("role", handler))` — auth always wraps role, never the reverse
+- `context.Background()` in deferred cleanups that must outlive the request context
+
+## Key Design Decisions
+**Payment:** Stripe Connect destination charges. NTARI collects from consumers,
+pays out to providers. Platform fee deducted at settlement. 24-hour payout hold
+for dispute window.
+
+**Frontend:** Server-rendered HTML via Go `html/template`. No React, no Vue, no
+Node.js, no npm, no build step. Vanilla JS only where strictly necessary.
+Must work on a 2019 Android phone on 3G. Must work in Smart TV browsers.
+
+**Hardware detection:** Agent-side only via gopsutil. Never browser-side.
+Agent polls every 60s and re-registers on hardware change.
+
+**Resource profiles:** Default profile + scheduled overrides per node.
+Per-resource toggles: CPU on/off, GPU %, RAM %, storage GB, bandwidth Mbps,
+price_multiplier (0.5–2.0×). cgroup v2 enforces caps on launched containers.
+
+**Identity:** SPIFFE/SPIRE, short-lived X.509 SVIDs (1hr TTL). All inter-service
+connections use mTLS. Portal sits behind NGINX (plain HTTP to NGINX, mTLS
+between internal services).
+
+**Geo scheduling:** Every node geo-tagged at registration. Consumer workloads may
+specify country/region constraints. Scheduler refuses to violate hard residency.
+
+**Disputes:** NTARI arbitrates via the Dispute Terminal. Signed telemetry is
+primary evidence. Arbiter controls full/partial redistribution.
+Default 50/50 split if unresolved after 5 business days.
+
+**Node classes:**
+- Class A: SOHO servers — full Docker runtime, all workload types
+- Class B: Mobile GPU — Android/iOS, idle-only, batch compute + AI inference
+- Class C: Smart TV — Tizen/webOS/AndroidTV, CDN edge cache
+- Class D: NAS/storage devices — object storage, CDN
 
 ## Current Phase
-**Phase 0 — Pre-Flight** (in progress)
-Services running. Repo cleaned. This file is the last pre-flight item.
-Phase 1 begins next: Control Plane Core.
+**Phase 3 — Marketplace Portal** (in progress)
 
-## Phase 1 Scope (what comes next)
-1. Database schema — providers, consumers, nodes, jobs, resource profiles
-2. SPIRE identity integration — SVID issuance for all services
-3. Orchestrator — job submission, node matching, job token issuance
-4. Geo-aware Scheduler — placement with residency constraints
-5. WireGuard bootstrapper — overlay network setup
-6. Stripe Connect pipeline — provider onboarding, charge, metering, settlement
-7. Integration test — 31E node registers, receives job, settles payment
+Completed:
+- Portal server with session middleware (HMAC tokens, cookie auth)
+- Login handler (bcrypt, role-based redirect)
+- Provider onboarding flow (ISP disclosure, Stripe Connect, return handler)
+- Provider provisioning page (resource profile form with price_multiplier)
+- Consumer marketplace (live node listing with computed pricing)
+- Dispute queue terminal (arbiter controls, Accept/Reject/Review)
+- Migrations 001–006 all applied and passing integration test
 
-Do not begin Phase 2 (Node Agent) until the Phase 1 gate is confirmed:
-end-to-end job submission → execution → Stripe settlement verified.
+Next: implement `/consumer/job` submission, `handleDisputeResolve`,
+`handleDisputeReview`, and wire up `cmd/portal/main.go`.
