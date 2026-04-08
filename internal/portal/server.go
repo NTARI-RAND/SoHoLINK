@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
@@ -22,6 +23,7 @@ import (
 // NGINX, which handles TLS termination, so ListenAndServe (not TLS) is used.
 type PortalServer struct {
 	srv           *http.Server
+	metricsSrv    *http.Server
 	db            *store.DB
 	sm            *SessionManager
 	payment       *payment.Client
@@ -116,8 +118,9 @@ type JobStatusData struct {
 
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
-// and builds the http.Server.
-func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator) (*PortalServer, error) {
+// and builds the http.Server. metricsAddr is the address for the plain HTTP
+// metrics server (e.g. ":9090") — not wrapped with session auth.
+func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -185,6 +188,16 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metrics.Handler())
+	ps.metricsSrv = &http.Server{
+		Addr:         metricsAddr,
+		Handler:      metricsMux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
 	return ps, nil
 }
 
@@ -220,6 +233,16 @@ func (ps *PortalServer) renderTemplate(w http.ResponseWriter, page string, data 
 // Start begins accepting HTTP connections. Blocks until the server is shut down.
 func (ps *PortalServer) Start(_ context.Context) error {
 	return ps.srv.ListenAndServe()
+}
+
+// StartMetrics starts a plain HTTP server on the metrics address serving only
+// /metrics. It shuts down automatically when ctx is cancelled.
+func (ps *PortalServer) StartMetrics(ctx context.Context) error {
+	go func() {
+		<-ctx.Done()
+		_ = ps.metricsSrv.Shutdown(context.Background())
+	}()
+	return ps.metricsSrv.ListenAndServe()
 }
 
 // Shutdown gracefully drains active connections within the context deadline.
@@ -552,6 +575,7 @@ func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	metrics.JobsSubmittedTotal.WithLabelValues("app_hosting").Inc()
 	http.Redirect(w, r, "/consumer/job/"+resp.JobID, http.StatusSeeOther)
 }
 
@@ -839,6 +863,26 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 		NodeID:   nodeID,
 		Profiles: profiles,
 	})
+}
+
+// RunNodeGauge queries the online node count every 60 seconds and updates
+// the NodesOnlineGauge metric. Intended to be run in a goroutine.
+func RunNodeGauge(ctx context.Context, db *store.DB) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var count int64
+			if err := db.Pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM nodes WHERE status = 'online'`,
+			).Scan(&count); err == nil {
+				metrics.NodesOnlineGauge.Set(float64(count))
+			}
+		}
+	}
 }
 
 func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request) {

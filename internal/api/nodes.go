@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -150,6 +151,8 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+
+		metrics.HeartbeatsTotal.WithLabelValues(req.NodeID).Inc()
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true}) //nolint:errcheck

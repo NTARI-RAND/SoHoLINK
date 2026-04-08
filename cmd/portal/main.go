@@ -46,6 +46,7 @@ func main() {
 	baseURL       := mustEnv("PORTAL_BASE_URL")
 	templatesDir  := mustEnv("PORTAL_TEMPLATES_DIR")
 	tokenSecret   := mustHex("ORCHESTRATOR_TOKEN_SECRET")
+	metricsAddr   := mustEnv("METRICS_ADDR")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -67,7 +68,7 @@ func main() {
 	registry := orchestrator.NewNodeRegistry()
 	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
 
-	ps, err := portal.New(db, addr, sessionSecret, templatesDir, paymentClient, baseURL, orch)
+	ps, err := portal.New(db, addr, sessionSecret, templatesDir, paymentClient, baseURL, orch, metricsAddr)
 	if err != nil {
 		slog.Error("portal init failed", "error", err)
 		os.Exit(1)
@@ -85,6 +86,14 @@ func main() {
 			slog.Error("uptime scorer exited", "error", err)
 		}
 	}()
+
+	go func() {
+		if err := ps.StartMetrics(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server error", "error", err)
+		}
+	}()
+
+	go portal.RunNodeGauge(ctx, db)
 
 	<-ctx.Done()
 

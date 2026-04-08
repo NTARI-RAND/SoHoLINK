@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -14,16 +15,18 @@ import (
 // APIServer is the SoHoLINK control plane HTTP server. All connections use
 // mTLS via SPIRE SVIDs; every request must carry a valid SPIFFE identity.
 type APIServer struct {
-	srv      *http.Server
-	db       *store.DB
-	registry *orchestrator.NodeRegistry
-	idSource *identity.Source
+	srv        *http.Server
+	metricsSrv *http.Server
+	db         *store.DB
+	registry   *orchestrator.NodeRegistry
+	idSource   *identity.Source
 }
 
 // New constructs an APIServer. It registers all routes on a single mux,
 // wraps the mux with RequireSPIFFE middleware, and configures the TLS
-// settings from the SPIRE identity source.
-func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string) *APIServer {
+// settings from the SPIRE identity source. metricsAddr is the address for
+// the plain HTTP metrics server (e.g. ":9091") — not wrapped with mTLS.
+func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string) *APIServer {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,16 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metrics.Handler())
+	s.metricsSrv = &http.Server{
+		Addr:         metricsAddr,
+		Handler:      metricsMux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
 	return s
 }
 
@@ -54,6 +67,16 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 // from SPIRE — no certificate files are used.
 func (s *APIServer) Start(ctx context.Context) error {
 	return s.srv.ListenAndServeTLS("", "")
+}
+
+// StartMetrics starts a plain HTTP server on the metrics address serving only
+// /metrics. It shuts down automatically when ctx is cancelled.
+func (s *APIServer) StartMetrics(ctx context.Context) error {
+	go func() {
+		<-ctx.Done()
+		_ = s.metricsSrv.Shutdown(context.Background())
+	}()
+	return s.metricsSrv.ListenAndServe()
 }
 
 // Shutdown gracefully drains active connections within the context deadline.
