@@ -7,7 +7,10 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -73,8 +76,6 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string) (
 // page file, then executes the named page template. Parsing per-request avoids
 // the shared-set redefinition problem: every page defines {{define "content"}},
 // which would collide if all files were parsed into one set at startup.
-//
-// layout.html and the page file are located by base name within templatePaths.
 func (ps *PortalServer) renderTemplate(w http.ResponseWriter, page string, data any) {
 	var layoutPath, pagePath string
 	for _, p := range ps.templatePaths {
@@ -118,10 +119,85 @@ func (ps *PortalServer) handleLoginPage(w http.ResponseWriter, r *http.Request) 
 	ps.renderTemplate(w, "login.html", nil)
 }
 
-// handleLogin authenticates the user and issues a session cookie.
-// Full credential verification against the database is wired in Phase 3 Step 2.
 func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	email    := strings.TrimSpace(r.FormValue("email"))
+	password := r.FormValue("password")
+	role     := r.FormValue("role")
+
+	if email == "" || password == "" {
+		http.Error(w, "email and password are required", http.StatusBadRequest)
+		return
+	}
+	validRoles := map[string]bool{"provider": true, "consumer": true, "ntari_staff": true}
+	if !validRoles[role] {
+		http.Error(w, "invalid role", http.StatusBadRequest)
+		return
+	}
+
+	var userID, hash string
+	var err error
+
+	switch role {
+	case "provider":
+		err = ps.db.Pool.QueryRow(r.Context(),
+			`SELECT id, COALESCE(password_hash, '') FROM providers WHERE email = $1`,
+			email,
+		).Scan(&userID, &hash)
+	case "ntari_staff":
+		err = ps.db.Pool.QueryRow(r.Context(),
+			`SELECT id, COALESCE(password_hash, '') FROM providers WHERE email = $1 AND is_staff = TRUE`,
+			email,
+		).Scan(&userID, &hash)
+	case "consumer":
+		err = ps.db.Pool.QueryRow(r.Context(),
+			`SELECT id, COALESCE(password_hash, '') FROM consumers WHERE email = $1`,
+			email,
+		).Scan(&userID, &hash)
+	}
+	if err != nil {
+		// Row not found or DB error — return 401 to avoid account enumeration.
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	token, err := ps.sm.CreateToken(SessionClaims{
+		UserID:    userID,
+		Email:     email,
+		Role:      role,
+		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+	})
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   900,
+	})
+
+	switch role {
+	case "provider":
+		http.Redirect(w, r, "/provider/dashboard", http.StatusSeeOther)
+	case "consumer":
+		http.Redirect(w, r, "/consumer/marketplace", http.StatusSeeOther)
+	case "ntari_staff":
+		http.Redirect(w, r, "/dispute/queue", http.StatusSeeOther)
+	}
 }
 
 func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.Request) {
