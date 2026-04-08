@@ -1,0 +1,43 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoHoLINK</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        media="print" onload="this.media='all'">
+  <noscript>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  </noscript>
+  <link rel="stylesheet" href="/static/css/portal.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-brand">SOHOLINK</a>
+      <ul class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="/consumer/marketplace">Marketplace</a></li>
+        <li><a href="/login">Login</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="main">
+    {{block "content" .}}{{end}}
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span>SoHoLINK &mdash; operated by NTARI</span>
+      <span>&copy; 2026 Network Theory Applied Research Institute</span>
+    </div>
+  </footer>
+</body>
+</html>
+{{end}}

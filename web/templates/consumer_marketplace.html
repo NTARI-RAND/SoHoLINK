@@ -1,0 +1,36 @@
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Consumer</div>
+      <h2>Marketplace</h2>
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem;">All available nodes</span>
+  </div>
+
+  <div class="section-label">Available Nodes</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Node ID</th>
+          <th>Class</th>
+          <th>Country</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Price / hr</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td colspan="7" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">
+            No nodes available
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}

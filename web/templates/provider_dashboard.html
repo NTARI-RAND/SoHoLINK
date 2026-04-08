@@ -1,0 +1,63 @@
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Provider</div>
+      <h2>Dashboard</h2>
+    </div>
+    <span class="badge badge-online">&#9679;&nbsp;online</span>
+  </div>
+
+  <div class="section-label">Account</div>
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Signed in as</div>
+      <div style="font-size:0.875rem;word-break:break-all;">{{.Email}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Role</div>
+      <div style="font-size:0.875rem;color:var(--accent);">{{.Role}}</div>
+    </div>
+  </div>
+
+  <div class="section-label">Earnings</div>
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">This month</div>
+      <div class="stat-value cyan">$0.00</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Pending payout</div>
+      <div class="stat-value">$0.00</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">All time</div>
+      <div class="stat-value">$0.00</div>
+    </div>
+  </div>
+
+  <div class="section-label">Active Workloads</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Image</th>
+          <th>Status</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td colspan="6" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">
+            No active workloads
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}

@@ -1,0 +1,42 @@
+{{define "content"}}
+<section class="hero">
+  <div class="container">
+    <h1>Distributed compute.<br><span class="hl">Owned by participants.</span></h1>
+    <div class="hero-sub">
+      <p>SoHoLINK connects idle SOHO hardware with consumers who need compute,
+         storage, and CDN edge capacity. No intermediaries. No lock-in.
+         Participants control their hardware.</p>
+    </div>
+    <div class="hero-actions">
+      <a href="/login" class="btn btn-primary">Get Started</a>
+      <a href="/consumer/marketplace" class="btn btn-outline">Browse Marketplace</a>
+    </div>
+  </div>
+</section>
+
+<div class="container" style="padding-top:2.5rem;">
+  <div class="section-label">What you can do</div>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-eyebrow">Providers</div>
+      <h3>Contribute Compute</h3>
+      <p>Register your SOHO server, NAS, or GPU node. Set resource caps and
+         schedules. Earn on workloads that run while you sleep.</p>
+    </div>
+    <div class="card">
+      <div class="card-eyebrow">Consumers</div>
+      <h3>Earn Passively</h3>
+      <p>Submit jobs to the marketplace. Geo-aware scheduling places your
+         workload on vetted nodes that meet your residency and performance
+         requirements.</p>
+    </div>
+    <div class="card">
+      <div class="card-eyebrow">Network</div>
+      <h3>Open Infrastructure</h3>
+      <p>mTLS identity via SPIRE. WireGuard overlay mesh. Signed telemetry.
+         Stripe Connect settlement. Every layer is auditable.</p>
+    </div>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}
