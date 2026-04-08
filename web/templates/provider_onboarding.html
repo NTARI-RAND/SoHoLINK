@@ -1,2 +1,78 @@
-{{define "content"}}stub{{end}}
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Provider</div>
+      <h2>Node Onboarding</h2>
+    </div>
+  </div>
+
+  {{if .DisclosureAccepted}}
+  <div class="card" style="margin-bottom:1.5rem;border-color:var(--warn);">
+    <p style="color:var(--warn);">
+      ISP disclosure accepted. Complete your Stripe account setup below to activate your node listing.
+    </p>
+  </div>
+  {{end}}
+
+  <form method="POST" action="/provider/onboarding">
+    <div class="section-label">Step 1 — ISP Connection Type</div>
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div class="form-group" style="margin-bottom:0;">
+        <div class="role-group role-group-3">
+          <input class="role-input" type="radio" name="isp_tier" id="isp-business"
+                 value="business" {{if eq .ISPTier "business"}}checked{{end}} required>
+          <label class="role-label" for="isp-business">
+            Business Fiber<br>
+            <span style="font-size:0.65rem;opacity:0.7;">Tier 1</span>
+          </label>
+          <input class="role-input" type="radio" name="isp_tier" id="isp-residential"
+                 value="residential" {{if eq .ISPTier "residential"}}checked{{end}}>
+          <label class="role-label" for="isp-residential">
+            Residential Fiber<br>
+            <span style="font-size:0.65rem;opacity:0.7;">Tier 2</span>
+          </label>
+          <input class="role-input" type="radio" name="isp_tier" id="isp-cellular"
+                 value="cellular">
+          <label class="role-label" for="isp-cellular">
+            Cellular<br>
+            <span style="font-size:0.65rem;opacity:0.7;">Restricted</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">Step 2 — ISP Compliance Disclosure</div>
+    <div class="card" style="margin-bottom:1.5rem;">
+      <p style="margin-bottom:1rem;">
+        SoHoLINK operates as a federated compute marketplace. By listing your hardware,
+        you are offering a commercial service over your internet connection.
+        Many residential and some business ISP agreements restrict or prohibit
+        running servers or offering services over their network.
+      </p>
+      <p style="margin-bottom:1rem;">
+        <strong style="color:var(--text);">You are solely responsible</strong> for
+        ensuring that your participation complies with your ISP's terms of service.
+        NTARI does not indemnify providers against ISP enforcement actions, service
+        termination, or additional charges arising from node operation.
+      </p>
+      <p style="margin-bottom:1.25rem;">
+        Cellular connections are not eligible for Class A node listings due to
+        bandwidth constraints, latency profiles, and typical carrier terms.
+      </p>
+      <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer;text-transform:none;letter-spacing:0;font-size:0.825rem;color:var(--text);">
+        <input type="checkbox" name="disclosure_accepted" value="true"
+               id="disclosure" required
+               style="width:auto;margin-top:0.2rem;accent-color:var(--accent);">
+        I understand my ISP tier and accept full responsibility for compliance
+        with my ISP's terms of service.
+      </label>
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+      Continue to Stripe Setup &rarr;
+    </button>
+  </form>
+</div>
+{{end}}
 {{template "layout" .}}

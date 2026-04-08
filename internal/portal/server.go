@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -21,13 +22,23 @@ type PortalServer struct {
 	srv           *http.Server
 	db            *store.DB
 	sm            *SessionManager
+	payment       *payment.Client
+	baseURL       string
 	templatePaths []string
+}
+
+// onboardingData is the template data for provider_onboarding.html.
+type onboardingData struct {
+	Email              string
+	ISPTier            string
+	DisclosureAccepted bool
+	StripeComplete     bool
 }
 
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server.
-func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string) (*PortalServer, error) {
+func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -45,7 +56,13 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string) (
 	}
 
 	sm := NewSessionManager(sessionSecret)
-	ps := &PortalServer{db: db, sm: sm, templatePaths: paths}
+	ps := &PortalServer{
+		db:            db,
+		sm:            sm,
+		payment:       paymentClient,
+		baseURL:       baseURL,
+		templatePaths: paths,
+	}
 
 	mux := http.NewServeMux()
 
@@ -225,15 +242,128 @@ func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Reques
 }
 
 func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+
+	var ispTier        string
+	var disclosureAt   *time.Time
+	var stripeComplete bool
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(isp_tier, ''), disclosure_accepted_at, stripe_onboarding_complete
+		 FROM providers WHERE id = $1`,
+		claims.UserID,
+	).Scan(&ispTier, &disclosureAt, &stripeComplete)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if disclosureAt != nil && stripeComplete {
+		http.Redirect(w, r, "/provider/provision", http.StatusSeeOther)
+		return
+	}
+
+	ps.renderTemplate(w, "provider_onboarding.html", onboardingData{
+		Email:              claims.Email,
+		ISPTier:            ispTier,
+		DisclosureAccepted: disclosureAt != nil,
+		StripeComplete:     stripeComplete,
+	})
 }
 
 func (ps *PortalServer) handleProviderOnboarding(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ispTier    := r.FormValue("isp_tier")
+	disclosure := r.FormValue("disclosure_accepted")
+
+	validTiers := map[string]bool{"business": true, "residential": true, "cellular": true}
+	if !validTiers[ispTier] {
+		http.Error(w, "invalid ISP tier", http.StatusBadRequest)
+		return
+	}
+	if ispTier == "cellular" {
+		http.Error(w, "Cellular connections are not eligible for Class A node listings", http.StatusBadRequest)
+		return
+	}
+	if disclosure != "true" {
+		http.Error(w, "disclosure acceptance is required", http.StatusBadRequest)
+		return
+	}
+
+	_, err := ps.db.Pool.Exec(r.Context(),
+		`UPDATE providers SET isp_tier = $1, disclosure_accepted_at = NOW(), updated_at = NOW() WHERE id = $2`,
+		ispTier, claims.UserID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	accountID, err := ps.payment.CreateConnectedAccount(r.Context(), claims.Email, claims.Email)
+	if err != nil {
+		http.Error(w, "failed to create Stripe account", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = ps.db.Pool.Exec(r.Context(),
+		`UPDATE providers SET stripe_account_id = $1, updated_at = NOW() WHERE id = $2`,
+		accountID, claims.UserID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	onboardingURL, err := ps.payment.CreateOnboardingLink(
+		r.Context(), accountID,
+		ps.baseURL+"/provider/onboarding",
+		ps.baseURL+"/provider/onboarding/return",
+	)
+	if err != nil {
+		http.Error(w, "failed to create onboarding link", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, onboardingURL, http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleProviderOnboardingReturn(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+
+	var stripeAccountID string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(stripe_account_id, '') FROM providers WHERE id = $1`,
+		claims.UserID,
+	).Scan(&stripeAccountID)
+	if err != nil || stripeAccountID == "" {
+		http.Redirect(w, r, "/provider/onboarding", http.StatusSeeOther)
+		return
+	}
+
+	status, err := ps.payment.CheckOnboardingStatus(r.Context(), stripeAccountID)
+	if err != nil {
+		http.Redirect(w, r, "/provider/onboarding", http.StatusSeeOther)
+		return
+	}
+
+	if status.TransfersActive && !status.RequirementsPending {
+		_, err = ps.db.Pool.Exec(r.Context(),
+			`UPDATE providers SET stripe_onboarding_complete = TRUE, onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`,
+			claims.UserID,
+		)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, "/provider/provision", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/provider/onboarding", http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.Request) {
