@@ -99,22 +99,19 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `http.Client` for telemetry emission. The control plane wraps every route
    with `identity.RequireSPIFFE`, which will reject a client with no SVID.
    Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`
-   in Phase 3. Comment in the file explains this.
+   in Phase 4. Comment in the file explains this.
 
 2. **`cmd/agent/main.go` — container image placeholder**: `executor.Run` is
    called with `Image: "alpine:latest"`. Real image must come from the job
-   assignment payload in Phase 3.
+   assignment payload in Phase 4.
 
-3. **`internal/portal/server.go` — `handleDisputeResolve` stub**: Returns 501.
-   Must query the dispute, call `payment.TriggerPayout` with the correct split,
-   update `disputes.status = 'resolved'`, set `resolved_at`.
+3. **`web/templates/consumer_job_status.html` — stub template**: Currently
+   renders only "stub". Needs real content: job ID, status, assigned node,
+   created time, and a "Cancel" button that POSTs to a cancellation route.
 
-4. **`internal/portal/server.go` — `handleDisputeReview` stub**: Returns 501.
-   Must update `disputes.status = 'under_review'`, set `arbiter_id` from claims.
-
-5. **`/consumer/job` route not yet implemented**: The marketplace "Request"
-   button POSTs to `/consumer/job`. Route and handler do not exist yet.
-   Phase 3 next step.
+4. **`cmd/orchestrator/main.go` — not yet implemented**: Entry point stub only.
+   Must wire `store.Connect`, `store.RunMigrations`, `identity.NewSource`,
+   `api.New`, and graceful shutdown — same pattern as `cmd/portal/main.go`.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -195,16 +192,23 @@ Default 50/50 split if unresolved after 5 business days.
 - Class D: NAS/storage devices — object storage, CDN
 
 ## Current Phase
-**Phase 3 — Marketplace Portal** (in progress)
+**Phase 4 — Control Plane & Agent Hardening** (starting)
 
-Completed:
+### Phase 3 — Marketplace Portal (complete)
 - Portal server with session middleware (HMAC tokens, cookie auth)
 - Login handler (bcrypt, role-based redirect)
 - Provider onboarding flow (ISP disclosure, Stripe Connect, return handler)
 - Provider provisioning page (resource profile form with price_multiplier)
 - Consumer marketplace (live node listing with computed pricing)
-- Dispute queue terminal (arbiter controls, Accept/Reject/Review)
+- Consumer job submission (`/consumer/job` POST + `/consumer/job/{id}` GET)
+- Dispute queue terminal (arbiter controls, Accept/Reject/Review, Stripe refund)
+- `handleDisputeResolve` and `handleDisputeReview` fully implemented
+- `cmd/portal/main.go` wired and building clean
 - Migrations 001–006 all applied and passing integration test
 
-Next: implement `/consumer/job` submission, `handleDisputeResolve`,
-`handleDisputeReview`, and wire up `cmd/portal/main.go`.
+### Phase 4 goals
+- Wire `cmd/orchestrator/main.go` (control plane daemon entry point)
+- Replace plain `http.Client` in agent telemetry with mTLS SPIRE client
+- Real container image from job assignment payload in agent executor
+- Implement `consumer_job_status.html` with live job status, node info, cancel button
+- GitHub Actions CI pipeline (build + test on push)
