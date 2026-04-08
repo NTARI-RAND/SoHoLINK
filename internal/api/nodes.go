@@ -142,6 +142,15 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			return
 		}
 
+		_, err = db.Pool.Exec(r.Context(),
+			`INSERT INTO node_heartbeat_events (node_id) VALUES ($1)`,
+			req.NodeID,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true}) //nolint:errcheck
 	}
