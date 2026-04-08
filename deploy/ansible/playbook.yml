@@ -1,0 +1,219 @@
+---
+- name: Deploy SoHoLINK v2
+  hosts: all
+  become: true
+  vars_files:
+    - vars.yml
+
+  tasks:
+    # ── System packages ──────────────────────────────────────────────────────
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install system packages
+      apt:
+        name:
+          - git
+          - curl
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - docker.io
+        state: present
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    # ── Go toolchain ─────────────────────────────────────────────────────────
+    - name: Check installed Go version
+      command: /usr/local/go/bin/go version
+      register: go_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Download Go 1.24
+      get_url:
+        url: https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+        dest: /tmp/go1.24.0.linux-amd64.tar.gz
+      when: go_check.rc != 0 or '1.24' not in go_check.stdout
+
+    - name: Remove old Go installation
+      file:
+        path: /usr/local/go
+        state: absent
+      when: go_check.rc != 0 or '1.24' not in go_check.stdout
+
+    - name: Install Go 1.24
+      unarchive:
+        src: /tmp/go1.24.0.linux-amd64.tar.gz
+        dest: /usr/local
+        remote_src: yes
+      when: go_check.rc != 0 or '1.24' not in go_check.stdout
+
+    # ── Application user and directories ─────────────────────────────────────
+    - name: Create soholink system user
+      user:
+        name: soholink
+        system: yes
+        shell: /usr/sbin/nologin
+        home: /opt/soholink
+        create_home: yes
+
+    - name: Add soholink user to docker group
+      user:
+        name: soholink
+        groups: docker
+        append: yes
+
+    - name: Create directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: soholink
+        group: soholink
+        mode: '0755'
+      loop:
+        - /opt/soholink/bin
+        - /opt/soholink/web/templates
+        - /opt/soholink/web/static/css
+        - /opt/soholink/src
+        - /opt/soholink/go
+        - /etc/soholink
+
+    # ── Source and build ──────────────────────────────────────────────────────
+    - name: Clone or update repository
+      git:
+        repo: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink.git
+        dest: /opt/soholink/src
+        version: v2-rebuild
+        force: yes
+      become_user: soholink
+
+    - name: Build portal binary
+      command: /usr/local/go/bin/go build -o /opt/soholink/bin/portal ./cmd/portal/
+      args:
+        chdir: /opt/soholink/src
+      environment:
+        HOME: /opt/soholink
+        GOPATH: /opt/soholink/go
+        PATH: /usr/local/go/bin:/usr/bin:/bin
+      become_user: soholink
+
+    - name: Build agent binary
+      command: /usr/local/go/bin/go build -o /opt/soholink/bin/agent ./cmd/agent/
+      args:
+        chdir: /opt/soholink/src
+      environment:
+        HOME: /opt/soholink
+        GOPATH: /opt/soholink/go
+        PATH: /usr/local/go/bin:/usr/bin:/bin
+      become_user: soholink
+
+    # ── Web assets ────────────────────────────────────────────────────────────
+    - name: Sync HTML templates
+      synchronize:
+        src: ../../web/templates/
+        dest: /opt/soholink/web/templates/
+        delete: yes
+        rsync_opts:
+          - "--chown=soholink:soholink"
+
+    - name: Sync static assets
+      synchronize:
+        src: ../../web/static/
+        dest: /opt/soholink/web/static/
+        delete: yes
+        rsync_opts:
+          - "--chown=soholink:soholink"
+
+    # ── Environment file (non-secret vars) ───────────────────────────────────
+    # Secrets (DATABASE_URL, SESSION_SECRET, STRIPE_SECRET_KEY,
+    # ORCHESTRATOR_TOKEN_SECRET) must be written to /etc/soholink/portal.env
+    # manually or via ansible-vault before running this playbook.
+    - name: Write non-secret portal environment vars
+      blockinfile:
+        path: /etc/soholink/portal.env
+        create: yes
+        owner: root
+        group: soholink
+        mode: '0640'
+        marker: "# {mark} ANSIBLE MANAGED — non-secret vars"
+        block: |
+          PORTAL_ADDR={{ portal_addr }}
+          PORTAL_BASE_URL={{ portal_base_url }}
+          PORTAL_TEMPLATES_DIR={{ portal_templates_dir }}
+          METRICS_ADDR={{ metrics_addr }}
+
+    # ── Systemd units ─────────────────────────────────────────────────────────
+    - name: Install portal systemd unit
+      copy:
+        src: ../systemd/soholink-portal.service
+        dest: /etc/systemd/system/soholink-portal.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+        - Restart portal
+
+    - name: Install agent systemd unit
+      copy:
+        src: ../systemd/soholink-agent.service
+        dest: /etc/systemd/system/soholink-agent.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+
+    - name: Enable portal service
+      systemd:
+        name: soholink-portal
+        enabled: yes
+        daemon_reload: yes
+
+    # ── NGINX ─────────────────────────────────────────────────────────────────
+    - name: Install NGINX site config
+      template:
+        src: ../nginx/soholink.conf
+        dest: /etc/nginx/sites-available/soholink
+        mode: '0644'
+      vars:
+        domain: "{{ soholink_domain }}"
+      notify: Reload nginx
+
+    - name: Enable NGINX site
+      file:
+        src: /etc/nginx/sites-available/soholink
+        dest: /etc/nginx/sites-enabled/soholink
+        state: link
+      notify: Reload nginx
+
+    - name: Remove default NGINX site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Reload nginx
+
+    - name: Enable and start NGINX
+      systemd:
+        name: nginx
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart portal
+      systemd:
+        name: soholink-portal
+        state: restarted
+        daemon_reload: yes
+
+    - name: Reload nginx
+      systemd:
+        name: nginx
+        state: reloaded

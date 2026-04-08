@@ -1,0 +1,26 @@
+[Unit]
+Description=SoHoLINK Portal Daemon
+Documentation=https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=soholink
+Group=soholink
+EnvironmentFile=/etc/soholink/portal.env
+ExecStart=/opt/soholink/bin/portal
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=soholink-portal
+
+# Harden the service.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/soholink
+
+[Install]
+WantedBy=multi-user.target

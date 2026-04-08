@@ -1,0 +1,20 @@
+[Unit]
+Description=SoHoLINK Node Agent Daemon
+Documentation=https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=soholink
+Group=soholink
+EnvironmentFile=/etc/soholink/agent.env
+ExecStart=/opt/soholink/bin/agent
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=soholink-agent
+
+[Install]
+WantedBy=multi-user.target

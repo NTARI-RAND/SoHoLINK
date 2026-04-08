@@ -1,0 +1,7 @@
+soholink_host: 192.168.1.x        # replace with actual server IP
+soholink_domain: soholink.ntari.org
+portal_addr: ":8080"
+portal_base_url: "https://soholink.ntari.org"
+portal_templates_dir: "/opt/soholink/web/templates"
+metrics_addr: ":9090"
+api_addr: ":8443"
