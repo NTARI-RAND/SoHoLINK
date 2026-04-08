@@ -577,11 +577,84 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+	disputeID := r.PathValue("id")
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	consumerRefundPct, err := strconv.Atoi(r.FormValue("consumer_refund_pct"))
+	if err != nil || consumerRefundPct < 0 || consumerRefundPct > 100 {
+		http.Error(w, "consumer_refund_pct must be between 0 and 100", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		paymentIntentID string
+		jobID           string
+	)
+	err = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT d.payment_intent_id, j.id
+		 FROM disputes d
+		 JOIN jobs j ON j.id = d.job_id
+		 WHERE d.id = $1 AND d.status IN ('open', 'under_review')`,
+		disputeID,
+	).Scan(&paymentIntentID, &jobID)
+	if err != nil {
+		http.Error(w, "dispute not found or already resolved", http.StatusNotFound)
+		return
+	}
+
+	if consumerRefundPct > 0 {
+		var amountCents int64
+		err = ps.db.Pool.QueryRow(r.Context(),
+			`SELECT amount_cents FROM jobs WHERE id = $1`,
+			jobID,
+		).Scan(&amountCents)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		refundAmount := amountCents * int64(consumerRefundPct) / 100
+		if refundAmount > 0 {
+			if err := ps.payment.CreateRefund(r.Context(), paymentIntentID, refundAmount); err != nil {
+				http.Error(w, "failed to issue refund", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	_, err = ps.db.Pool.Exec(r.Context(),
+		`UPDATE disputes
+		 SET status = 'resolved', consumer_refund_pct = $1, arbiter_id = $2,
+		     arbiter_notes = 'resolved via terminal', resolved_at = NOW(), updated_at = NOW()
+		 WHERE id = $3`,
+		consumerRefundPct, claims.UserID, disputeID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/dispute/queue", http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleDisputeReview(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	claims, _ := ClaimsFromContext(r.Context())
+	disputeID := r.PathValue("id")
+
+	_, err := ps.db.Pool.Exec(r.Context(),
+		`UPDATE disputes SET status = 'under_review', arbiter_id = $1, updated_at = NOW()
+		 WHERE id = $2 AND status = 'open'`,
+		claims.UserID, disputeID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/dispute/queue", http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *http.Request) {

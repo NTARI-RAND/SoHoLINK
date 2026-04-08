@@ -55,3 +55,21 @@ func (c *Client) CreateDestinationCharge(
 		ClientSecret:    pi.ClientSecret,
 	}, nil
 }
+
+// CreateRefund issues a refund against the given PaymentIntent for amountCents.
+// Pass the full charge amount to refund in full, or a partial amount for
+// split outcomes. amountCents must be positive.
+func (c *Client) CreateRefund(ctx context.Context, paymentIntentID string, amountCents int64) error {
+	if amountCents <= 0 {
+		return fmt.Errorf("create refund: amountCents must be positive")
+	}
+	params := &stripe.RefundCreateParams{
+		PaymentIntent: stripe.String(paymentIntentID),
+		Amount:        stripe.Int64(amountCents),
+	}
+	_, err := c.sc.V1Refunds.Create(ctx, params)
+	if err != nil {
+		return fmt.Errorf("create refund: %w", err)
+	}
+	return nil
+}
