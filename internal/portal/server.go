@@ -62,6 +62,15 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string) (
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeQueue))))
 
+	mux.Handle("GET /provider/onboarding",
+		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingPage))))
+	mux.Handle("POST /provider/onboarding",
+		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboarding))))
+	mux.Handle("GET /provider/onboarding/return",
+		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingReturn))))
+	mux.Handle("GET /provider/provision",
+		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderProvision))))
+
 	ps.srv = &http.Server{
 		Addr:         addr,
 		Handler:      mux,
@@ -213,4 +222,20 @@ func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http
 func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
 	ps.renderTemplate(w, "dispute_queue.html", claims)
+}
+
+func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+func (ps *PortalServer) handleProviderOnboarding(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+func (ps *PortalServer) handleProviderOnboardingReturn(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
