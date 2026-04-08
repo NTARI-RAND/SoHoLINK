@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
@@ -19,7 +20,7 @@ func RunUptimeScorer(ctx context.Context, db *DB, interval time.Duration) error 
 		case <-ticker.C:
 			if err := scoreUptime(ctx, db); err != nil {
 				// Non-fatal — log and continue on next tick.
-				_ = err
+				slog.Warn("uptime scorer error", "error", err)
 			}
 		}
 	}

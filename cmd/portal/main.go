@@ -80,6 +80,12 @@ func main() {
 		}
 	}()
 
+	go func() {
+		if err := store.RunUptimeScorer(ctx, db, 10*time.Minute); err != nil {
+			slog.Error("uptime scorer exited", "error", err)
+		}
+	}()
+
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
