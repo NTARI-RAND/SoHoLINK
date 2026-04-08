@@ -35,6 +35,25 @@ type onboardingData struct {
 	StripeComplete     bool
 }
 
+// ProfileRow is a single resource profile row for provider_provision.html.
+type ProfileRow struct {
+	ID            string
+	Name          string
+	IsDefault     bool
+	CPUEnabled    bool
+	GPUPct        int
+	RAMPct        int
+	StorageGB     int
+	BandwidthMbps int
+}
+
+// provisionData is the template data for provider_provision.html.
+type provisionData struct {
+	Email    string
+	NodeID   string
+	Profiles []ProfileRow
+}
+
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server.
@@ -87,6 +106,8 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingReturn))))
 	mux.Handle("GET /provider/provision",
 		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderProvision))))
+	mux.Handle("POST /provider/provision/profile",
+		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleAddProfile))))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -367,5 +388,64 @@ func (ps *PortalServer) handleProviderOnboardingReturn(w http.ResponseWriter, r 
 }
 
 func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	var onboardingComplete bool
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT onboarding_complete FROM providers WHERE id = $1`,
+		claims.UserID,
+	).Scan(&onboardingComplete)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !onboardingComplete {
+		http.Redirect(w, r, "/provider/onboarding", http.StatusSeeOther)
+		return
+	}
+
+	// Get the provider's first node ID (used as target for new profiles).
+	var nodeID string
+	_ = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT id FROM nodes WHERE provider_id = $1 ORDER BY created_at ASC LIMIT 1`,
+		claims.UserID,
+	).Scan(&nodeID)
+
+	rows, err := ps.db.Pool.Query(r.Context(),
+		`SELECT id, name, is_default, cpu_enabled, gpu_pct, ram_pct, storage_gb, bandwidth_mbps
+		 FROM resource_profiles
+		 WHERE node_id IN (SELECT id FROM nodes WHERE provider_id = $1)
+		 ORDER BY is_default DESC, created_at ASC`,
+		claims.UserID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var profiles []ProfileRow
+	for rows.Next() {
+		var p ProfileRow
+		if err := rows.Scan(&p.ID, &p.Name, &p.IsDefault, &p.CPUEnabled,
+			&p.GPUPct, &p.RAMPct, &p.StorageGB, &p.BandwidthMbps); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		profiles = append(profiles, p)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ps.renderTemplate(w, "provider_provision.html", provisionData{
+		Email:    claims.Email,
+		NodeID:   nodeID,
+		Profiles: profiles,
+	})
+}
+
+func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }

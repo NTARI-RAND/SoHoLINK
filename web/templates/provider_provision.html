@@ -1,2 +1,112 @@
-{{define "content"}}stub{{end}}
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Provider</div>
+      <h2>Hardware Provisioning</h2>
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
+  </div>
+
+  <div class="section-label">Resource Profiles</div>
+
+  {{if not .Profiles}}
+  <div class="card" style="margin-bottom:2rem;">
+    <p>No resource profiles configured. Your node will use maximum available
+       resources until a profile is set.</p>
+  </div>
+  {{else}}
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Default</th>
+          <th>CPU</th>
+          <th>GPU %</th>
+          <th>RAM %</th>
+          <th>Storage GB</th>
+          <th>Bandwidth Mbps</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Profiles}}
+        <tr>
+          <td>{{.Name}}</td>
+          <td>{{if .IsDefault}}<span class="badge badge-online">yes</span>{{else}}&mdash;{{end}}</td>
+          <td>{{if .CPUEnabled}}<span class="badge badge-online">on</span>{{else}}<span class="badge badge-offline">off</span>{{end}}</td>
+          <td>{{.GPUPct}}</td>
+          <td>{{.RAMPct}}</td>
+          <td>{{if .StorageGB}}{{.StorageGB}}{{else}}&infin;{{end}}</td>
+          <td>{{if .BandwidthMbps}}{{.BandwidthMbps}}{{else}}&infin;{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  <div class="section-label">Add Resource Profile</div>
+
+  {{if not .NodeID}}
+  <div class="card" style="margin-bottom:1.5rem;">
+    <p>No node registered yet. Register your node with the SoHoLINK agent before
+       configuring resource profiles.</p>
+  </div>
+  {{else}}
+  <div class="card">
+    <form method="POST" action="/provider/provision/profile">
+      <input type="hidden" name="node_id" value="{{.NodeID}}">
+
+      <div class="form-group">
+        <label for="profile-name">Profile Name</label>
+        <input type="text" id="profile-name" name="name"
+               placeholder="e.g. Off-peak" required>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1.25rem;">
+        <div style="background:var(--surface);padding:1rem 1.25rem;">
+          <label style="display:flex;align-items:center;gap:0.6rem;text-transform:none;letter-spacing:0;font-size:0.825rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" name="is_default" value="true"
+                   style="width:auto;accent-color:var(--accent);">
+            Set as default profile
+          </label>
+        </div>
+        <div style="background:var(--surface);padding:1rem 1.25rem;">
+          <label style="display:flex;align-items:center;gap:0.6rem;text-transform:none;letter-spacing:0;font-size:0.825rem;color:var(--text);cursor:pointer;">
+            <input type="checkbox" name="cpu_enabled" value="true" checked
+                   style="width:auto;accent-color:var(--accent);">
+            CPU enabled
+          </label>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.25rem;margin-bottom:1.25rem;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="ram-pct">RAM %</label>
+          <input type="number" id="ram-pct" name="ram_pct"
+                 min="1" max="100" value="80" required>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="storage-gb">Storage GB <span style="color:var(--muted);font-size:0.7rem;">(0 = uncapped)</span></label>
+          <input type="number" id="storage-gb" name="storage_gb"
+                 min="0" value="0" required>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="bandwidth-mbps">Bandwidth Mbps <span style="color:var(--muted);font-size:0.7rem;">(0 = uncapped)</span></label>
+          <input type="number" id="bandwidth-mbps" name="bandwidth_mbps"
+                 min="0" value="0" required>
+        </div>
+      </div>
+
+      <p style="margin-bottom:1.25rem;font-size:0.78rem;">
+        Schedule windows can be configured after saving a profile.
+      </p>
+
+      <button type="submit" class="btn btn-primary">Save Profile &rarr;</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+{{end}}
 {{template "layout" .}}

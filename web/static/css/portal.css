@@ -172,6 +172,8 @@ label {
 }
 input[type="email"],
 input[type="password"],
+input[type="text"],
+input[type="number"],
 select {
   width: 100%;
   background: var(--surface-alt);
