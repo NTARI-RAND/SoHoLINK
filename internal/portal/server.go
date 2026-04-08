@@ -484,6 +484,11 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "bandwidth_mbps must be 0 or greater", http.StatusBadRequest)
 		return
 	}
+	priceMultiplier, err := strconv.ParseFloat(r.FormValue("price_multiplier"), 64)
+	if err != nil || priceMultiplier < 0.5 || priceMultiplier > 2.0 {
+		http.Error(w, "price_multiplier must be between 0.50 and 2.00", http.StatusBadRequest)
+		return
+	}
 
 	// Verify the node belongs to the authenticated provider.
 	var providerID string
@@ -514,9 +519,9 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 
 	_, err = ps.db.Pool.Exec(r.Context(),
 		`INSERT INTO resource_profiles
-		 (node_id, name, is_default, cpu_enabled, gpu_pct, ram_pct, storage_gb, bandwidth_mbps)
-		 VALUES ($1, $2, $3, $4, 0, $5, $6, $7)`,
-		nodeID, name, isDefault, cpuEnabled, ramPct, storageGB, bandwidthMbps,
+		 (node_id, name, is_default, cpu_enabled, gpu_pct, ram_pct, storage_gb, bandwidth_mbps, price_multiplier)
+		 VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8)`,
+		nodeID, name, isDefault, cpuEnabled, ramPct, storageGB, bandwidthMbps, priceMultiplier,
 	)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
