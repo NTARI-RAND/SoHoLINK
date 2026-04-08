@@ -55,6 +55,34 @@ type provisionData struct {
 	Profiles []ProfileRow
 }
 
+// NodeListing is a single marketplace node entry.
+type NodeListing struct {
+	ID            string
+	CountryCode   string
+	CPUCores      int
+	RAMGB         int64
+	StorageGB     int
+	BandwidthMbps int
+	EstHrRate     float64
+}
+
+// ClassGroup groups NodeListings by node class for the marketplace template.
+type ClassGroup struct {
+	Class     string
+	ClassName string
+	Nodes     []NodeListing
+	MinRate   float64
+	MaxRate   float64
+}
+
+// MarketplaceData is the template data for consumer_marketplace.html.
+type MarketplaceData struct {
+	Email     string
+	Classes   []ClassGroup
+	CPURateHr float64
+	RAMRateHr float64
+}
+
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server.
@@ -255,7 +283,147 @@ func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.R
 
 func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
-	ps.renderTemplate(w, "consumer_marketplace.html", claims)
+
+	// Step 1 — fetch current platform rates.
+	rateRows, err := ps.db.Pool.Query(r.Context(),
+		`SELECT resource_type, base_rate
+		 FROM resource_pricing
+		 WHERE (effective_until IS NULL OR effective_until > NOW())
+		 ORDER BY resource_type, effective_from DESC`,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rateRows.Close()
+
+	rates := make(map[string]float64)
+	for rateRows.Next() {
+		var rt string
+		var rate float64
+		if err := rateRows.Scan(&rt, &rate); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		// Keep only the first (most recent) row per resource_type.
+		if _, seen := rates[rt]; !seen {
+			rates[rt] = rate
+		}
+	}
+	if err := rateRows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Step 2 — fetch online nodes with their default resource profile.
+	nodeRows, err := ps.db.Pool.Query(r.Context(),
+		`SELECT
+		     n.id, n.node_class, n.country_code,
+		     (n.hardware_profile->>'CPUCores')::int        AS cpu_cores,
+		     (n.hardware_profile->>'RAMMB')::bigint / 1024 AS ram_gb,
+		     COALESCE(rp.ram_pct, 100)                     AS ram_pct,
+		     COALESCE(rp.cpu_enabled, true)                AS cpu_enabled,
+		     COALESCE(rp.storage_gb, 0)                    AS storage_gb,
+		     COALESCE(rp.bandwidth_mbps, 0)                AS bandwidth_mbps,
+		     COALESCE(rp.price_multiplier, 1.0)            AS price_multiplier
+		 FROM nodes n
+		 LEFT JOIN resource_profiles rp
+		     ON rp.node_id = n.id AND rp.is_default = TRUE
+		 WHERE n.status = 'online'
+		 ORDER BY n.node_class, n.country_code`,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer nodeRows.Close()
+
+	classMap := make(map[string][]NodeListing)
+	classOrder := []string{}
+
+	for nodeRows.Next() {
+		var (
+			id, nodeClass, country string
+			cpuCores               int
+			ramGB                  int64
+			ramPct                 int
+			cpuEnabled             bool
+			storageGB, bwMbps      int
+			priceMultiplier        float64
+		)
+		if err := nodeRows.Scan(&id, &nodeClass, &country, &cpuCores, &ramGB,
+			&ramPct, &cpuEnabled, &storageGB, &bwMbps, &priceMultiplier); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		// Step 3 — compute available resources and estimated hourly rate.
+		availCPU := float64(cpuCores)
+		if !cpuEnabled {
+			availCPU = 0
+		}
+		availRAM := float64(ramGB) * float64(ramPct) / 100.0
+		estHrRate := (availCPU*rates["cpu_core_hr"] + availRAM*rates["ram_gb_hr"]) * priceMultiplier
+
+		listing := NodeListing{
+			ID:            id,
+			CountryCode:   country,
+			CPUCores:      cpuCores,
+			RAMGB:         ramGB,
+			StorageGB:     storageGB,
+			BandwidthMbps: bwMbps,
+			EstHrRate:     estHrRate,
+		}
+
+		if _, exists := classMap[nodeClass]; !exists {
+			classOrder = append(classOrder, nodeClass)
+		}
+		classMap[nodeClass] = append(classMap[nodeClass], listing)
+	}
+	if err := nodeRows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Step 4 — build ClassGroup slice in stable order.
+	classNames := map[string]string{
+		"A": "Class A — Dedicated Server",
+		"B": "Class B — Mobile GPU",
+		"C": "Class C — Smart TV",
+		"D": "Class D — NAS / Storage",
+	}
+
+	groups := make([]ClassGroup, 0, len(classOrder))
+	for _, cls := range classOrder {
+		nodes := classMap[cls]
+		minRate, maxRate := nodes[0].EstHrRate, nodes[0].EstHrRate
+		for _, n := range nodes[1:] {
+			if n.EstHrRate < minRate {
+				minRate = n.EstHrRate
+			}
+			if n.EstHrRate > maxRate {
+				maxRate = n.EstHrRate
+			}
+		}
+		name, ok := classNames[cls]
+		if !ok {
+			name = "Class " + cls
+		}
+		groups = append(groups, ClassGroup{
+			Class:     cls,
+			ClassName: name,
+			Nodes:     nodes,
+			MinRate:   minRate,
+			MaxRate:   maxRate,
+		})
+	}
+
+	ps.renderTemplate(w, "consumer_marketplace.html", MarketplaceData{
+		Email:     claims.Email,
+		Classes:   groups,
+		CPURateHr: rates["cpu_core_hr"],
+		RAMRateHr: rates["ram_gb_hr"],
+	})
 }
 
 func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Request) {

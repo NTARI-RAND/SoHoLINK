@@ -5,32 +5,74 @@
       <div class="page-header-label">Consumer</div>
       <h2>Marketplace</h2>
     </div>
-    <span style="color:var(--muted);font-size:0.8rem;">All available nodes</span>
+    <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
   </div>
 
-  <div class="section-label">Available Nodes</div>
-  <div class="table-wrap">
+  <div class="card" style="margin-bottom:2rem;">
+    <p style="font-size:0.8rem;color:var(--muted);">
+      Pricing calculated from platform rates:
+      <span style="color:var(--accent);">${{printf "%.3f" .CPURateHr}}/vCPU-hr</span>
+      &nbsp;&middot;&nbsp;
+      <span style="color:var(--accent);">${{printf "%.4f" .RAMRateHr}}/GB RAM-hr</span>
+    </p>
+  </div>
+
+  {{if not .Classes}}
+  <div class="card">
+    <p>No nodes currently available. Check back soon.</p>
+  </div>
+  {{else}}
+  {{range .Classes}}
+  <div class="section-label">{{.ClassName}}</div>
+
+  <div class="stat-grid" style="margin-bottom:1rem;">
+    <div class="stat-cell">
+      <div class="stat-label">Available nodes</div>
+      <div class="stat-value cyan">{{len .Nodes}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Rate range</div>
+      <div style="font-size:0.875rem;color:var(--text);padding-top:0.25rem;">
+        ${{printf "%.3f" .MinRate}} &ndash; ${{printf "%.3f" .MaxRate}}<span style="color:var(--muted);font-size:0.72rem;">/hr</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap" style="margin-bottom:2.5rem;">
     <table>
       <thead>
         <tr>
-          <th>Node ID</th>
-          <th>Class</th>
           <th>Country</th>
           <th>CPU</th>
-          <th>RAM</th>
-          <th>Price / hr</th>
-          <th>Action</th>
+          <th>RAM (GB)</th>
+          <th>Storage</th>
+          <th>Bandwidth</th>
+          <th>Est. $/hr</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
+        {{range .Nodes}}
         <tr>
-          <td colspan="7" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">
-            No nodes available
+          <td>{{.CountryCode}}</td>
+          <td>{{.CPUCores}} vCPU</td>
+          <td>{{.RAMGB}}</td>
+          <td>{{if .StorageGB}}{{.StorageGB}} GB{{else}}&infin;{{end}}</td>
+          <td>{{if .BandwidthMbps}}{{.BandwidthMbps}} Mbps{{else}}&infin;{{end}}</td>
+          <td style="color:var(--accent);">${{printf "%.3f" .EstHrRate}}</td>
+          <td>
+            <form method="POST" action="/consumer/job">
+              <input type="hidden" name="node_id" value="{{.ID}}">
+              <button type="submit" class="btn btn-outline btn-sm">Request</button>
+            </form>
           </td>
         </tr>
+        {{end}}
       </tbody>
     </table>
   </div>
+  {{end}}
+  {{end}}
 </div>
 {{end}}
 {{template "layout" .}}
