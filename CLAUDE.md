@@ -235,12 +235,19 @@ Default 50/50 split if unresolved after 5 business days.
 - Provider provisioning page shows uptime status card: average uptime %, eligible class badges, threshold legend
 - `LoginRateLimiter` in `internal/portal/ratelimit.go` — `sync.Map`-backed, 5 failures per 15-minute window; wired into `handleLogin` with `RecordFailure` / `Reset` on all credential paths
 
-### Phase 7 — Performance, Automation & Real-Time UX (in progress)
+### Phase 7 — Performance, Automation & Real-Time UX (complete)
+- k6 load test scripts in `deploy/loadtest/`: `marketplace.js` (50 VUs / 30s, p95 < 500ms threshold), `login.js` (10 VUs / 60s, rate limiter exercise)
+- `cmd/seed/main.go` — seeds 10 providers, nodes, resource profiles, and consumers; sets bcrypt password hashes so load tests work out of the box; migration 010 adds `uq_nodes_provider_hostname` unique index
+- SPIRE agent deployment: `deploy/systemd/spire-agent.service`, `deploy/ansible/spire-agent.conf.j2`, Ansible tasks to download SPIRE 1.9.6, extract, configure, and enable; join token instructions in `deploy/README.md`
+- SSE job status streaming: `GET /consumer/job/{id}/status-stream` polls DB every 2s, pushes `text/event-stream` events; `consumer_job_status.html` updates badge and node ID live; `EventSource` feature-guarded with static fallback for Tizen < 4
+- Smart TV / 10-foot UI: TV media query (`min-width:1280px` + `hover:none`/`pointer:coarse`) scales base font to 20px, enlarges buttons, inputs, stat values, nav; universal `:focus-visible` outline for D-pad navigation
 
-In progress:
-- **Load testing and performance profiling** — benchmark portal and API under concurrent load; identify and address bottlenecks in the job submission and metering paths
+### Phase 8 — Windows/NTARIHQ Production Deployment (planned)
+**Goal:** get soholink.org live on NTARIHQ (Windows host, Docker installed).
 
-Remaining:
-- **SPIRE agent deployment automation** — Ansible tasks to install, configure, and register the SPIRE agent on provider nodes; automate SVID issuance and rotation
-- **WebSocket support for real-time job status** — replace the poll-on-load pattern in `consumer_job_status.html` with a server-sent events or WebSocket feed so job state updates push to the browser without a page reload
-- **Mobile-optimized portal views for Smart TV browsers** — audit and harden portal CSS/HTML for Tizen, webOS, and AndroidTV embedded browsers; ensure D-pad navigability and large-text legibility at TV viewing distances
+Plan:
+- **`docker-compose.yml`** at repo root — portal + Caddy services, connects to existing postgres container on the host network
+- **`Caddyfile`** — automatic HTTPS via Let's Encrypt for soholink.org; reverse proxy to portal container
+- **Port forwarding** — 80/443 forwarded from Spectrum router to `192.168.1.153` (NTARIHQ LAN IP)
+- **DNS** — WAN IP → A record for `soholink.org` (and `www.soholink.org`)
+- **PowerShell env setup script** — generates `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`, writes `portal.env` secrets file for Docker Compose
