@@ -1,2 +1,52 @@
-{{define "content"}}stub{{end}}
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Consumer</div>
+      <h2>Job Status</h2>
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
+  </div>
+
+  <div class="stat-grid" style="margin-bottom:1.5rem;">
+    <div class="stat-cell">
+      <div class="stat-value"><code>{{slice .JobID 0 8}}&hellip;</code></div>
+      <div class="stat-label">Job ID</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">
+        {{if or (eq .Status "scheduled") (eq .Status "running")}}
+          <span class="badge badge-online">{{.Status}}</span>
+        {{else if eq .Status "pending"}}
+          <span class="badge badge-idle">{{.Status}}</span>
+        {{else}}
+          <span class="badge badge-offline">{{.Status}}</span>
+        {{end}}
+      </div>
+      <div class="stat-label">Status</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-value">{{.CreatedAt.Format "2006-01-02 15:04 UTC"}}</div>
+      <div class="stat-label">Created</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Assigned Node</div>
+    {{if .NodeID}}
+      <p style="font-family:'JetBrains Mono',monospace;font-size:0.9rem;">{{.NodeID}}</p>
+    {{else}}
+      <p style="color:var(--muted);">Pending assignment</p>
+    {{end}}
+  </div>
+
+  <p style="font-size:0.78rem;color:var(--muted);margin-bottom:1.5rem;">
+    This page does not auto-refresh. Reload to check for status updates.
+  </p>
+
+  <a href="/consumer/marketplace" style="color:var(--accent);font-size:0.9rem;">
+    &larr; Back to Marketplace
+  </a>
+</div>
+{{end}}
 {{template "layout" .}}
