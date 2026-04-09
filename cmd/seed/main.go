@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -91,6 +93,23 @@ func main() {
 			email, displayName,
 		); err != nil {
 			slog.Error("insert consumer failed", "i", i, "error", err)
+			os.Exit(1)
+		}
+	}
+
+	// Set password_hash for all seed consumers so load tests work out of the box.
+	hash, err := bcrypt.GenerateFromPassword([]byte("changeme"), bcrypt.DefaultCost)
+	if err != nil {
+		slog.Error("bcrypt failed", "error", err)
+		os.Exit(1)
+	}
+	for i := 1; i <= 10; i++ {
+		email := fmt.Sprintf("consumer-%02d@seed.internal", i)
+		if _, err := db.Pool.Exec(ctx,
+			`UPDATE consumers SET password_hash = $1 WHERE email = $2`,
+			string(hash), email,
+		); err != nil {
+			slog.Error("set consumer password failed", "i", i, "error", err)
 			os.Exit(1)
 		}
 	}
