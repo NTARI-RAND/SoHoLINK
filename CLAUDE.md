@@ -109,6 +109,10 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    Must wire `store.Connect`, `store.RunMigrations`, `identity.NewSource`,
    `api.New`, and graceful shutdown — same pattern as `cmd/portal/main.go`.
 
+4. **Orchestrator test binary blocked on NTARIHQ**: Windows Application Control
+   (AppLocker/WDAC) blocks `internal/orchestrator` test binary execution on the
+   dev machine. Tests pass in CI (Linux). Not a code issue — do not attempt to fix.
+
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
 
@@ -221,9 +225,15 @@ Default 50/50 split if unresolved after 5 business days.
 - Orchestrator systemd unit, secrets file, and Ansible tasks added to `deploy/`
 - Grafana import instructions added to `deploy/README.md`
 
-### Phase 6 goals
-- **Metering service** — track resource consumption per job and compute contributor earnings
+### Phase 6 — Metering, Payouts & Provider Experience (in progress)
+
+Completed:
+- Migration 008: `job_metering` table, `started_at` / `completed_at` columns on jobs
+- `ComputeMetering` in `internal/store/metering.go` — resource consumption and earnings calculation
+- Job lifecycle wired: `scheduled` → `running` (on agent poll) → `completed` (on agent signal via `POST /jobs/{id}/complete`)
+- Provider dashboard shows real earnings from `job_metering` (this month, pending payout, all time, total jobs)
+
+Remaining:
 - **Payout automation** — `TriggerPayout` exists but no UI or automated trigger for the 24-hour hold release; build the release scheduler and provider-facing payout history
-- **Provider earnings dashboard** — `provider_dashboard.html` shows placeholder stats; wire live earnings, pending payouts, and job history
 - **Node reliability tiers** — use `uptime_pct` to gate which node classes a provider can list; enforce minimum uptime thresholds per class
 - **Rate limiting on auth endpoints** — brute-force protection on `POST /login`
