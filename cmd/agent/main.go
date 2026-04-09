@@ -158,6 +158,22 @@ func runJob(
 		slog.Error("job execution error", "job_id", job.JobID, "error", err)
 		return
 	}
+
+	// Signal job completion to the control plane so it can set completed_at
+	// and trigger metering. Only called on successful execution.
+	completeURL := controlPlaneAddr + "/jobs/" + job.JobID + "/complete"
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, http.NoBody)
+	if reqErr == nil {
+		resp, doErr := telemetryClient.Do(req)
+		if doErr != nil {
+			slog.Warn("complete job signal failed", "job_id", job.JobID, "error", doErr)
+		} else {
+			resp.Body.Close()
+		}
+	} else {
+		slog.Warn("complete job request build failed", "job_id", job.JobID, "error", reqErr)
+	}
+
 	slog.Info("job complete",
 		"job_id", result.JobID,
 		"exit_code", result.ExitCode,
