@@ -107,6 +107,20 @@ curl -I https://soholink.ntari.org
 
 ---
 
+## Step 7 — Import Grafana dashboards
+
+Two dashboard definitions are in `deploy/grafana/`. Import them via the Grafana UI:
+
+1. Open Grafana → Dashboards → Import
+2. Upload `deploy/grafana/network-health.json`
+3. Select your Prometheus datasource when prompted
+4. Repeat for `deploy/grafana/job-activity.json`
+
+Dashboards refresh every 30 seconds. The Prometheus datasource must be named
+exactly `Prometheus` or edit the `datasource` field in each JSON before importing.
+
+---
+
 ## Security note
 
 `deploy/ansible/vars.yml` contains only non-sensitive configuration (addresses, paths, domain).
