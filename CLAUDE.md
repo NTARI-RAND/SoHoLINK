@@ -98,18 +98,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 1. **`cmd/agent/main.go` — telemetry mTLS client**: `runJob` uses a plain
    `http.Client` for telemetry emission. The control plane wraps every route
    with `identity.RequireSPIFFE`, which will reject a client with no SVID.
-   Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`
-   in Phase 4. Comment in the file explains this.
+   Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`.
+   Comment in the file explains this.
 
 2. **`cmd/agent/main.go` — container image placeholder**: `executor.Run` is
    called with `Image: "alpine:latest"`. Real image must come from the job
-   assignment payload in Phase 4.
+   assignment payload.
 
-3. **`cmd/orchestrator/main.go` — not yet implemented**: Entry point stub only.
-   Must wire `store.Connect`, `store.RunMigrations`, `identity.NewSource`,
-   `api.New`, and graceful shutdown — same pattern as `cmd/portal/main.go`.
-
-4. **Orchestrator test binary blocked on NTARIHQ**: Windows Application Control
+3. **Orchestrator test binary blocked on NTARIHQ**: Windows Application Control
    (AppLocker/WDAC) blocks `internal/orchestrator` test binary execution on the
    dev machine. Tests pass in CI (Linux). Not a code issue — do not attempt to fix.
 
@@ -153,7 +149,8 @@ These have caused bugs before — read before touching related code:
 - HTML templates use Go `html/template` — never `text/template`
 - All monetary amounts stored and calculated in cents (`int64`)
 - Telemetry payloads HMAC-SHA256 signed: `base64RawURL(payload) + "." + base64RawURL(HMAC(payload, secret))`
-- Same signing pattern used for job tokens (`internal/orchestrator`) and session tokens (`internal/portal/middleware.go`)
+- Job tokens (`internal/orchestrator`) use the same HMAC-SHA256 pattern
+- Session tokens signed with Ed25519 — `SessionManager` holds `ed25519.PrivateKey`; portal daemon reads `SESSION_PRIVATE_KEY` env var (64-byte key, 128 hex chars)
 - JSON struct tags always snake_case — e.g. `json:"node_id"` not `json:"NodeID"`
 - `RequireAuth(sm, RequireRole("role", handler))` — auth always wraps role, never the reverse
 - `context.Background()` in deferred cleanups that must outlive the request context
@@ -238,8 +235,12 @@ Default 50/50 split if unresolved after 5 business days.
 - Provider provisioning page shows uptime status card: average uptime %, eligible class badges, threshold legend
 - `LoginRateLimiter` in `internal/portal/ratelimit.go` — `sync.Map`-backed, 5 failures per 15-minute window; wired into `handleLogin` with `RecordFailure` / `Reset` on all credential paths
 
-### Phase 7 — Performance, Automation & Real-Time UX (planned)
+### Phase 7 — Performance, Automation & Real-Time UX (in progress)
+
+In progress:
 - **Load testing and performance profiling** — benchmark portal and API under concurrent load; identify and address bottlenecks in the job submission and metering paths
+
+Remaining:
 - **SPIRE agent deployment automation** — Ansible tasks to install, configure, and register the SPIRE agent on provider nodes; automate SVID issuance and rotation
 - **WebSocket support for real-time job status** — replace the poll-on-load pattern in `consumer_job_status.html` with a server-sent events or WebSocket feed so job state updates push to the browser without a page reload
 - **Mobile-optimized portal views for Smart TV browsers** — audit and harden portal CSS/HTML for Tizen, webOS, and AndroidTV embedded browsers; ensure D-pad navigability and large-text legibility at TV viewing distances
