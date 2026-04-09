@@ -108,6 +108,15 @@ type MarketplaceData struct {
 	RAMRateHr float64
 }
 
+// ProviderDashboardData is the template data for provider_dashboard.html.
+type ProviderDashboardData struct {
+	Email                string
+	ThisMonthDollars     float64
+	TotalDollars         float64
+	PendingPayoutDollars float64
+	TotalJobs            int64
+}
+
 // JobStatusData is the template data for consumer_job_status.html.
 type JobStatusData struct {
 	JobID     string
@@ -381,7 +390,49 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
-	ps.renderTemplate(w, "provider_dashboard.html", claims)
+
+	var totalCents, thisMonthCents, totalJobs int64
+	err := ps.db.Pool.QueryRow(r.Context(), `
+		SELECT
+		    COALESCE(SUM(jm.contributor_earned_cents), 0) AS total_cents,
+		    COALESCE(SUM(CASE WHEN DATE_TRUNC('month', jm.computed_at) = DATE_TRUNC('month', NOW())
+		                 THEN jm.contributor_earned_cents ELSE 0 END), 0) AS this_month_cents,
+		    COUNT(DISTINCT j.id) AS total_jobs
+		FROM providers p
+		JOIN nodes n ON n.provider_id = p.id
+		JOIN jobs j ON j.node_id = n.id
+		JOIN job_metering jm ON jm.job_id = j.id
+		WHERE p.id = $1`,
+		claims.UserID,
+	).Scan(&totalCents, &thisMonthCents, &totalJobs)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var pendingCents int64
+	err = ps.db.Pool.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(jm.contributor_earned_cents), 0)
+		FROM providers p
+		JOIN nodes n ON n.provider_id = p.id
+		JOIN jobs j ON j.node_id = n.id
+		JOIN job_metering jm ON jm.job_id = j.id
+		WHERE p.id = $1
+		  AND j.completed_at > NOW() - INTERVAL '24 hours'`,
+		claims.UserID,
+	).Scan(&pendingCents)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ps.renderTemplate(w, "provider_dashboard.html", ProviderDashboardData{
+		Email:                claims.Email,
+		ThisMonthDollars:     float64(thisMonthCents) / 100.0,
+		TotalDollars:         float64(totalCents) / 100.0,
+		PendingPayoutDollars: float64(pendingCents) / 100.0,
+		TotalJobs:            totalJobs,
+	})
 }
 
 func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http.Request) {

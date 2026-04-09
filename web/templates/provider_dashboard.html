@@ -15,8 +15,8 @@
       <div style="font-size:0.875rem;word-break:break-all;">{{.Email}}</div>
     </div>
     <div class="stat-cell">
-      <div class="stat-label">Role</div>
-      <div style="font-size:0.875rem;color:var(--accent);">{{.Role}}</div>
+      <div class="stat-label">Total jobs completed</div>
+      <div class="stat-value">{{.TotalJobs}}</div>
     </div>
   </div>
 
@@ -24,15 +24,15 @@
   <div class="stat-grid">
     <div class="stat-cell">
       <div class="stat-label">This month</div>
-      <div class="stat-value cyan">$0.00</div>
+      <div class="stat-value cyan">${{printf "%.2f" .ThisMonthDollars}}</div>
     </div>
     <div class="stat-cell">
       <div class="stat-label">Pending payout</div>
-      <div class="stat-value">$0.00</div>
+      <div class="stat-value">${{printf "%.2f" .PendingPayoutDollars}}</div>
     </div>
     <div class="stat-cell">
       <div class="stat-label">All time</div>
-      <div class="stat-value">$0.00</div>
+      <div class="stat-value">${{printf "%.2f" .TotalDollars}}</div>
     </div>
   </div>
 
