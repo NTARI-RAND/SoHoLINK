@@ -1,0 +1,70 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "uid": "soholink-network-health",
+  "title": "SoHoLINK — Network Health",
+  "refresh": "30s",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Nodes Online",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "soholink_nodes_online",
+          "legendFormat": "nodes online",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Heartbeats per Minute by Node",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(soholink_heartbeats_total[5m]) * 60",
+          "legendFormat": "{{node_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Uptime Scorer p99 Duration",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, rate(soholink_uptime_scorer_duration_seconds_bucket[10m]))",
+          "legendFormat": "p99 seconds",
+          "refId": "A"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP Request Rate (API Server)",
+      "datasource": "Prometheus",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(soholink_http_requests_total{handler=~\"node.*\"}[5m])",
+          "legendFormat": "{{handler}} {{status_code}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {}
+}
