@@ -42,26 +42,35 @@
     {{end}}
   </div>
 
+  <p id="sse-fallback" style="display:none;font-size:0.78rem;color:var(--muted);margin-bottom:1.5rem;">
+    Live updates not supported in this browser. Reload to check for status updates.
+  </p>
+
   <script>
 (function() {
-  var statusEl = document.getElementById('job-status');
-  var nodeEl   = document.getElementById('job-node');
-  var src = new EventSource('/consumer/job/{{.JobID}}/status-stream');
-  src.onmessage = function(e) {
-    var d = JSON.parse(e.data);
-    if (d.error) { src.close(); return; }
-    var badge = '';
-    if (d.status === 'scheduled' || d.status === 'running') {
-      badge = '<span class="badge badge-online">' + d.status + '</span>';
-    } else if (d.status === 'pending') {
-      badge = '<span class="badge badge-idle">' + d.status + '</span>';
-    } else {
-      badge = '<span class="badge badge-offline">' + d.status + '</span>';
-    }
-    statusEl.innerHTML = badge;
-    if (d.node_id && nodeEl) nodeEl.textContent = d.node_id;
-    if (d.status === 'completed' || d.status === 'failed') src.close();
-  };
+  if (typeof EventSource !== 'undefined') {
+    var statusEl = document.getElementById('job-status');
+    var nodeEl   = document.getElementById('job-node');
+    var src = new EventSource('/consumer/job/{{.JobID}}/status-stream');
+    src.onmessage = function(e) {
+      var d = JSON.parse(e.data);
+      if (d.error) { src.close(); return; }
+      var badge = '';
+      if (d.status === 'scheduled' || d.status === 'running') {
+        badge = '<span class="badge badge-online">' + d.status + '</span>';
+      } else if (d.status === 'pending') {
+        badge = '<span class="badge badge-idle">' + d.status + '</span>';
+      } else {
+        badge = '<span class="badge badge-offline">' + d.status + '</span>';
+      }
+      statusEl.innerHTML = badge;
+      if (d.node_id && nodeEl) nodeEl.textContent = d.node_id;
+      if (d.status === 'completed' || d.status === 'failed') src.close();
+    };
+  } else {
+    // Fallback for Tizen < 4 and other browsers without SSE support
+    document.getElementById('sse-fallback').style.display = 'block';
+  }
 })();
   </script>
 
