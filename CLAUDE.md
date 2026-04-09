@@ -188,7 +188,7 @@ Default 50/50 split if unresolved after 5 business days.
 - Class D: NAS/storage devices — object storage, CDN
 
 ## Current Phase
-**Phase 5 — Orchestrator & Observability** (starting)
+**Phase 6 — Metering, Payouts & Provider Experience** (starting)
 
 ### Phase 3 — Marketplace Portal (complete)
 - Portal server with session middleware (HMAC tokens, cookie auth)
@@ -213,7 +213,17 @@ Default 50/50 split if unresolved after 5 business days.
 - Ansible playbook, NGINX config, systemd units, and deployment README in `deploy/`
 - `consumer_job_status.html` fully implemented (job ID, status badge, node, created time)
 
-### Phase 5 goals
-- Wire `cmd/orchestrator/main.go` (control plane daemon entry point with mTLS, migrations, graceful shutdown)
-- Grafana dashboard definitions for SoHoLINK metrics (nodes online, active jobs, heartbeat rate, uptime distribution)
-- Token refresh / session extension for the portal (sliding window or explicit refresh endpoint)
+### Phase 5 — Orchestrator & Observability (complete)
+- `cmd/orchestrator/main.go` wired: `store.Connect`, `store.RunMigrations`, `identity.NewSource`, `api.New`, graceful shutdown
+- Grafana dashboard definitions in `deploy/grafana/`: `network-health.json`, `job-activity.json`
+- Session token refresh: `POST /auth/refresh` endpoint with 5-minute sliding window
+- Auto-refresh script in `layout.html` — fires every 10 minutes when page is visible
+- Orchestrator systemd unit, secrets file, and Ansible tasks added to `deploy/`
+- Grafana import instructions added to `deploy/README.md`
+
+### Phase 6 goals
+- **Metering service** — track resource consumption per job and compute contributor earnings
+- **Payout automation** — `TriggerPayout` exists but no UI or automated trigger for the 24-hour hold release; build the release scheduler and provider-facing payout history
+- **Provider earnings dashboard** — `provider_dashboard.html` shows placeholder stats; wire live earnings, pending payouts, and job history
+- **Node reliability tiers** — use `uptime_pct` to gate which node classes a provider can list; enforce minimum uptime thresholds per class
+- **Rate limiting on auth endpoints** — brute-force protection on `POST /login`
