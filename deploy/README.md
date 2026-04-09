@@ -68,6 +68,33 @@ sudo chown root:soholink /etc/soholink/orchestrator.env
 
 ---
 
+## Step 2c — Generate SPIRE join token for the node
+
+The SPIRE agent uses join_token attestation. Generate a token on the SPIRE server
+and add it to the agent config before the agent starts:
+
+```bash
+# On the SPIRE server host:
+spire-server token generate -spiffeID spiffe://soholink.org/node
+```
+
+Add the token to `/etc/spire/agent.conf` on the node:
+
+```hcl
+plugins {
+    NodeAttestor "join_token" {
+        plugin_data {
+            join_token = "<token from above>"
+        }
+    }
+}
+```
+
+> **Note:** join tokens are single-use and expire after 10 minutes by default.
+> Generate the token immediately before running the Ansible playbook.
+
+---
+
 ## Step 3 — Create the agent secrets file
 
 ```bash
