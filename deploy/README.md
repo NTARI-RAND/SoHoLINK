@@ -37,7 +37,7 @@ Required variables:
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SESSION_SECRET` | 32 random bytes as hex — `openssl rand -hex 32` |
-| `STRIPE_SECRET_KEY` | Stripe live secret key (`sk_live_...`) |
+| `STRIPE_SECRET_KEY` | Stripe live secret key (`sk_live_...`) — also required for payout release (`store.RunPayoutReleaser`) |
 | `ORCHESTRATOR_TOKEN_SECRET` | 32 random bytes as hex — `openssl rand -hex 32` |
 
 ---

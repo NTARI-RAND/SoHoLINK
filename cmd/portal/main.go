@@ -88,6 +88,12 @@ func main() {
 	}()
 
 	go func() {
+		if err := store.RunPayoutReleaser(ctx, db, paymentClient, time.Hour); err != nil {
+			slog.Error("payout releaser exited", "error", err)
+		}
+	}()
+
+	go func() {
 		if err := ps.StartMetrics(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("metrics server error", "error", err)
 		}
