@@ -8,6 +8,29 @@
     <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
   </div>
 
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label" style="margin-top:0;">Node Reliability</div>
+    <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
+      <div>
+        <span style="font-size:1.6rem;font-weight:600;color:var(--accent);">{{printf "%.1f" .UptimePct}}%</span>
+        <span style="font-size:0.78rem;color:var(--muted);margin-left:0.4rem;">avg uptime (7 days)</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:0.75rem;color:var(--muted);">Eligible classes:</span>
+        {{if .EligibleClasses}}
+          {{range .EligibleClasses}}
+          <span class="badge badge-online">Class {{.}}</span>
+          {{end}}
+        {{else}}
+          <span class="badge badge-offline">None &mdash; uptime too low</span>
+        {{end}}
+      </div>
+    </div>
+    <p style="font-size:0.72rem;color:var(--muted);margin-top:0.75rem;margin-bottom:0;">
+      Thresholds: Class A &ge;95% &middot; Class B &ge;85% &middot; Class D &ge;80% &middot; Class C &ge;70%
+    </p>
+  </div>
+
   <div class="section-label">Resource Profiles</div>
 
   {{if not .Profiles}}

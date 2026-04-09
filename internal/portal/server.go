@@ -55,9 +55,11 @@ type ProfileRow struct {
 
 // provisionData is the template data for provider_provision.html.
 type provisionData struct {
-	Email    string
-	NodeID   string
-	Profiles []ProfileRow
+	Email           string
+	NodeID          string
+	Profiles        []ProfileRow
+	UptimePct       float64
+	EligibleClasses []string
 }
 
 // DisputeRow is a single row in the dispute queue table.
@@ -484,6 +486,12 @@ func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http
 		 LEFT JOIN resource_profiles rp
 		     ON rp.node_id = n.id AND rp.is_default = TRUE
 		 WHERE n.status = 'online'
+		   AND (
+		       (n.node_class = 'A' AND n.uptime_pct >= 95.0) OR
+		       (n.node_class = 'B' AND n.uptime_pct >= 85.0) OR
+		       (n.node_class = 'C' AND n.uptime_pct >= 70.0) OR
+		       (n.node_class = 'D' AND n.uptime_pct >= 80.0)
+		   )
 		 ORDER BY n.node_class, n.country_code`,
 	)
 	if err != nil {
@@ -949,10 +957,32 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	var uptimePct float64
+	_ = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT COALESCE(AVG(uptime_pct), 100.0) FROM nodes WHERE provider_id = $1`,
+		claims.UserID,
+	).Scan(&uptimePct)
+
+	var eligibleClasses []string
+	if uptimePct >= 95.0 {
+		eligibleClasses = append(eligibleClasses, "A")
+	}
+	if uptimePct >= 85.0 {
+		eligibleClasses = append(eligibleClasses, "B")
+	}
+	if uptimePct >= 80.0 {
+		eligibleClasses = append(eligibleClasses, "D")
+	}
+	if uptimePct >= 70.0 {
+		eligibleClasses = append(eligibleClasses, "C")
+	}
+
 	ps.renderTemplate(w, "provider_provision.html", provisionData{
-		Email:    claims.Email,
-		NodeID:   nodeID,
-		Profiles: profiles,
+		Email:           claims.Email,
+		NodeID:          nodeID,
+		Profiles:        profiles,
+		UptimePct:       uptimePct,
+		EligibleClasses: eligibleClasses,
 	})
 }
 
