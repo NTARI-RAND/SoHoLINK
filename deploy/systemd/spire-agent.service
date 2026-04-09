@@ -1,0 +1,17 @@
+[Unit]
+Description=SPIRE Agent — SoHoLINK workload identity
+Documentation=https://spiffe.io/docs/latest/spire-about/spire-concepts/
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/spire/bin/spire-agent run -config /etc/spire/agent.conf
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spire-agent
+
+[Install]
+WantedBy=multi-user.target

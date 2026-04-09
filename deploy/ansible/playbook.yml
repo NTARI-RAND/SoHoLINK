@@ -55,6 +55,60 @@
         remote_src: yes
       when: go_check.rc != 0 or '1.24' not in go_check.stdout
 
+    # ── SPIRE agent ───────────────────────────────────────────────────────────
+    - name: Check installed SPIRE version
+      command: /opt/spire/bin/spire-agent --version
+      register: spire_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Download SPIRE 1.9.6
+      get_url:
+        url: https://github.com/spiffe/spire/releases/download/v1.9.6/spire-1.9.6-linux-amd64-musl.tar.gz
+        dest: /tmp/spire-1.9.6-linux-amd64-musl.tar.gz
+      when: spire_check.rc != 0 or '1.9.6' not in spire_check.stdout
+
+    - name: Extract SPIRE to /opt/spire
+      unarchive:
+        src: /tmp/spire-1.9.6-linux-amd64-musl.tar.gz
+        dest: /opt/spire
+        remote_src: yes
+        extra_opts: ["--strip-components=1"]
+      when: spire_check.rc != 0 or '1.9.6' not in spire_check.stdout
+
+    - name: Create SPIRE directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/spire/bin
+        - /opt/spire/data/agent
+        - /etc/spire
+        - /tmp/spire-agent/public
+
+    - name: Template SPIRE agent config
+      template:
+        src: spire-agent.conf.j2
+        dest: /etc/spire/agent.conf
+        mode: '0644'
+      notify: Restart spire-agent
+
+    - name: Install spire-agent systemd unit
+      copy:
+        src: ../systemd/spire-agent.service
+        dest: /etc/systemd/system/spire-agent.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+        - Restart spire-agent
+
+    - name: Enable spire-agent service
+      systemd:
+        name: spire-agent
+        enabled: yes
+        daemon_reload: yes
+
     # ── Application user and directories ─────────────────────────────────────
     - name: Create soholink system user
       user:
@@ -246,5 +300,11 @@
     - name: Restart orchestrator
       systemd:
         name: soholink-orchestrator
+        state: restarted
+        daemon_reload: yes
+
+    - name: Restart spire-agent
+      systemd:
+        name: spire-agent
         state: restarted
         daemon_reload: yes

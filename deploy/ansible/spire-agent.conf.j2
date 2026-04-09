@@ -1,0 +1,23 @@
+agent {
+    data_dir = "/opt/spire/data/agent"
+    log_level = "INFO"
+    server_address = "{{ spire_server_address }}"
+    server_port = "{{ spire_server_port | default('8081') }}"
+    socket_path = "/tmp/spire-agent/public/api.sock"
+    trust_domain = "soholink.org"
+    insecure_bootstrap = false
+}
+
+plugins {
+    NodeAttestor "join_token" {
+        plugin_data {}
+    }
+    KeyManager "memory" {
+        plugin_data {}
+    }
+    WorkloadAttestor "unix" {
+        plugin_data {
+            discover_workload_path = true
+        }
+    }
+}
