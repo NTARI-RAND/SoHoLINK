@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,7 @@ type PortalServer struct {
 	orch          *orchestrator.Orchestrator
 	baseURL       string
 	templatePaths []string
+	limiter       *LoginRateLimiter
 }
 
 // onboardingData is the template data for provider_onboarding.html.
@@ -158,6 +160,7 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		baseURL:       baseURL,
 		templatePaths: paths,
 	}
+	ps.limiter = NewLoginRateLimiter(5, 15*time.Minute)
 
 	mux := http.NewServeMux()
 
@@ -314,6 +317,17 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
+	// Rate-limit by client IP.
+	ip, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+	if splitErr != nil {
+		ip = r.RemoteAddr
+	}
+	if !ps.limiter.Allow(ip) {
+		http.Error(w, "too many failed attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+
 	email    := strings.TrimSpace(r.FormValue("email"))
 	password := r.FormValue("password")
 	role     := r.FormValue("role")
@@ -350,14 +364,18 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		// Row not found or DB error — return 401 to avoid account enumeration.
+		ps.limiter.RecordFailure(ip)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		ps.limiter.RecordFailure(ip)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+
+	ps.limiter.Reset(ip)
 
 	token, err := ps.sm.CreateToken(SessionClaims{
 		UserID:    userID,
