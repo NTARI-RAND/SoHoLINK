@@ -105,11 +105,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    called with `Image: "alpine:latest"`. Real image must come from the job
    assignment payload in Phase 4.
 
-3. **`web/templates/consumer_job_status.html` — stub template**: Currently
-   renders only "stub". Needs real content: job ID, status, assigned node,
-   created time, and a "Cancel" button that POSTs to a cancellation route.
-
-4. **`cmd/orchestrator/main.go` — not yet implemented**: Entry point stub only.
+3. **`cmd/orchestrator/main.go` — not yet implemented**: Entry point stub only.
    Must wire `store.Connect`, `store.RunMigrations`, `identity.NewSource`,
    `api.New`, and graceful shutdown — same pattern as `cmd/portal/main.go`.
 
@@ -192,7 +188,7 @@ Default 50/50 split if unresolved after 5 business days.
 - Class D: NAS/storage devices — object storage, CDN
 
 ## Current Phase
-**Phase 4 — Control Plane & Agent Hardening** (starting)
+**Phase 5 — Orchestrator & Observability** (starting)
 
 ### Phase 3 — Marketplace Portal (complete)
 - Portal server with session middleware (HMAC tokens, cookie auth)
@@ -206,9 +202,18 @@ Default 50/50 split if unresolved after 5 business days.
 - `cmd/portal/main.go` wired and building clean
 - Migrations 001–006 all applied and passing integration test
 
-### Phase 4 goals
-- Wire `cmd/orchestrator/main.go` (control plane daemon entry point)
-- Replace plain `http.Client` in agent telemetry with mTLS SPIRE client
-- Real container image from job assignment payload in agent executor
-- Implement `consumer_job_status.html` with live job status, node info, cancel button
-- GitHub Actions CI pipeline (build + test on push)
+### Phase 4 — Control Plane & Agent Hardening (complete)
+- Migration 007: `node_heartbeat_events` table, `uptime_pct` column on nodes
+- Uptime scorer goroutine (`internal/store/uptime.go`) — runs every 10 min in portal daemon
+- Heartbeat event INSERT in `handleHeartbeat` (API server)
+- Prometheus metrics package (`internal/metrics/metrics.go`) — counters, gauges, histogram
+- Metrics endpoints on separate plain HTTP port (portal `:9090`, API `:9091`)
+- `HeartbeatsTotal`, `JobsSubmittedTotal`, `NodesOnlineGauge` wired at call sites
+- `RunNodeGauge` goroutine polling online node count every 60s
+- Ansible playbook, NGINX config, systemd units, and deployment README in `deploy/`
+- `consumer_job_status.html` fully implemented (job ID, status badge, node, created time)
+
+### Phase 5 goals
+- Wire `cmd/orchestrator/main.go` (control plane daemon entry point with mTLS, migrations, graceful shutdown)
+- Grafana dashboard definitions for SoHoLINK metrics (nodes online, active jobs, heartbeat rate, uptime distribution)
+- Token refresh / session extension for the portal (sliding window or explicit refresh endpoint)
