@@ -1,25 +1,3 @@
 soholink.org {
-	handle /globe {
-		rewrite * /ntarios-globe.html
-		root * /opt/soholink/ui/globe-interface
-		file_server
-	}
-
-	handle /api/* {
-		reverse_proxy localhost:8080
-	}
-
-	handle /ws/graph {
-		reverse_proxy localhost:8080 {
-			header_up Host {host}
-			header_up Upgrade {http.request.header.Upgrade}
-			header_up Connection {http.request.header.Connection}
-		}
-	}
-
-	handle {
-		root * /opt/soholink/mobile/flutter-app/build/web
-		try_files {path} /index.html
-		file_server
-	}
+    reverse_proxy portal:8080
 }
