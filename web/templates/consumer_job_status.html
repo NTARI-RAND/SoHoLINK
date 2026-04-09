@@ -15,13 +15,15 @@
     </div>
     <div class="stat-cell">
       <div class="stat-value">
-        {{if or (eq .Status "scheduled") (eq .Status "running")}}
-          <span class="badge badge-online">{{.Status}}</span>
-        {{else if eq .Status "pending"}}
-          <span class="badge badge-idle">{{.Status}}</span>
-        {{else}}
-          <span class="badge badge-offline">{{.Status}}</span>
-        {{end}}
+        <span id="job-status">
+          {{if or (eq .Status "scheduled") (eq .Status "running")}}
+            <span class="badge badge-online">{{.Status}}</span>
+          {{else if eq .Status "pending"}}
+            <span class="badge badge-idle">{{.Status}}</span>
+          {{else}}
+            <span class="badge badge-offline">{{.Status}}</span>
+          {{end}}
+        </span>
       </div>
       <div class="stat-label">Status</div>
     </div>
@@ -34,15 +36,34 @@
   <div class="card" style="margin-bottom:1.5rem;">
     <div class="section-label">Assigned Node</div>
     {{if .NodeID}}
-      <p style="font-family:'JetBrains Mono',monospace;font-size:0.9rem;">{{.NodeID}}</p>
+      <p id="job-node" style="font-family:'JetBrains Mono',monospace;font-size:0.9rem;">{{.NodeID}}</p>
     {{else}}
       <p style="color:var(--muted);">Pending assignment</p>
     {{end}}
   </div>
 
-  <p style="font-size:0.78rem;color:var(--muted);margin-bottom:1.5rem;">
-    This page does not auto-refresh. Reload to check for status updates.
-  </p>
+  <script>
+(function() {
+  var statusEl = document.getElementById('job-status');
+  var nodeEl   = document.getElementById('job-node');
+  var src = new EventSource('/consumer/job/{{.JobID}}/status-stream');
+  src.onmessage = function(e) {
+    var d = JSON.parse(e.data);
+    if (d.error) { src.close(); return; }
+    var badge = '';
+    if (d.status === 'scheduled' || d.status === 'running') {
+      badge = '<span class="badge badge-online">' + d.status + '</span>';
+    } else if (d.status === 'pending') {
+      badge = '<span class="badge badge-idle">' + d.status + '</span>';
+    } else {
+      badge = '<span class="badge badge-offline">' + d.status + '</span>';
+    }
+    statusEl.innerHTML = badge;
+    if (d.node_id && nodeEl) nodeEl.textContent = d.node_id;
+    if (d.status === 'completed' || d.status === 'failed') src.close();
+  };
+})();
+  </script>
 
   <a href="/consumer/marketplace" style="color:var(--accent);font-size:0.9rem;">
     &larr; Back to Marketplace

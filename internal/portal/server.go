@@ -183,6 +183,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleSubmitJob))))
 	mux.Handle("GET /consumer/job/{id}",
 		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleJobStatus))))
+	mux.Handle("GET /consumer/job/{id}/status-stream",
+		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleJobStatusStream))))
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeQueue))))
 	mux.Handle("POST /dispute/{id}/resolve",
@@ -716,6 +718,51 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	ps.renderTemplate(w, "consumer_job_status.html", data)
+}
+
+func (ps *PortalServer) handleJobStatusStream(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher.Flush()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			var status, nodeID string
+			err := ps.db.Pool.QueryRow(r.Context(),
+				`SELECT status, COALESCE(node_id::text, '') FROM jobs WHERE id = $1 AND consumer_id = $2`,
+				jobID, claims.UserID,
+			).Scan(&status, &nodeID)
+			if err != nil {
+				fmt.Fprintf(w, "data: {\"error\":\"job not found\"}\n\n")
+				flusher.Flush()
+				return
+			}
+
+			fmt.Fprintf(w, "data: {\"status\":%q,\"node_id\":%q}\n\n", status, nodeID)
+			flusher.Flush()
+
+			if status == "completed" || status == "failed" {
+				return
+			}
+		}
+	}
 }
 
 func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Request) {
