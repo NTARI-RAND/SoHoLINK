@@ -38,6 +38,17 @@
       <span>&copy; 2026 Network Theory Applied Research Institute</span>
     </div>
   </footer>
+  <script>
+    (function () {
+      var INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+      function refresh() {
+        if (document.visibilityState === 'visible') {
+          fetch('/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+        }
+      }
+      setInterval(refresh, INTERVAL_MS);
+    })();
+  </script>
 </body>
 </html>
 {{end}}

@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -154,6 +155,10 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
 
+	// Token refresh — any authenticated user, no role restriction.
+	mux.Handle("POST /auth/refresh",
+		RequireAuth(sm, http.HandlerFunc(ps.handleRefresh)))
+
 	// Protected routes — auth middleware wraps role middleware.
 	mux.Handle("GET /provider/dashboard",
 		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderDashboard))))
@@ -248,6 +253,41 @@ func (ps *PortalServer) StartMetrics(ctx context.Context) error {
 // Shutdown gracefully drains active connections within the context deadline.
 func (ps *PortalServer) Shutdown(ctx context.Context) error {
 	return ps.srv.Shutdown(ctx)
+}
+
+func (ps *PortalServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if claims.ExpiresAt-time.Now().Unix() >= 300 {
+		// More than 5 minutes remaining — no refresh needed.
+		json.NewEncoder(w).Encode(map[string]bool{"refreshed": false}) //nolint:errcheck
+		return
+	}
+
+	token, err := ps.sm.CreateToken(SessionClaims{
+		UserID:    claims.UserID,
+		Email:     claims.Email,
+		Role:      claims.Role,
+		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+	})
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   900,
+	})
+
+	json.NewEncoder(w).Encode(map[string]bool{"refreshed": true}) //nolint:errcheck
 }
 
 func (ps *PortalServer) handleIndex(w http.ResponseWriter, r *http.Request) {
