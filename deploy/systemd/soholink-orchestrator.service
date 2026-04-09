@@ -1,0 +1,26 @@
+[Unit]
+Description=SoHoLINK Orchestrator Daemon
+Documentation=https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=soholink
+Group=soholink
+EnvironmentFile=/etc/soholink/orchestrator.env
+ExecStart=/opt/soholink/bin/orchestrator
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=soholink-orchestrator
+
+# Harden the service.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/soholink
+
+[Install]
+WantedBy=multi-user.target

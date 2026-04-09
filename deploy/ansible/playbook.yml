@@ -114,6 +114,16 @@
         PATH: /usr/local/go/bin:/usr/bin:/bin
       become_user: soholink
 
+    - name: Build orchestrator binary
+      command: /usr/local/go/bin/go build -o /opt/soholink/bin/orchestrator ./cmd/orchestrator/
+      args:
+        chdir: /opt/soholink/src
+      environment:
+        HOME: /opt/soholink
+        GOPATH: /opt/soholink/go
+        PATH: /usr/local/go/bin:/usr/bin:/bin
+      become_user: soholink
+
     # ── Web assets ────────────────────────────────────────────────────────────
     - name: Sync HTML templates
       synchronize:
@@ -167,9 +177,24 @@
       notify:
         - Reload systemd
 
+    - name: Install orchestrator systemd unit
+      copy:
+        src: ../systemd/soholink-orchestrator.service
+        dest: /etc/systemd/system/soholink-orchestrator.service
+        mode: '0644'
+      notify:
+        - Reload systemd
+        - Restart orchestrator
+
     - name: Enable portal service
       systemd:
         name: soholink-portal
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Enable orchestrator service
+      systemd:
+        name: soholink-orchestrator
         enabled: yes
         daemon_reload: yes
 
@@ -217,3 +242,9 @@
       systemd:
         name: nginx
         state: reloaded
+
+    - name: Restart orchestrator
+      systemd:
+        name: soholink-orchestrator
+        state: restarted
+        daemon_reload: yes

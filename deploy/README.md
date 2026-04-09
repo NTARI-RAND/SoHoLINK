@@ -42,6 +42,22 @@ Required variables:
 
 ---
 
+## Step 2b — Create the orchestrator secrets file
+
+```bash
+sudo tee /etc/soholink/orchestrator.env > /dev/null <<EOF
+DATABASE_URL=<same as portal>
+ORCHESTRATOR_TOKEN_SECRET=<same as portal>
+API_ADDR=:8443
+METRICS_ADDR=:9091
+SPIFFE_ENDPOINT_SOCKET=unix:///tmp/spire-agent/public/api.sock
+EOF
+sudo chmod 640 /etc/soholink/orchestrator.env
+sudo chown root:soholink /etc/soholink/orchestrator.env
+```
+
+---
+
 ## Step 3 — Create the agent secrets file
 
 ```bash
@@ -83,7 +99,9 @@ certbot --nginx -d soholink.ntari.org
 
 ```bash
 systemctl status soholink-portal
+systemctl status soholink-orchestrator
 curl -s http://localhost:9090/metrics | head -20
+curl -s http://localhost:9091/metrics | head -20
 curl -I https://soholink.ntari.org
 ```
 
