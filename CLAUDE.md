@@ -192,7 +192,7 @@ Default 50/50 split if unresolved after 5 business days.
 - Class D: NAS/storage devices — object storage, CDN
 
 ## Current Phase
-**Phase 6 — Metering, Payouts & Provider Experience** (starting)
+**Phase 7 — Performance, Automation & Real-Time UX** (starting)
 
 ### Phase 3 — Marketplace Portal (complete)
 - Portal server with session middleware (HMAC tokens, cookie auth)
@@ -225,15 +225,21 @@ Default 50/50 split if unresolved after 5 business days.
 - Orchestrator systemd unit, secrets file, and Ansible tasks added to `deploy/`
 - Grafana import instructions added to `deploy/README.md`
 
-### Phase 6 — Metering, Payouts & Provider Experience (in progress)
-
-Completed:
+### Phase 6 — Metering, Payouts & Provider Experience (complete)
 - Migration 008: `job_metering` table, `started_at` / `completed_at` columns on jobs
 - `ComputeMetering` in `internal/store/metering.go` — resource consumption and earnings calculation
 - Job lifecycle wired: `scheduled` → `running` (on agent poll) → `completed` (on agent signal via `POST /jobs/{id}/complete`)
 - Provider dashboard shows real earnings from `job_metering` (this month, pending payout, all time, total jobs)
+- Migration 009: `payout_released_at TIMESTAMPTZ` on `job_metering` — payout idempotency column
+- `EligiblePayouts` in `internal/store/payouts.go` — selects completed jobs past 24-hour hold with no open dispute and unreleased payout
+- `RunPayoutReleaser` in `internal/store/payout_runner.go` — goroutine calling `TriggerPayout` then marking `payout_released_at`; wired into `cmd/portal/main.go` on 1-hour interval
+- Integration test `TestEligiblePayouts` in `internal/store/payouts_test.go`
+- Marketplace query filters out nodes below per-class uptime thresholds (A ≥95%, B ≥85%, C ≥70%, D ≥80%)
+- Provider provisioning page shows uptime status card: average uptime %, eligible class badges, threshold legend
+- `LoginRateLimiter` in `internal/portal/ratelimit.go` — `sync.Map`-backed, 5 failures per 15-minute window; wired into `handleLogin` with `RecordFailure` / `Reset` on all credential paths
 
-Remaining:
-- **Payout automation** — `TriggerPayout` exists but no UI or automated trigger for the 24-hour hold release; build the release scheduler and provider-facing payout history
-- **Node reliability tiers** — use `uptime_pct` to gate which node classes a provider can list; enforce minimum uptime thresholds per class
-- **Rate limiting on auth endpoints** — brute-force protection on `POST /login`
+### Phase 7 — Performance, Automation & Real-Time UX (planned)
+- **Load testing and performance profiling** — benchmark portal and API under concurrent load; identify and address bottlenecks in the job submission and metering paths
+- **SPIRE agent deployment automation** — Ansible tasks to install, configure, and register the SPIRE agent on provider nodes; automate SVID issuance and rotation
+- **WebSocket support for real-time job status** — replace the poll-on-load pattern in `consumer_job_status.html` with a server-sent events or WebSocket feed so job state updates push to the browser without a page reload
+- **Mobile-optimized portal views for Smart TV browsers** — audit and harden portal CSS/HTML for Tizen, webOS, and AndroidTV embedded browsers; ensure D-pad navigability and large-text legibility at TV viewing distances
