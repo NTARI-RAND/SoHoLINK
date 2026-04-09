@@ -49,6 +49,7 @@ func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator
 	mux.HandleFunc("POST /nodes/heartbeat", handleHeartbeat(db, registry))
 	mux.HandleFunc("GET /nodes/jobs", handleGetJobs(db))
 	mux.HandleFunc("POST /jobs/{id}/telemetry", handleTelemetry(db))
+	mux.HandleFunc("POST /jobs/{id}/complete", handleCompleteJob(db))
 }
 
 func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.HandlerFunc {
@@ -179,6 +180,7 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		defer rows.Close()
 
 		jobs := []jobEntry{}
+		var jobIDs []string
 		for rows.Next() {
 			var j jobEntry
 			if err := rows.Scan(&j.JobID, &j.JobToken); err != nil {
@@ -186,14 +188,81 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 				return
 			}
 			jobs = append(jobs, j)
+			jobIDs = append(jobIDs, j.JobID)
 		}
 		if err := rows.Err(); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 
+		if len(jobIDs) > 0 {
+			_, err = db.Pool.Exec(r.Context(),
+				`UPDATE jobs SET started_at = NOW(), status = 'running'::job_status, updated_at = NOW()
+				 WHERE id = ANY($1) AND started_at IS NULL`,
+				jobIDs,
+			)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(jobs) //nolint:errcheck
+	}
+}
+
+func handleCompleteJob(db *store.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := r.PathValue("id")
+		if jobID == "" {
+			writeError(w, http.StatusBadRequest, "job ID required")
+			return
+		}
+
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+
+		var nodeSpiffeID string
+		err := db.Pool.QueryRow(r.Context(), `
+			SELECT COALESCE(n.spiffe_id, '')
+			FROM jobs j
+			INNER JOIN nodes n ON j.node_id = n.id
+			WHERE j.id = $1`,
+			jobID,
+		).Scan(&nodeSpiffeID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		if nodeSpiffeID != "" && spiffeID.String() != nodeSpiffeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
+			return
+		}
+
+		tag, err := db.Pool.Exec(r.Context(),
+			`UPDATE jobs SET status = 'completed'::job_status, completed_at = NOW(), updated_at = NOW()
+			 WHERE id = $1 AND status = 'running'::job_status`,
+			jobID,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			writeError(w, http.StatusConflict, "job is not in running state")
+			return
+		}
+
+		if err := store.ComputeMetering(r.Context(), db, jobID); err != nil {
+			log.Printf("ComputeMetering job=%s error=%v", jobID, err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"completed": true}) //nolint:errcheck
 	}
 }
 
