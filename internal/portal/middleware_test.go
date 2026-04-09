@@ -2,14 +2,25 @@ package portal
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
 
+func newTestSM(t *testing.T) *SessionManager {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	return NewSessionManager(priv)
+}
+
 func TestCreateVerifyToken_RoundTrip(t *testing.T) {
-	sm := NewSessionManager([]byte("test-secret"))
+	sm := newTestSM(t)
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
@@ -41,7 +52,7 @@ func TestCreateVerifyToken_RoundTrip(t *testing.T) {
 }
 
 func TestVerifyToken_TamperedSignature(t *testing.T) {
-	sm := NewSessionManager([]byte("test-secret"))
+	sm := newTestSM(t)
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
@@ -63,7 +74,7 @@ func TestVerifyToken_TamperedSignature(t *testing.T) {
 }
 
 func TestVerifyToken_ExpiredToken(t *testing.T) {
-	sm := NewSessionManager([]byte("test-secret"))
+	sm := newTestSM(t)
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
@@ -83,7 +94,7 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 }
 
 func TestVerifyToken_MalformedToken(t *testing.T) {
-	sm := NewSessionManager([]byte("test-secret"))
+	sm := newTestSM(t)
 
 	_, err := sm.VerifyToken("nodotinthisstring")
 	if err == nil {
@@ -92,7 +103,7 @@ func TestVerifyToken_MalformedToken(t *testing.T) {
 }
 
 func TestRequireAuth_RedirectsWhenNoCookie(t *testing.T) {
-	sm := NewSessionManager([]byte("test-secret"))
+	sm := newTestSM(t)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

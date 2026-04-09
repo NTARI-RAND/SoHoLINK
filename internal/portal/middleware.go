@@ -2,8 +2,7 @@ package portal
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
+	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -22,27 +21,30 @@ type SessionClaims struct {
 
 type contextKey struct{}
 
-// SessionManager creates and verifies HMAC-signed session tokens.
+// SessionManager creates and verifies Ed25519-signed session tokens.
 type SessionManager struct {
-	secret []byte
+	privateKey ed25519.PrivateKey
+	publicKey  ed25519.PublicKey
 }
 
-// NewSessionManager constructs a SessionManager with the given signing secret.
-func NewSessionManager(secret []byte) *SessionManager {
-	return &SessionManager{secret: secret}
+// NewSessionManager constructs a SessionManager with the given Ed25519 private key.
+// The public key is derived from the private key.
+func NewSessionManager(privateKey ed25519.PrivateKey) *SessionManager {
+	return &SessionManager{
+		privateKey: privateKey,
+		publicKey:  privateKey.Public().(ed25519.PublicKey),
+	}
 }
 
 // CreateToken builds a signed session token for claims. The token format is:
 //
-//	base64RawURL(userID|email|role|expiresAt) . base64RawURL(HMAC-SHA256(payload, secret))
+//	base64RawURL(userID|email|role|expiresAt) . base64RawURL(Ed25519Signature)
 func (sm *SessionManager) CreateToken(claims SessionClaims) (string, error) {
 	raw := claims.UserID + "|" + claims.Email + "|" + claims.Role + "|" +
 		strconv.FormatInt(claims.ExpiresAt, 10)
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(raw))
-	mac := hmac.New(sha256.New, sm.secret)
-	mac.Write([]byte(encoded))
-	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	return encoded + "." + sig, nil
+	sig := ed25519.Sign(sm.privateKey, []byte(encoded))
+	return encoded + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
 // VerifyToken parses and validates a session token, returning the embedded claims.
@@ -59,9 +61,7 @@ func (sm *SessionManager) VerifyToken(token string) (SessionClaims, error) {
 	if err != nil {
 		return SessionClaims{}, fmt.Errorf("verify token: decode signature: %w", err)
 	}
-	mac := hmac.New(sha256.New, sm.secret)
-	mac.Write([]byte(encoded))
-	if !hmac.Equal(actualSig, mac.Sum(nil)) {
+	if !ed25519.Verify(sm.publicKey, []byte(encoded), actualSig) {
 		return SessionClaims{}, fmt.Errorf("verify token: invalid signature")
 	}
 

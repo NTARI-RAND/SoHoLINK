@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"encoding/json"
+	"crypto/ed25519"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -134,7 +135,7 @@ type JobStatusData struct {
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server. metricsAddr is the address for the plain HTTP
 // metrics server (e.g. ":9090") — not wrapped with session auth.
-func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string) (*PortalServer, error) {
+func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -151,7 +152,7 @@ func New(db *store.DB, addr string, sessionSecret []byte, templatesDir string, p
 		return nil, fmt.Errorf("new portal: no templates found in %s", templatesDir)
 	}
 
-	sm := NewSessionManager(sessionSecret)
+	sm := NewSessionManager(privateKey)
 	ps := &PortalServer{
 		db:            db,
 		sm:            sm,

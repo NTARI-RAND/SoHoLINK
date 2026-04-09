@@ -23,7 +23,7 @@ The Ansible playbook writes non-secret env vars automatically, but secrets must 
 sudo mkdir -p /etc/soholink
 sudo tee /etc/soholink/portal.env > /dev/null <<EOF
 DATABASE_URL=postgres://user:password@localhost:5432/soholink?sslmode=disable
-SESSION_SECRET=<64 hex chars — run: openssl rand -hex 32>
+SESSION_PRIVATE_KEY=<128 hex chars — see generation command below>
 STRIPE_SECRET_KEY=sk_live_...
 ORCHESTRATOR_TOKEN_SECRET=<64 hex chars — run: openssl rand -hex 32>
 EOF
@@ -36,9 +36,19 @@ Required variables:
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `SESSION_SECRET` | 32 random bytes as hex — `openssl rand -hex 32` |
+| `SESSION_PRIVATE_KEY` | Ed25519 private key, 64 bytes as 128 hex chars — generate with the command below |
 | `STRIPE_SECRET_KEY` | Stripe live secret key (`sk_live_...`) — also required for payout release (`store.RunPayoutReleaser`) |
 | `ORCHESTRATOR_TOKEN_SECRET` | 32 random bytes as hex — `openssl rand -hex 32` |
+
+To generate `SESSION_PRIVATE_KEY` (seed \|\| public key, 128 hex chars):
+
+```bash
+KEY=$(mktemp); openssl genpkey -algorithm ed25519 -out $KEY 2>/dev/null; \
+  printf "%s%s\n" \
+    "$(openssl pkey -in $KEY -outform DER | tail -c 32 | xxd -p -c 32)" \
+    "$(openssl pkey -in $KEY -pubout -outform DER | tail -c 32 | xxd -p -c 32)"; \
+  rm $KEY
+```
 
 ---
 

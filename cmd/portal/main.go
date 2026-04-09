@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"log"
@@ -36,17 +37,30 @@ func mustHex(key string) []byte {
 	return b
 }
 
+func mustEd25519Key(key string) ed25519.PrivateKey {
+	raw := mustEnv(key)
+	b, err := hex.DecodeString(raw)
+	if err != nil {
+		log.Fatalf("%s: invalid hex: %v", key, err)
+	}
+	if len(b) != ed25519.PrivateKeySize {
+		log.Fatalf("%s: must be exactly %d bytes (%d hex chars), got %d bytes",
+			key, ed25519.PrivateKeySize, ed25519.PrivateKeySize*2, len(b))
+	}
+	return ed25519.PrivateKey(b)
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	dbURL         := mustEnv("DATABASE_URL")
-	sessionSecret := mustHex("SESSION_SECRET")
-	stripeKey     := mustEnv("STRIPE_SECRET_KEY")
-	addr          := mustEnv("PORTAL_ADDR")
-	baseURL       := mustEnv("PORTAL_BASE_URL")
-	templatesDir  := mustEnv("PORTAL_TEMPLATES_DIR")
-	tokenSecret   := mustHex("ORCHESTRATOR_TOKEN_SECRET")
-	metricsAddr   := mustEnv("METRICS_ADDR")
+	dbURL        := mustEnv("DATABASE_URL")
+	sessionPrivKey := mustEd25519Key("SESSION_PRIVATE_KEY")
+	stripeKey    := mustEnv("STRIPE_SECRET_KEY")
+	addr         := mustEnv("PORTAL_ADDR")
+	baseURL      := mustEnv("PORTAL_BASE_URL")
+	templatesDir := mustEnv("PORTAL_TEMPLATES_DIR")
+	tokenSecret  := mustHex("ORCHESTRATOR_TOKEN_SECRET")
+	metricsAddr  := mustEnv("METRICS_ADDR")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -68,7 +82,7 @@ func main() {
 	registry := orchestrator.NewNodeRegistry()
 	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
 
-	ps, err := portal.New(db, addr, sessionSecret, templatesDir, paymentClient, baseURL, orch, metricsAddr)
+	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr)
 	if err != nil {
 		slog.Error("portal init failed", "error", err)
 		os.Exit(1)
