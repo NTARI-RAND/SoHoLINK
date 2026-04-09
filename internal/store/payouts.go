@@ -26,7 +26,8 @@ func EligiblePayouts(ctx context.Context, db *DB) ([]PayoutCandidate, error) {
 		  AND j.amount_cents > 0
 		  AND p.stripe_account_id IS NOT NULL
 		  AND d.id IS NULL
-		  AND jm.contributor_earned_cents > 0`)
+		  AND jm.contributor_earned_cents > 0
+		  AND jm.payout_released_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
