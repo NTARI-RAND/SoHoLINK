@@ -23,9 +23,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate --protocol http2 run bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4
+    volumes:
+      - C:/Users/Jodson Graves/.cloudflared:/etc/cloudflared
 
 volumes:
   caddy_data:
