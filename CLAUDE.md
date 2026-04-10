@@ -242,12 +242,11 @@ Default 50/50 split if unresolved after 5 business days.
 - SSE job status streaming: `GET /consumer/job/{id}/status-stream` polls DB every 2s, pushes `text/event-stream` events; `consumer_job_status.html` updates badge and node ID live; `EventSource` feature-guarded with static fallback for Tizen < 4
 - Smart TV / 10-foot UI: TV media query (`min-width:1280px` + `hover:none`/`pointer:coarse`) scales base font to 20px, enlarges buttons, inputs, stat values, nav; universal `:focus-visible` outline for D-pad navigation
 
-### Phase 8 — Windows/NTARIHQ Production Deployment (planned)
-**Goal:** get soholink.org live on NTARIHQ (Windows host, Docker installed).
-
-Plan:
-- **`docker-compose.yml`** at repo root — portal + Caddy services, connects to existing postgres container on the host network
-- **`Caddyfile`** — automatic HTTPS via Let's Encrypt for soholink.org; reverse proxy to portal container
-- **Port forwarding** — 80/443 forwarded from Spectrum router to `192.168.1.153` (NTARIHQ LAN IP)
-- **DNS** — WAN IP → A record for `soholink.org` (and `www.soholink.org`)
-- **PowerShell env setup script** — generates `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`, writes `portal.env` secrets file for Docker Compose
+### Phase 8 — Windows/NTARIHQ Production Deployment (complete)
+soholink.org live on NTARIHQ via Cloudflare Tunnel (soholink-prod bb7b7f0d), Docker Compose stack: portal + caddy + cloudflared. Ingress config pushed via Cloudflare API using cert.pem token.
+- **`docker-compose.yml`** — portal + Caddy + cloudflared services; cloudflared mounts `~/.cloudflared` volume, runs with `--protocol http2`
+- **`Dockerfile.portal`** — multi-stage Go 1.25 build; final image copies binary + `web/` templates
+- **`Caddyfile`** — reverse proxy to `portal:8080` for `soholink.org`
+- **`.env`** — `DATABASE_URL` pointing to postgres bridge IP, Ed25519 `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`; gitignored
+- **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`); ingress config managed via `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` API (local `config.yml` overridden by remote management in cloudflared 2026.x); `cert.pem` contains embedded `apiToken` for API auth
+- **DNS** — CNAME `soholink.org` → `bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4.cfargotunnel.com` (proxied)
