@@ -38,6 +38,20 @@ Do not reference it. Do not continue or fix it.
 | Auto-update | Watchtower |
 | CI/CD | GitHub Actions |
 
+## Architectural Philosophy — Janus Facing Application
+SoHoLINK is a Janus Facing Application (JFA) as defined by NTARI document P3-011.
+Reference: https://www.ntari.org/post/janusfacingapplications
+
+Key principles implemented here:
+- Single participant identity — one account, simultaneous producer/consumer roles
+- No information asymmetry — pricing, metering, and earnings visible to all participants
+- Governance layer architecturally separated — admin portal runs on a separate local-only
+  port (8090), never exposed publicly, not hidden behind role flags on the public portal
+- AGPL-3 licensed — permanent commons, prevents enclosure
+
+The participants table (migration 011) replaces the separate providers/consumers tables
+as the concrete implementation of unified identity.
+
 ## Repository Structure (current state)
 ```
 cmd/
