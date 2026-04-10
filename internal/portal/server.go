@@ -172,6 +172,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
+	mux.HandleFunc("GET /register", ps.handleRegisterPage)
+	mux.HandleFunc("POST /register", ps.handleRegister)
 	mux.Handle("GET /static/",
 		http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(templatesDir, "..", "static")))))
 
@@ -361,6 +363,89 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ps.limiter.Reset(ip)
+
+	token, err := ps.sm.CreateToken(SessionClaims{
+		UserID:    userID,
+		Email:     email,
+		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
+	})
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   900,
+	})
+
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+}
+
+// registerData is the template data for register.html.
+type registerData struct {
+	Error    string
+	Email    string
+	SOHOName string
+}
+
+func (ps *PortalServer) handleRegisterPage(w http.ResponseWriter, r *http.Request) {
+	ps.renderTemplate(w, "register.html", registerData{})
+}
+
+func (ps *PortalServer) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	email    := strings.TrimSpace(r.FormValue("email"))
+	password := r.FormValue("password")
+	sohoName := strings.TrimSpace(r.FormValue("soho_name"))
+
+	re := registerData{Email: email, SOHOName: sohoName}
+
+	if email == "" || sohoName == "" {
+		re.Error = "all fields are required"
+		ps.renderTemplate(w, "register.html", re)
+		return
+	}
+	if len(password) < 8 {
+		re.Error = "password must be at least 8 characters"
+		ps.renderTemplate(w, "register.html", re)
+		return
+	}
+
+	// Check email not already taken.
+	var existing string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT id FROM participants WHERE email = $1`, email,
+	).Scan(&existing)
+	if err == nil {
+		re.Error = "email already registered"
+		ps.renderTemplate(w, "register.html", re)
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	var userID string
+	if err := ps.db.Pool.QueryRow(r.Context(),
+		`INSERT INTO participants (email, password_hash, display_name, soho_name)
+		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		email, string(hash), sohoName, sohoName,
+	).Scan(&userID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	token, err := ps.sm.CreateToken(SessionClaims{
 		UserID:    userID,

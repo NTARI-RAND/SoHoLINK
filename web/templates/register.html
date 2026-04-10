@@ -1,0 +1,45 @@
+{{define "content"}}
+<div class="container">
+  <div class="login-wrap">
+    <div class="card">
+      <div class="login-head">
+        <div class="page-header-label">Network</div>
+        <h2>Join the Network</h2>
+      </div>
+      {{if .Error}}
+      <p style="color:#e05c5c; margin-bottom:1rem; font-size:0.9rem;">{{.Error}}</p>
+      {{end}}
+      <form method="POST" action="/register">
+        <div class="form-group">
+          <label for="email">Email address</label>
+          <input type="email" id="email" name="email"
+                 autocomplete="email" required placeholder="you@example.com"
+                 value="{{.Email}}">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password"
+                 autocomplete="new-password" required placeholder="••••••••"
+                 minlength="8">
+        </div>
+        <div class="form-group">
+          <label for="soho_name">SOHO Name</label>
+          <input type="text" id="soho_name" name="soho_name"
+                 required placeholder="e.g. Home Office, Lakeside Studio"
+                 value="{{.SOHOName}}">
+          <p style="margin-top:0.35rem; font-size:0.8rem; opacity:0.6;">
+            The name of your home or office network
+          </p>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">
+          Join the Network &rarr;
+        </button>
+      </form>
+      <p style="text-align:center; margin-top:1.5rem; font-size:0.9rem;">
+        Already have an account? <a href="/login">Login</a>
+      </p>
+    </div>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}
