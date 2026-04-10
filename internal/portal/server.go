@@ -172,6 +172,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
+	mux.Handle("GET /static/",
+		http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(templatesDir, "..", "static")))))
 
 	// Token refresh — any authenticated user.
 	mux.Handle("POST /auth/refresh",
