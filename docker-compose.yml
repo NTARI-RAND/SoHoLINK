@@ -7,18 +7,12 @@ services:
     env_file: .env
     expose:
       - "8080"
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-    depends_on:
-      - portal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -26,6 +20,6 @@ services:
     command: tunnel --no-autoupdate --protocol http2 run bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4
     volumes:
       - C:/Users/Jodson Graves/.cloudflared:/etc/cloudflared
-
-volumes:
-  caddy_data:
+    depends_on:
+      portal:
+        condition: service_healthy
