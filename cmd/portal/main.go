@@ -59,8 +59,9 @@ func main() {
 	addr         := mustEnv("PORTAL_ADDR")
 	baseURL      := mustEnv("PORTAL_BASE_URL")
 	templatesDir := mustEnv("PORTAL_TEMPLATES_DIR")
-	tokenSecret  := mustHex("ORCHESTRATOR_TOKEN_SECRET")
-	metricsAddr  := mustEnv("METRICS_ADDR")
+	tokenSecret     := mustHex("ORCHESTRATOR_TOKEN_SECRET")
+	metricsAddr     := mustEnv("METRICS_ADDR")
+	webhookSecret   := mustEnv("STRIPE_WEBHOOK_SECRET")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -82,7 +83,7 @@ func main() {
 	registry := orchestrator.NewNodeRegistry()
 	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
 
-	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr)
+	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr, webhookSecret)
 	if err != nil {
 		slog.Error("portal init failed", "error", err)
 		os.Exit(1)

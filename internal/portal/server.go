@@ -33,7 +33,8 @@ type PortalServer struct {
 	orch          *orchestrator.Orchestrator
 	baseURL       string
 	templatePaths []string
-	limiter       *LoginRateLimiter
+	limiter        *LoginRateLimiter
+	webhookSecret  string
 }
 
 // onboardingData is the template data for provider_onboarding.html.
@@ -135,7 +136,7 @@ type JobStatusData struct {
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server. metricsAddr is the address for the plain HTTP
 // metrics server (e.g. ":9090") — not wrapped with session auth.
-func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string) (*PortalServer, error) {
+func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string, webhookSecret string) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -162,6 +163,7 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		templatePaths: paths,
 	}
 	ps.limiter = NewLoginRateLimiter(5, 15*time.Minute)
+	ps.webhookSecret = webhookSecret
 
 	mux := http.NewServeMux()
 
@@ -169,6 +171,7 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux.HandleFunc("GET /", ps.handleIndex)
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
+	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
 
 	// Token refresh — any authenticated user, no role restriction.
 	mux.Handle("POST /auth/refresh",
