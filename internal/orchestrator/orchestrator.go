@@ -108,7 +108,7 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO jobs (
-			id, consumer_id, node_id, workload_type, status,
+			id, participant_id, node_id, workload_type, status,
 			country_constraint, cpu_cores, ram_mb, storage_gb, gpu_required
 		) VALUES (
 			$1, $2, $3, $4::workload_type, 'pending'::job_status,
@@ -137,8 +137,8 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 	var stripeAccountID string
 	err = tx.QueryRow(ctx, `
 		SELECT COALESCE(p.stripe_account_id, '')
-		FROM providers p
-		INNER JOIN nodes n ON n.provider_id = p.id
+		FROM participants p
+		INNER JOIN nodes n ON n.participant_id = p.id
 		WHERE n.id = $1`,
 		node.NodeID,
 	).Scan(&stripeAccountID)

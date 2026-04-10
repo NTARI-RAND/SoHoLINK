@@ -173,38 +173,37 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux.HandleFunc("POST /login", ps.handleLogin)
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
 
-	// Token refresh — any authenticated user, no role restriction.
+	// Token refresh — any authenticated user.
 	mux.Handle("POST /auth/refresh",
 		RequireAuth(sm, http.HandlerFunc(ps.handleRefresh)))
 
-	// Protected routes — auth middleware wraps role middleware.
-	mux.Handle("GET /provider/dashboard",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderDashboard))))
+	// Protected routes.
+	mux.Handle("GET /dashboard",
+		RequireAuth(sm, http.HandlerFunc(ps.handleDashboard)))
 	mux.Handle("GET /consumer/marketplace",
-		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleConsumerMarketplace))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerMarketplace)))
 	mux.Handle("POST /consumer/job",
-		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleSubmitJob))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleSubmitJob)))
 	mux.Handle("GET /consumer/job/{id}",
-		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleJobStatus))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleJobStatus)))
 	mux.Handle("GET /consumer/job/{id}/status-stream",
-		RequireAuth(sm, RequireRole("consumer", http.HandlerFunc(ps.handleJobStatusStream))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleJobStatusStream)))
 	mux.Handle("GET /dispute/queue",
-		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeQueue))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleDisputeQueue)))
 	mux.Handle("POST /dispute/{id}/resolve",
-		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeResolve))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleDisputeResolve)))
 	mux.Handle("POST /dispute/{id}/review",
-		RequireAuth(sm, RequireRole("ntari_staff", http.HandlerFunc(ps.handleDisputeReview))))
-
+		RequireAuth(sm, http.HandlerFunc(ps.handleDisputeReview)))
 	mux.Handle("GET /provider/onboarding",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingPage))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleProviderOnboardingPage)))
 	mux.Handle("POST /provider/onboarding",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboarding))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleProviderOnboarding)))
 	mux.Handle("GET /provider/onboarding/return",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderOnboardingReturn))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleProviderOnboardingReturn)))
 	mux.Handle("GET /provider/provision",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleProviderProvision))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleProviderProvision)))
 	mux.Handle("POST /provider/provision/profile",
-		RequireAuth(sm, RequireRole("provider", http.HandlerFunc(ps.handleAddProfile))))
+		RequireAuth(sm, http.HandlerFunc(ps.handleAddProfile)))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -289,7 +288,6 @@ func (ps *PortalServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	token, err := ps.sm.CreateToken(SessionClaims{
 		UserID:    claims.UserID,
 		Email:     claims.Email,
-		Role:      claims.Role,
 		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 	})
 	if err != nil {
@@ -336,38 +334,17 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	email    := strings.TrimSpace(r.FormValue("email"))
 	password := r.FormValue("password")
-	role     := r.FormValue("role")
 
 	if email == "" || password == "" {
 		http.Error(w, "email and password are required", http.StatusBadRequest)
 		return
 	}
-	validRoles := map[string]bool{"provider": true, "consumer": true, "ntari_staff": true}
-	if !validRoles[role] {
-		http.Error(w, "invalid role", http.StatusBadRequest)
-		return
-	}
 
 	var userID, hash string
-	var err error
-
-	switch role {
-	case "provider":
-		err = ps.db.Pool.QueryRow(r.Context(),
-			`SELECT id, COALESCE(password_hash, '') FROM providers WHERE email = $1`,
-			email,
-		).Scan(&userID, &hash)
-	case "ntari_staff":
-		err = ps.db.Pool.QueryRow(r.Context(),
-			`SELECT id, COALESCE(password_hash, '') FROM providers WHERE email = $1 AND is_staff = TRUE`,
-			email,
-		).Scan(&userID, &hash)
-	case "consumer":
-		err = ps.db.Pool.QueryRow(r.Context(),
-			`SELECT id, COALESCE(password_hash, '') FROM consumers WHERE email = $1`,
-			email,
-		).Scan(&userID, &hash)
-	}
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT id, COALESCE(password_hash, '') FROM participants WHERE email = $1`,
+		email,
+	).Scan(&userID, &hash)
 	if err != nil {
 		// Row not found or DB error — return 401 to avoid account enumeration.
 		ps.limiter.RecordFailure(ip)
@@ -386,7 +363,6 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	token, err := ps.sm.CreateToken(SessionClaims{
 		UserID:    userID,
 		Email:     email,
-		Role:      role,
 		ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 	})
 	if err != nil {
@@ -404,17 +380,10 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   900,
 	})
 
-	switch role {
-	case "provider":
-		http.Redirect(w, r, "/provider/dashboard", http.StatusSeeOther)
-	case "consumer":
-		http.Redirect(w, r, "/consumer/marketplace", http.StatusSeeOther)
-	case "ntari_staff":
-		http.Redirect(w, r, "/dispute/queue", http.StatusSeeOther)
-	}
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 
-func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.Request) {
+func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
 
 	var totalCents, thisMonthCents, totalJobs int64
@@ -424,8 +393,8 @@ func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.R
 		    COALESCE(SUM(CASE WHEN DATE_TRUNC('month', jm.computed_at) = DATE_TRUNC('month', NOW())
 		                 THEN jm.contributor_earned_cents ELSE 0 END), 0) AS this_month_cents,
 		    COUNT(DISTINCT j.id) AS total_jobs
-		FROM providers p
-		JOIN nodes n ON n.provider_id = p.id
+		FROM participants p
+		JOIN nodes n ON n.participant_id = p.id
 		JOIN jobs j ON j.node_id = n.id
 		JOIN job_metering jm ON jm.job_id = j.id
 		WHERE p.id = $1`,
@@ -439,8 +408,8 @@ func (ps *PortalServer) handleProviderDashboard(w http.ResponseWriter, r *http.R
 	var pendingCents int64
 	err = ps.db.Pool.QueryRow(r.Context(), `
 		SELECT COALESCE(SUM(jm.contributor_earned_cents), 0)
-		FROM providers p
-		JOIN nodes n ON n.provider_id = p.id
+		FROM participants p
+		JOIN nodes n ON n.participant_id = p.id
 		JOIN jobs j ON j.node_id = n.id
 		JOIN job_metering jm ON jm.job_id = j.id
 		WHERE p.id = $1
@@ -624,7 +593,7 @@ func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Reques
 		     n.node_class, n.country_code
 		 FROM disputes d
 		 JOIN jobs j ON j.id = d.job_id
-		 JOIN consumers c ON c.id = d.consumer_id
+		 JOIN participants c ON c.id = d.participant_id
 		 JOIN nodes n ON n.id = d.node_id
 		 WHERE d.status IN ('open', 'under_review')
 		 ORDER BY d.created_at ASC`,
@@ -712,7 +681,7 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 
 	err := ps.db.Pool.QueryRow(r.Context(),
 		`SELECT status, COALESCE(node_id::text, ''), created_at
-		 FROM jobs WHERE id = $1 AND consumer_id = $2`,
+		 FROM jobs WHERE id = $1 AND participant_id = $2`,
 		jobID, claims.UserID,
 	).Scan(&data.Status, &data.NodeID, &data.CreatedAt)
 	if err != nil {
@@ -749,7 +718,7 @@ func (ps *PortalServer) handleJobStatusStream(w http.ResponseWriter, r *http.Req
 		case <-ticker.C:
 			var status, nodeID string
 			err := ps.db.Pool.QueryRow(r.Context(),
-				`SELECT status, COALESCE(node_id::text, '') FROM jobs WHERE id = $1 AND consumer_id = $2`,
+				`SELECT status, COALESCE(node_id::text, '') FROM jobs WHERE id = $1 AND participant_id = $2`,
 				jobID, claims.UserID,
 			).Scan(&status, &nodeID)
 			if err != nil {
@@ -857,7 +826,7 @@ func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *h
 	var stripeComplete bool
 	err := ps.db.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE(isp_tier, ''), disclosure_accepted_at, stripe_onboarding_complete
-		 FROM providers WHERE id = $1`,
+		 FROM participants WHERE id = $1`,
 		claims.UserID,
 	).Scan(&ispTier, &disclosureAt, &stripeComplete)
 	if err != nil {
@@ -903,7 +872,7 @@ func (ps *PortalServer) handleProviderOnboarding(w http.ResponseWriter, r *http.
 	}
 
 	_, err := ps.db.Pool.Exec(r.Context(),
-		`UPDATE providers SET isp_tier = $1, disclosure_accepted_at = NOW(), updated_at = NOW() WHERE id = $2`,
+		`UPDATE participants SET isp_tier = $1, disclosure_accepted_at = NOW(), updated_at = NOW() WHERE id = $2`,
 		ispTier, claims.UserID,
 	)
 	if err != nil {
@@ -918,7 +887,7 @@ func (ps *PortalServer) handleProviderOnboarding(w http.ResponseWriter, r *http.
 	}
 
 	_, err = ps.db.Pool.Exec(r.Context(),
-		`UPDATE providers SET stripe_account_id = $1, updated_at = NOW() WHERE id = $2`,
+		`UPDATE participants SET stripe_account_id = $1, updated_at = NOW() WHERE id = $2`,
 		accountID, claims.UserID,
 	)
 	if err != nil {
@@ -944,7 +913,7 @@ func (ps *PortalServer) handleProviderOnboardingReturn(w http.ResponseWriter, r 
 
 	var stripeAccountID string
 	err := ps.db.Pool.QueryRow(r.Context(),
-		`SELECT COALESCE(stripe_account_id, '') FROM providers WHERE id = $1`,
+		`SELECT COALESCE(stripe_account_id, '') FROM participants WHERE id = $1`,
 		claims.UserID,
 	).Scan(&stripeAccountID)
 	if err != nil || stripeAccountID == "" {
@@ -960,7 +929,7 @@ func (ps *PortalServer) handleProviderOnboardingReturn(w http.ResponseWriter, r 
 
 	if status.TransfersActive && !status.RequirementsPending {
 		_, err = ps.db.Pool.Exec(r.Context(),
-			`UPDATE providers SET stripe_onboarding_complete = TRUE, onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`,
+			`UPDATE participants SET stripe_onboarding_complete = TRUE, onboarding_complete = TRUE, updated_at = NOW() WHERE id = $1`,
 			claims.UserID,
 		)
 		if err != nil {
@@ -979,7 +948,7 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 
 	var onboardingComplete bool
 	err := ps.db.Pool.QueryRow(r.Context(),
-		`SELECT onboarding_complete FROM providers WHERE id = $1`,
+		`SELECT onboarding_complete FROM participants WHERE id = $1`,
 		claims.UserID,
 	).Scan(&onboardingComplete)
 	if err != nil {
@@ -994,14 +963,14 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 	// Get the provider's first node ID (used as target for new profiles).
 	var nodeID string
 	_ = ps.db.Pool.QueryRow(r.Context(),
-		`SELECT id FROM nodes WHERE provider_id = $1 ORDER BY created_at ASC LIMIT 1`,
+		`SELECT id FROM nodes WHERE participant_id = $1 ORDER BY created_at ASC LIMIT 1`,
 		claims.UserID,
 	).Scan(&nodeID)
 
 	rows, err := ps.db.Pool.Query(r.Context(),
 		`SELECT id, name, is_default, cpu_enabled, gpu_pct, ram_pct, storage_gb, bandwidth_mbps
 		 FROM resource_profiles
-		 WHERE node_id IN (SELECT id FROM nodes WHERE provider_id = $1)
+		 WHERE node_id IN (SELECT id FROM nodes WHERE participant_id = $1)
 		 ORDER BY is_default DESC, created_at ASC`,
 		claims.UserID,
 	)
@@ -1028,7 +997,7 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 
 	var uptimePct float64
 	_ = ps.db.Pool.QueryRow(r.Context(),
-		`SELECT COALESCE(AVG(uptime_pct), 100.0) FROM nodes WHERE provider_id = $1`,
+		`SELECT COALESCE(AVG(uptime_pct), 100.0) FROM nodes WHERE participant_id = $1`,
 		claims.UserID,
 	).Scan(&uptimePct)
 
@@ -1119,16 +1088,16 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Verify the node belongs to the authenticated provider.
-	var providerID string
+	var participantID string
 	err = ps.db.Pool.QueryRow(r.Context(),
-		`SELECT provider_id FROM nodes WHERE id = $1`,
+		`SELECT participant_id FROM nodes WHERE id = $1`,
 		nodeID,
-	).Scan(&providerID)
+	).Scan(&participantID)
 	if err != nil {
 		http.Error(w, "node not found", http.StatusNotFound)
 		return
 	}
-	if providerID != claims.UserID {
+	if participantID != claims.UserID {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

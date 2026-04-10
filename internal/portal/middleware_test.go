@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"net/http"
@@ -24,7 +23,6 @@ func TestCreateVerifyToken_RoundTrip(t *testing.T) {
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
-		Role:      "provider",
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 	}
 
@@ -43,9 +41,6 @@ func TestCreateVerifyToken_RoundTrip(t *testing.T) {
 	if got.Email != claims.Email {
 		t.Errorf("Email: got %q, want %q", got.Email, claims.Email)
 	}
-	if got.Role != claims.Role {
-		t.Errorf("Role: got %q, want %q", got.Role, claims.Role)
-	}
 	if got.ExpiresAt != claims.ExpiresAt {
 		t.Errorf("ExpiresAt: got %d, want %d", got.ExpiresAt, claims.ExpiresAt)
 	}
@@ -56,7 +51,6 @@ func TestVerifyToken_TamperedSignature(t *testing.T) {
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
-		Role:      "provider",
 		ExpiresAt: time.Now().Add(time.Hour).Unix(),
 	}
 
@@ -78,7 +72,6 @@ func TestVerifyToken_ExpiredToken(t *testing.T) {
 	claims := SessionClaims{
 		UserID:    "user-123",
 		Email:     "test@example.com",
-		Role:      "consumer",
 		ExpiresAt: time.Now().Add(-time.Minute).Unix(),
 	}
 
@@ -121,27 +114,3 @@ func TestRequireAuth_RedirectsWhenNoCookie(t *testing.T) {
 	}
 }
 
-func TestRequireRole_ForbiddenWhenRoleMismatch(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := RequireRole("consumer", next)
-
-	req := httptest.NewRequest(http.MethodGet, "/consumer/marketplace", nil)
-	// Inject provider claims directly via contextKey — same package, so the
-	// unexported key is accessible here.
-	ctx := context.WithValue(req.Context(), contextKey{}, SessionClaims{
-		UserID: "user-456",
-		Email:  "provider@example.com",
-		Role:   "provider",
-	})
-	req = req.WithContext(ctx)
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("status: got %d, want %d", rr.Code, http.StatusForbidden)
-	}
-}

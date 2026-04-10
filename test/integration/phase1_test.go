@@ -36,31 +36,31 @@ func TestPhase1EndToEnd(t *testing.T) {
 	// consumers and nodes they reference.
 	var providerID string
 	if err := db.Pool.QueryRow(ctx,
-		`INSERT INTO providers (email, display_name)
+		`INSERT INTO participants (email, display_name)
 		 VALUES ('provider-phase1@test.internal', 'Phase 1 Test Provider')
 		 RETURNING id`,
 	).Scan(&providerID); err != nil {
 		t.Fatalf("insert provider: %v", err)
 	}
 	t.Cleanup(func() {
-		db.Pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, providerID) //nolint:errcheck
+		db.Pool.Exec(ctx, `DELETE FROM participants WHERE id = $1`, providerID) //nolint:errcheck
 	})
 
 	var consumerID string
 	if err := db.Pool.QueryRow(ctx,
-		`INSERT INTO consumers (email, display_name)
+		`INSERT INTO participants (email, display_name)
 		 VALUES ('consumer-phase1@test.internal', 'Phase 1 Test Consumer')
 		 RETURNING id`,
 	).Scan(&consumerID); err != nil {
 		t.Fatalf("insert consumer: %v", err)
 	}
 	t.Cleanup(func() {
-		db.Pool.Exec(ctx, `DELETE FROM consumers WHERE id = $1`, consumerID) //nolint:errcheck
+		db.Pool.Exec(ctx, `DELETE FROM participants WHERE id = $1`, consumerID) //nolint:errcheck
 	})
 
 	var nodeID string
 	if err := db.Pool.QueryRow(ctx,
-		`INSERT INTO nodes (provider_id, node_class, hostname, country_code, status)
+		`INSERT INTO nodes (participant_id, node_class, hostname, country_code, status)
 		 VALUES ($1, 'A', 'phase1-test-node', 'US', 'online')
 		 RETURNING id`,
 		providerID,

@@ -49,7 +49,7 @@ func main() {
 
 		var providerID string
 		if err := db.Pool.QueryRow(ctx, `
-			INSERT INTO providers (email, display_name, stripe_account_id, stripe_onboarding_complete, onboarding_complete, isp_tier)
+			INSERT INTO participants (email, display_name, stripe_account_id, stripe_onboarding_complete, onboarding_complete, isp_tier)
 			VALUES ($1, $2, $3, true, true, 'business')
 			ON CONFLICT (email) DO UPDATE SET updated_at = NOW()
 			RETURNING id`,
@@ -61,9 +61,9 @@ func main() {
 
 		var nodeID string
 		if err := db.Pool.QueryRow(ctx, `
-			INSERT INTO nodes (provider_id, node_class, hostname, country_code, status, uptime_pct, hardware_profile)
+			INSERT INTO nodes (participant_id, node_class, hostname, country_code, status, uptime_pct, hardware_profile)
 			VALUES ($1, 'A', $2, 'US', 'online', 99.5, $3)
-			ON CONFLICT (provider_id, hostname) DO UPDATE SET updated_at = NOW()
+			ON CONFLICT (participant_id, hostname) DO UPDATE SET updated_at = NOW()
 			RETURNING id`,
 			providerID, hostname, hwProfile,
 		).Scan(&nodeID); err != nil {
@@ -87,7 +87,7 @@ func main() {
 		displayName := fmt.Sprintf("Seed Consumer %02d", i)
 
 		if _, err := db.Pool.Exec(ctx, `
-			INSERT INTO consumers (email, display_name)
+			INSERT INTO participants (email, display_name)
 			VALUES ($1, $2)
 			ON CONFLICT (email) DO NOTHING`,
 			email, displayName,
@@ -106,7 +106,7 @@ func main() {
 	for i := 1; i <= 10; i++ {
 		email := fmt.Sprintf("consumer-%02d@seed.internal", i)
 		if _, err := db.Pool.Exec(ctx,
-			`UPDATE consumers SET password_hash = $1 WHERE email = $2`,
+			`UPDATE participants SET password_hash = $1 WHERE email = $2`,
 			string(hash), email,
 		); err != nil {
 			slog.Error("set consumer password failed", "i", i, "error", err)

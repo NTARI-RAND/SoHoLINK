@@ -11,12 +11,11 @@ import (
 	"time"
 )
 
-// SessionClaims holds the authenticated user's identity and role.
+// SessionClaims holds the authenticated user's identity.
 type SessionClaims struct {
 	UserID    string
 	Email     string
-	Role      string // "provider" | "consumer" | "ntari_staff"
-	ExpiresAt int64  // Unix timestamp
+	ExpiresAt int64 // Unix timestamp
 }
 
 type contextKey struct{}
@@ -40,7 +39,7 @@ func NewSessionManager(privateKey ed25519.PrivateKey) *SessionManager {
 //
 //	base64RawURL(userID|email|role|expiresAt) . base64RawURL(Ed25519Signature)
 func (sm *SessionManager) CreateToken(claims SessionClaims) (string, error) {
-	raw := claims.UserID + "|" + claims.Email + "|" + claims.Role + "|" +
+	raw := claims.UserID + "|" + claims.Email + "|" +
 		strconv.FormatInt(claims.ExpiresAt, 10)
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(raw))
 	sig := ed25519.Sign(sm.privateKey, []byte(encoded))
@@ -69,12 +68,12 @@ func (sm *SessionManager) VerifyToken(token string) (SessionClaims, error) {
 	if err != nil {
 		return SessionClaims{}, fmt.Errorf("verify token: decode payload: %w", err)
 	}
-	fields := strings.SplitN(string(raw), "|", 4)
-	if len(fields) != 4 {
+	fields := strings.SplitN(string(raw), "|", 3)
+	if len(fields) != 3 {
 		return SessionClaims{}, fmt.Errorf("verify token: malformed claims")
 	}
 
-	expiresAt, err := strconv.ParseInt(fields[3], 10, 64)
+	expiresAt, err := strconv.ParseInt(fields[2], 10, 64)
 	if err != nil {
 		return SessionClaims{}, fmt.Errorf("verify token: parse expiry: %w", err)
 	}
@@ -85,7 +84,6 @@ func (sm *SessionManager) VerifyToken(token string) (SessionClaims, error) {
 	return SessionClaims{
 		UserID:    fields[0],
 		Email:     fields[1],
-		Role:      fields[2],
 		ExpiresAt: expiresAt,
 	}, nil
 }
@@ -107,19 +105,6 @@ func RequireAuth(sm *SessionManager, next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), contextKey{}, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// RequireRole checks that the authenticated user's role matches the required
-// role. Must be used inside RequireAuth. Returns 403 if the role does not match.
-func RequireRole(role string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := ClaimsFromContext(r.Context())
-		if !ok || claims.Role != role {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

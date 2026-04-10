@@ -17,7 +17,7 @@ func EligiblePayouts(ctx context.Context, db *DB) ([]PayoutCandidate, error) {
 		SELECT j.id, p.stripe_account_id, jm.contributor_earned_cents
 		FROM jobs j
 		JOIN nodes n ON n.id = j.node_id
-		JOIN providers p ON p.id = n.provider_id
+		JOIN participants p ON p.id = n.participant_id
 		JOIN job_metering jm ON jm.job_id = j.id
 		LEFT JOIN disputes d ON d.job_id = j.id
 		    AND d.status IN ('open', 'under_review')

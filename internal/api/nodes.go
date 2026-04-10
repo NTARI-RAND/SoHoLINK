@@ -95,10 +95,10 @@ func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.
 		// hostname is NOT NULL in the schema; use node_id as the stable identifier
 		// until the agent reports its own hostname in a later phase.
 		_, err = db.Pool.Exec(r.Context(), `
-			INSERT INTO nodes (id, provider_id, node_class, hostname, country_code, region, status, hardware_profile)
+			INSERT INTO nodes (id, participant_id, node_class, hostname, country_code, region, status, hardware_profile)
 			VALUES ($1, $2, $3::node_class, $4, $5, $6, 'online'::node_status, $7)
 			ON CONFLICT (id) DO UPDATE SET
-				provider_id      = EXCLUDED.provider_id,
+				participant_id   = EXCLUDED.participant_id,
 				node_class       = EXCLUDED.node_class,
 				country_code     = EXCLUDED.country_code,
 				region           = EXCLUDED.region,
