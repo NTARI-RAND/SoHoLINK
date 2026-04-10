@@ -184,6 +184,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	// Protected routes.
 	mux.Handle("GET /dashboard",
 		RequireAuth(sm, http.HandlerFunc(ps.handleDashboard)))
+	mux.Handle("GET /marketplace",
+		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerMarketplace)))
 	mux.Handle("GET /consumer/marketplace",
 		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerMarketplace)))
 	mux.Handle("POST /consumer/job",
