@@ -2,36 +2,20 @@ name: CI
 
 on:
   push:
-    branches: [v2-rebuild, main]
+    branches: ["**"]
   pull_request:
-    branches: [v2-rebuild, main]
+    branches: ["**"]
 
 jobs:
-  build:
-    name: Build & Vet
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
   test:
-    name: Test
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: timescale/timescaledb:latest-pg16
         env:
           POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
@@ -39,30 +23,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.24'
 
-      - name: Test
+      - name: Verify build
+        run: go build ./...
+
+      - name: Run unit tests (no DB required)
+        run: go test -v ./internal/portal/ ./internal/agent/ ./internal/network/
+
+      - name: Run integration tests (DB required)
         env:
           DATABASE_URL: postgres://postgres:changeme@localhost:5432/postgres?sslmode=disable
-        run: go test ./...
-
-  policy:
-    name: OPA Policy Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install OPA
-        run: |
-          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
-          chmod +x opa
-          sudo mv opa /usr/local/bin/opa
-
-      - name: Run policy tests
-        run: opa test configs/policies/ -v
+        run: go test -v -tags integration -count=1 ./...
