@@ -58,8 +58,19 @@ func TestVerifyToken_TamperedSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToken: %v", err)
 	}
-	// Flip the last character of the signature to corrupt it.
-	tampered := token[:len(token)-1] + "X"
+	// Corrupt the second-to-last character of the signature.
+	// The final base64 character of an Ed25519 signature encodes only 2
+	// meaningful bits (512 mod 6 = 2); Go's decoder ignores the lower 4
+	// bits, so flipping just the last char is a no-op for many values.
+	// The second-to-last character is always fully meaningful.
+	penultimate := token[len(token)-2]
+	var replacement byte
+	if penultimate == 'A' {
+		replacement = 'B'
+	} else {
+		replacement = 'A'
+	}
+	tampered := token[:len(token)-2] + string(replacement) + string(token[len(token)-1])
 
 	_, err = sm.VerifyToken(tampered)
 	if err == nil {

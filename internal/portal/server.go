@@ -22,6 +22,12 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
+// jobSubmitter is the subset of orchestrator.Orchestrator used by the portal.
+// Defined as an interface so tests can inject a stub without a real Orchestrator.
+type jobSubmitter interface {
+	SubmitJob(ctx context.Context, req orchestrator.SubmitJobRequest) (orchestrator.SubmitJobResponse, error)
+}
+
 // PortalServer is the SoHoLINK marketplace portal HTTP server. It sits behind
 // NGINX, which handles TLS termination, so ListenAndServe (not TLS) is used.
 type PortalServer struct {
@@ -30,7 +36,7 @@ type PortalServer struct {
 	db            *store.DB
 	sm            *SessionManager
 	payment       *payment.Client
-	orch          *orchestrator.Orchestrator
+	orch          jobSubmitter
 	baseURL       string
 	templatePaths []string
 	limiter        *LoginRateLimiter
@@ -136,7 +142,7 @@ type JobStatusData struct {
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server. metricsAddr is the address for the plain HTTP
 // metrics server (e.g. ":9090") — not wrapped with session auth.
-func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch *orchestrator.Orchestrator, metricsAddr string, webhookSecret string) (*PortalServer, error) {
+func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch jobSubmitter, metricsAddr string, webhookSecret string) (*PortalServer, error) {
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
