@@ -79,7 +79,7 @@ func TestHandleRegisterNode_Valid(t *testing.T) {
 	participantID := seedAPIParticipant(t, db, "reg_node@test.com")
 
 	w := postJSON(t, ps.handleRegisterNode, "/nodes/register", map[string]any{
-		"node_id":      "test-node-001",
+		"node_id":      "10000000-0000-0000-0000-000000000001",
 		"provider_id":  participantID,
 		"hostname":     "test-host-001",
 		"node_class":   "A",
@@ -126,7 +126,7 @@ func TestHandleRegisterNode_Upsert(t *testing.T) {
 	participantID := seedAPIParticipant(t, db, "upsert_node@test.com")
 
 	payload := map[string]any{
-		"node_id":      "upsert-node-001",
+		"node_id":      "20000000-0000-0000-0000-000000000002",
 		"provider_id":  participantID,
 		"hostname":     "upsert-host",
 		"node_class":   "B",
@@ -167,7 +167,7 @@ func TestHandleHeartbeat_Valid(t *testing.T) {
 
 	// register first so node is in memory registry
 	postJSON(t, ps.handleRegisterNode, "/nodes/register", map[string]any{
-		"node_id":      "hb-node-001",
+		"node_id":      "30000000-0000-0000-0000-000000000003",
 		"provider_id":  participantID,
 		"hostname":     "hb-host-001",
 		"node_class":   "A",
@@ -176,7 +176,7 @@ func TestHandleHeartbeat_Valid(t *testing.T) {
 	})
 
 	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
-		"node_id": "hb-node-001",
+		"node_id": "30000000-0000-0000-0000-000000000003",
 	})
 
 	if w.Code != http.StatusOK {
