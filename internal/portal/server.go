@@ -877,7 +877,7 @@ func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Requ
 
 	_, err = ps.db.Pool.Exec(r.Context(),
 		`UPDATE disputes
-		 SET status = 'resolved', consumer_refund_pct = $1, arbiter_id = $2,
+		 SET status = 'resolved', consumer_refund_pct = $1, arbiter_participant_id = $2,
 		     arbiter_notes = 'resolved via terminal', resolved_at = NOW(), updated_at = NOW()
 		 WHERE id = $3`,
 		consumerRefundPct, claims.UserID, disputeID,
@@ -895,7 +895,7 @@ func (ps *PortalServer) handleDisputeReview(w http.ResponseWriter, r *http.Reque
 	disputeID := r.PathValue("id")
 
 	_, err := ps.db.Pool.Exec(r.Context(),
-		`UPDATE disputes SET status = 'under_review', arbiter_id = $1, updated_at = NOW()
+		`UPDATE disputes SET status = 'under_review', arbiter_participant_id = $1, updated_at = NOW()
 		 WHERE id = $2 AND status = 'open'`,
 		claims.UserID, disputeID,
 	)
