@@ -49,6 +49,7 @@ type onboardingData struct {
 	ISPTier            string
 	DisclosureAccepted bool
 	StripeComplete     bool
+	IsAuthenticated    bool
 }
 
 // ProfileRow is a single resource profile row for provider_provision.html.
@@ -70,6 +71,7 @@ type provisionData struct {
 	Profiles        []ProfileRow
 	UptimePct       float64
 	EligibleClasses []string
+	IsAuthenticated bool
 }
 
 // DisputeRow is a single row in the dispute queue table.
@@ -88,8 +90,9 @@ type DisputeRow struct {
 
 // DisputeQueueData is the template data for dispute_queue.html.
 type DisputeQueueData struct {
-	Email    string
-	Disputes []DisputeRow
+	Email           string
+	Disputes        []DisputeRow
+	IsAuthenticated bool
 }
 
 // NodeListing is a single marketplace node entry.
@@ -114,28 +117,55 @@ type ClassGroup struct {
 
 // MarketplaceData is the template data for consumer_marketplace.html.
 type MarketplaceData struct {
-	Email     string
-	Classes   []ClassGroup
-	CPURateHr float64
-	RAMRateHr float64
+	Email           string
+	Classes         []ClassGroup
+	CPURateHr       float64
+	RAMRateHr       float64
+	IsAuthenticated bool
 }
 
-// ProviderDashboardData is the template data for provider_dashboard.html.
-type ProviderDashboardData struct {
+// ActiveJobRow is a job currently running on a participant's node.
+type ActiveJobRow struct {
+	JobID     string
+	NodeID    string
+	Workload  string
+	CPUCores  int
+	RAMMB     int
+	StartedAt time.Time
+}
+
+// SubmittedJobRow is a job submitted by the participant as a buyer.
+type SubmittedJobRow struct {
+	JobID     string
+	Status    string
+	Workload  string
+	CreatedAt time.Time
+}
+
+// DashboardData is the template data for provider_dashboard.html.
+type DashboardData struct {
 	Email                string
+	IsAuthenticated      bool
+	HasNodes             bool
+	NodeCount            int64
+	UptimePct            float64
+	UptimeClass          string
 	ThisMonthDollars     float64
 	TotalDollars         float64
 	PendingPayoutDollars float64
 	TotalJobs            int64
+	ActiveJobs           []ActiveJobRow
+	SubmittedJobs        []SubmittedJobRow
 }
 
 // JobStatusData is the template data for consumer_job_status.html.
 type JobStatusData struct {
-	JobID     string
-	Status    string
-	NodeID    string
-	CreatedAt time.Time
-	Email     string
+	JobID           string
+	Status          string
+	NodeID          string
+	CreatedAt       time.Time
+	Email           string
+	IsAuthenticated bool
 }
 
 // New constructs a PortalServer. It walks templatesDir recursively to collect
@@ -180,6 +210,7 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
 	mux.HandleFunc("GET /register", ps.handleRegisterPage)
 	mux.HandleFunc("POST /register", ps.handleRegister)
+	mux.HandleFunc("GET /logout", ps.handleLogout)
 	mux.Handle("GET /static/",
 		http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(templatesDir, "..", "static")))))
 
@@ -397,13 +428,27 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // registerData is the template data for register.html.
 type registerData struct {
-	Error    string
-	Email    string
-	SOHOName string
+	Error           string
+	Email           string
+	SOHOName        string
+	IsAuthenticated bool
 }
 
 func (ps *PortalServer) handleRegisterPage(w http.ResponseWriter, r *http.Request) {
 	ps.renderTemplate(w, "register.html", registerData{})
+}
+
+func (ps *PortalServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -480,48 +525,138 @@ func (ps *PortalServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
+	ctx := r.Context()
 
-	var totalCents, thisMonthCents, totalJobs int64
-	err := ps.db.Pool.QueryRow(r.Context(), `
-		SELECT
-		    COALESCE(SUM(jm.contributor_earned_cents), 0) AS total_cents,
-		    COALESCE(SUM(CASE WHEN DATE_TRUNC('month', jm.computed_at) = DATE_TRUNC('month', NOW())
-		                 THEN jm.contributor_earned_cents ELSE 0 END), 0) AS this_month_cents,
-		    COUNT(DISTINCT j.id) AS total_jobs
-		FROM participants p
-		JOIN nodes n ON n.participant_id = p.id
-		JOIN jobs j ON j.node_id = n.id
-		JOIN job_metering jm ON jm.job_id = j.id
-		WHERE p.id = $1`,
+	// Node count and average uptime.
+	var nodeCount int64
+	var uptimePct float64
+	err := ps.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(AVG(uptime_pct), 0) FROM nodes WHERE participant_id = $1`,
 		claims.UserID,
-	).Scan(&totalCents, &thisMonthCents, &totalJobs)
+	).Scan(&nodeCount, &uptimePct)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	var pendingCents int64
-	err = ps.db.Pool.QueryRow(r.Context(), `
-		SELECT COALESCE(SUM(jm.contributor_earned_cents), 0)
-		FROM participants p
-		JOIN nodes n ON n.participant_id = p.id
-		JOIN jobs j ON j.node_id = n.id
-		JOIN job_metering jm ON jm.job_id = j.id
-		WHERE p.id = $1
-		  AND j.completed_at > NOW() - INTERVAL '24 hours'`,
+	uptimeClass := ""
+	switch {
+	case uptimePct >= 95:
+		uptimeClass = "A"
+	case uptimePct >= 85:
+		uptimeClass = "B"
+	case uptimePct >= 70:
+		uptimeClass = "C"
+	}
+
+	// Contributor earnings — only meaningful when the participant has nodes.
+	var totalCents, thisMonthCents, pendingCents, totalJobs int64
+	if nodeCount > 0 {
+		err = ps.db.Pool.QueryRow(ctx, `
+			SELECT
+			    COALESCE(SUM(jm.contributor_earned_cents), 0),
+			    COALESCE(SUM(CASE WHEN DATE_TRUNC('month', jm.computed_at) = DATE_TRUNC('month', NOW())
+			                 THEN jm.contributor_earned_cents ELSE 0 END), 0),
+			    COUNT(DISTINCT j.id)
+			FROM nodes n
+			JOIN jobs j ON j.node_id = n.id
+			JOIN job_metering jm ON jm.job_id = j.id
+			WHERE n.participant_id = $1`,
+			claims.UserID,
+		).Scan(&totalCents, &thisMonthCents, &totalJobs)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		err = ps.db.Pool.QueryRow(ctx, `
+			SELECT COALESCE(SUM(jm.contributor_earned_cents), 0)
+			FROM nodes n
+			JOIN jobs j ON j.node_id = n.id
+			JOIN job_metering jm ON jm.job_id = j.id
+			WHERE n.participant_id = $1
+			  AND j.completed_at > NOW() - INTERVAL '24 hours'`,
+			claims.UserID,
+		).Scan(&pendingCents)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Active jobs running on participant's nodes.
+	var activeJobs []ActiveJobRow
+	if nodeCount > 0 {
+		aRows, err := ps.db.Pool.Query(ctx, `
+			SELECT j.id, j.node_id, j.workload_type, j.cpu_cores, j.ram_mb,
+			       COALESCE(j.started_at, j.created_at)
+			FROM jobs j
+			JOIN nodes n ON n.id = j.node_id
+			WHERE n.participant_id = $1 AND j.status = 'running'::job_status
+			ORDER BY j.started_at DESC`,
+			claims.UserID,
+		)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		defer aRows.Close()
+		for aRows.Next() {
+			var row ActiveJobRow
+			if err := aRows.Scan(&row.JobID, &row.NodeID, &row.Workload,
+				&row.CPUCores, &row.RAMMB, &row.StartedAt); err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			activeJobs = append(activeJobs, row)
+		}
+		if err := aRows.Err(); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Jobs submitted by this participant as a buyer (most recent 10).
+	sRows, err := ps.db.Pool.Query(ctx, `
+		SELECT id, status, workload_type, created_at
+		FROM jobs
+		WHERE participant_id = $1
+		ORDER BY created_at DESC
+		LIMIT 10`,
 		claims.UserID,
-	).Scan(&pendingCents)
+	)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	defer sRows.Close()
+	var submittedJobs []SubmittedJobRow
+	for sRows.Next() {
+		var row SubmittedJobRow
+		if err := sRows.Scan(&row.JobID, &row.Status, &row.Workload, &row.CreatedAt); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		submittedJobs = append(submittedJobs, row)
+	}
+	if err := sRows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
-	ps.renderTemplate(w, "provider_dashboard.html", ProviderDashboardData{
+	ps.renderTemplate(w, "dashboard.html", DashboardData{
 		Email:                claims.Email,
+		IsAuthenticated:      true,
+		HasNodes:             nodeCount > 0,
+		NodeCount:            nodeCount,
+		UptimePct:            uptimePct,
+		UptimeClass:          uptimeClass,
 		ThisMonthDollars:     float64(thisMonthCents) / 100.0,
 		TotalDollars:         float64(totalCents) / 100.0,
 		PendingPayoutDollars: float64(pendingCents) / 100.0,
 		TotalJobs:            totalJobs,
+		ActiveJobs:           activeJobs,
+		SubmittedJobs:        submittedJobs,
 	})
 }
 
@@ -669,15 +804,25 @@ func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http
 	}
 
 	ps.renderTemplate(w, "consumer_marketplace.html", MarketplaceData{
-		Email:     claims.Email,
-		Classes:   groups,
-		CPURateHr: rates["cpu_core_hr"],
-		RAMRateHr: rates["ram_gb_hr"],
+		Email:           claims.Email,
+		Classes:         groups,
+		CPURateHr:       rates["cpu_core_hr"],
+		RAMRateHr:       rates["ram_gb_hr"],
+		IsAuthenticated: true,
 	})
 }
 
 func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
+
+	var isStaff bool
+	_ = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT is_staff FROM participants WHERE id = $1`, claims.UserID,
+	).Scan(&isStaff)
+	if !isStaff {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 
 	rows, err := ps.db.Pool.Query(r.Context(),
 		`SELECT
@@ -719,8 +864,9 @@ func (ps *PortalServer) handleDisputeQueue(w http.ResponseWriter, r *http.Reques
 	}
 
 	ps.renderTemplate(w, "dispute_queue.html", DisputeQueueData{
-		Email:    claims.Email,
-		Disputes: disputes,
+		Email:           claims.Email,
+		Disputes:        disputes,
+		IsAuthenticated: true,
 	})
 }
 
@@ -773,6 +919,7 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 	var data JobStatusData
 	data.Email = claims.Email
 	data.JobID = jobID
+	data.IsAuthenticated = true
 
 	err := ps.db.Pool.QueryRow(r.Context(),
 		`SELECT status, COALESCE(node_id::text, ''), created_at
@@ -834,6 +981,16 @@ func (ps *PortalServer) handleJobStatusStream(w http.ResponseWriter, r *http.Req
 
 func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
+
+	var isStaff bool
+	_ = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT is_staff FROM participants WHERE id = $1`, claims.UserID,
+	).Scan(&isStaff)
+	if !isStaff {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	disputeID := r.PathValue("id")
 
 	if err := r.ParseForm(); err != nil {
@@ -898,6 +1055,16 @@ func (ps *PortalServer) handleDisputeResolve(w http.ResponseWriter, r *http.Requ
 
 func (ps *PortalServer) handleDisputeReview(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
+
+	var isStaff bool
+	_ = ps.db.Pool.QueryRow(r.Context(),
+		`SELECT is_staff FROM participants WHERE id = $1`, claims.UserID,
+	).Scan(&isStaff)
+	if !isStaff {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	disputeID := r.PathValue("id")
 
 	_, err := ps.db.Pool.Exec(r.Context(),
@@ -939,6 +1106,7 @@ func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *h
 		ISPTier:            ispTier,
 		DisclosureAccepted: disclosureAt != nil,
 		StripeComplete:     stripeComplete,
+		IsAuthenticated:    true,
 	})
 }
 
@@ -1116,6 +1284,7 @@ func (ps *PortalServer) handleProviderProvision(w http.ResponseWriter, r *http.R
 		Profiles:        profiles,
 		UptimePct:       uptimePct,
 		EligibleClasses: eligibleClasses,
+		IsAuthenticated: true,
 	})
 }
 

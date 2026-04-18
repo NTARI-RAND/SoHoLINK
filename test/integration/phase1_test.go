@@ -32,6 +32,15 @@ func TestPhase1EndToEnd(t *testing.T) {
 		t.Fatalf("store.RunMigrations: %v", err)
 	}
 
+	// TRUNCATE guard — removes any rows left by a previous interrupted run.
+	// Order respects FK constraints: jobs → nodes/participants, disputes → jobs.
+	if _, err := db.Pool.Exec(ctx, `
+		TRUNCATE TABLE job_metering, disputes, jobs, node_heartbeat_events,
+		               resource_profiles, nodes, participants
+		RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("truncate tables: %v", err)
+	}
+
 	// Seed DB fixtures. Cleanups run LIFO so jobs are deleted before the
 	// consumers and nodes they reference.
 	var providerID string

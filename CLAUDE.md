@@ -1,10 +1,11 @@
 # SoHoLINK v2 — Claude Code Context
 
 ## What This Project Is
-SoHoLINK is a decentralized compute marketplace. Participants contribute idle
-hardware (SOHO servers, phones, Smart TVs, laptops) and earn fiat dollars.
-Consumers buy compute, storage, and CDN capacity on demand. NTARI operates the
-coordination layer — matching, scheduling, metering, and dispute arbitration.
+SoHoLINK is a participatory distributed compute platform. Participants contribute
+idle personal devices — SOHO servers, phones, Smart TVs, laptops — as compute nodes
+and earn fiat dollars. Other participants buy compute, storage, and CDN capacity on
+demand. NTARI operates the coordination layer: matching, scheduling, metering, and
+dispute arbitration.
 
 No tokens, no wallets. Pure fiat via Stripe Connect.
 Participants own and control their hardware. NTARI never touches the hardware.
@@ -43,14 +44,16 @@ SoHoLINK is a Janus Facing Application (JFA) as defined by NTARI document P3-011
 Reference: https://www.ntari.org/post/janusfacingapplications
 
 Key principles implemented here:
-- Single participant identity — one account, simultaneous producer/consumer roles
+- Single participant identity — one account, simultaneous contributor/buyer roles
 - No information asymmetry — pricing, metering, and earnings visible to all participants
 - Governance layer architecturally separated — admin portal runs on a separate local-only
   port (8090), never exposed publicly, not hidden behind role flags on the public portal
 - AGPL-3 licensed — permanent commons, prevents enclosure
 
-The participants table (migration 011) replaces the separate providers/consumers tables
-as the concrete implementation of unified identity.
+The `participants` table (migration 011) replaces the separate `providers`/`consumers`
+tables as the concrete implementation of unified identity. There are no "providers" or
+"consumers" in the codebase — only participants who may contribute nodes, submit jobs,
+or both.
 
 ## Repository Structure (current state)
 ```
@@ -66,12 +69,13 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Geo-aware job placement with residency constraints
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–006
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–011
   network/        ← WireGuard bootstrapper (stub)
 web/
-  templates/      ← layout.html, index.html, login.html, provider_dashboard.html,
+  templates/      ← layout.html, index.html, login.html, dashboard.html,
                      provider_onboarding.html, provider_provision.html,
-                     consumer_marketplace.html, dispute_queue.html
+                     consumer_marketplace.html, consumer_job_status.html,
+                     dispute_queue.html
   static/css/     ← portal.css (complete design system)
 test/integration/ ← Phase 1 end-to-end integration test (build tag: integration)
 ```
@@ -80,11 +84,16 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | # | File | What it adds |
 |---|---|---|
 | 001 | `001_initial_schema` | providers, consumers, nodes, jobs, resource_profiles, node_class/job_status enums |
-| 002 | `002_add_auth_columns` | `password_hash TEXT`, `is_staff BOOLEAN` on providers; `password_hash TEXT` on consumers |
-| 003 | `003_provider_onboarding` | `onboarding_complete BOOL`, `isp_tier TEXT`, `disclosure_accepted_at TIMESTAMPTZ` on providers |
+| 002 | `002_add_auth_columns` | `password_hash`, `is_staff` on providers; `password_hash` on consumers |
+| 003 | `003_provider_onboarding` | `onboarding_complete`, `isp_tier`, `disclosure_accepted_at` on providers |
 | 004 | `004_resource_pricing` | `resource_type` enum, `resource_pricing` table, seeded with 5 initial rates |
 | 005 | `005_resource_profile_pricing` | `price_multiplier NUMERIC(4,3)` on resource_profiles |
 | 006 | `006_disputes` | `dispute_status` enum, `disputes` table with evidence_log JSONB, arbiter fields |
+| 007 | `007_uptime_tracking` | `node_heartbeat_events` table, `uptime_pct` column on nodes |
+| 008 | `008_job_metering` | `job_metering` table, `started_at`/`completed_at` on jobs |
+| 009 | `009_payout_released_at` | `payout_released_at TIMESTAMPTZ` on job_metering |
+| 010 | `010_unique_node_hostname` | `uq_nodes_provider_hostname` unique index on nodes |
+| 011 | `011_participants` | Unified `participants` table replacing `providers`+`consumers`; `participant_id` FKs on nodes/jobs/disputes |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -92,6 +101,18 @@ DATABASE_URL="postgres://postgres:changeme@localhost:5432/postgres?sslmode=disab
   go test -tags integration -v -run TestPhase1EndToEnd ./test/integration/
 ```
 golang-migrate is idempotent — safe to run repeatedly.
+
+## Test Coverage (current state — all green in CI)
+| Package | File | Tests |
+|---|---|---|
+| `internal/portal` | `middleware_test.go` | Ed25519 token create/verify, tampered sig, expiry, RequireAuth redirect |
+| `internal/portal` | `handlers_test.go` | 19 handler tests: login, register, job submission, dispute resolution |
+| `internal/store` | `payouts_test.go` | EligiblePayouts query with seeded DB |
+| `internal/store` | `metering_test.go` | 4 metering integration tests |
+| `internal/store` | `uptime_test.go` | TestRunUptimeScorer — seeds 19152 heartbeats, verifies uptime_pct update |
+| `internal/api` | `*_test.go` | 7 API handler tests: node registration, heartbeat, job completion |
+| `internal/orchestrator` | `orchestrator_test.go` | 9 registry tests: geo match, GPU filter, offline exclusion, eviction, stale eviction |
+| `test/integration` | `phase1_test.go` | End-to-end: migrations, SubmitJob, token round-trip, Stripe (skipped without key) |
 
 ## Local Dev Services
 All running in Docker on localhost:
@@ -113,7 +134,6 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `http.Client` for telemetry emission. The control plane wraps every route
    with `identity.RequireSPIFFE`, which will reject a client with no SVID.
    Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`.
-   Comment in the file explains this.
 
 2. **`cmd/agent/main.go` — container image placeholder**: `executor.Run` is
    called with `Image: "alpine:latest"`. Real image must come from the job
@@ -138,129 +158,87 @@ These have caused bugs before — read before touching related code:
 
 **Docker SDK (`docker/docker v28+incompatible`):**
 - Storage quotas: `container.HostConfig.StorageOpt["size"]` (a `map[string]string`).
-  There is no `StorageSizeBytes` field.
 - `dockerclient.IsErrNotFound(err)` to check image presence before pulling.
-- Deferred `ContainerRemove` must use `context.Background()` — the request ctx
-  may be cancelled before the container exits.
+- Deferred `ContainerRemove` must use `context.Background()`.
 
 **golang-migrate:**
 - Use `stdlib.OpenDBFromPool(pool)` to bridge pgx pool to `database/sql`.
 - Call `defer m.Close()` after `migrate.NewWithDatabaseInstance` to avoid deadlock.
-- Migration source path: `file://internal/store/migrations`.
 
 **Go `html/template`:**
-- All pages define `{{define "content"}}` — if parsed into one shared set, the
-  last-parsed definition wins. Portal uses per-request `template.ParseFiles(layoutPath, pagePath)`
-  to avoid this. Do not revert to a shared parsed set.
-- `template.ParseFiles` names templates by base filename only — subdirectory paths
-  are stripped. Keep template base names unique across all subdirectories.
+- All pages define `{{define "content"}}` — portal uses per-request
+  `template.ParseFiles(layoutPath, pagePath)` to avoid last-parsed-wins collision.
+  Do not revert to a shared parsed set.
+- `template.ParseFiles` names templates by base filename only — keep base names unique.
 
 ## Coding Conventions
-- All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget JSON encoders)
+- All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget cleanups)
 - All inter-service calls use mTLS via SPIRE SVIDs
 - No secrets in source or committed config — use env vars
 - Database queries use `pgx/v5` directly — no ORM
 - HTML templates use Go `html/template` — never `text/template`
 - All monetary amounts stored and calculated in cents (`int64`)
-- Telemetry payloads HMAC-SHA256 signed: `base64RawURL(payload) + "." + base64RawURL(HMAC(payload, secret))`
-- Job tokens (`internal/orchestrator`) use the same HMAC-SHA256 pattern
-- Session tokens signed with Ed25519 — `SessionManager` holds `ed25519.PrivateKey`; portal daemon reads `SESSION_PRIVATE_KEY` env var (64-byte key, 128 hex chars)
-- JSON struct tags always snake_case — e.g. `json:"node_id"` not `json:"NodeID"`
-- `RequireAuth(sm, RequireRole("role", handler))` — auth always wraps role, never the reverse
+- Telemetry payloads HMAC-SHA256 signed
+- Job tokens use the same HMAC-SHA256 pattern
+- Session tokens signed with Ed25519 — `SESSION_PRIVATE_KEY` env var (64-byte key, 128 hex chars)
+- JSON struct tags always snake_case
+- `RequireAuth(sm, handler)` — auth wraps all protected routes; staff-only routes additionally check `is_staff` from DB
 - `context.Background()` in deferred cleanups that must outlive the request context
 
 ## Key Design Decisions
-**Payment:** Stripe Connect destination charges. NTARI collects from consumers,
-pays out to providers. Platform fee deducted at settlement. 24-hour payout hold
-for dispute window.
+**Identity:** Single `participants` table — every account can contribute nodes, submit
+jobs, or both. No role column. Contributor capability is inferred from whether the
+participant has nodes registered. Staff access is gated by `is_staff BOOLEAN`.
+
+**Payment:** Stripe Connect destination charges. NTARI collects from participants
+buying compute, pays out to participants contributing nodes. 60–70% to contributors,
+30–40% platform fee. 24-hour payout hold for dispute window.
 
 **Frontend:** Server-rendered HTML via Go `html/template`. No React, no Vue, no
 Node.js, no npm, no build step. Vanilla JS only where strictly necessary.
 Must work on a 2019 Android phone on 3G. Must work in Smart TV browsers.
 
 **Hardware detection:** Agent-side only via gopsutil. Never browser-side.
-Agent polls every 60s and re-registers on hardware change.
 
 **Resource profiles:** Default profile + scheduled overrides per node.
 Per-resource toggles: CPU on/off, GPU %, RAM %, storage GB, bandwidth Mbps,
 price_multiplier (0.5–2.0×). cgroup v2 enforces caps on launched containers.
 
-**Identity:** SPIFFE/SPIRE, short-lived X.509 SVIDs (1hr TTL). All inter-service
-connections use mTLS. Portal sits behind NGINX (plain HTTP to NGINX, mTLS
-between internal services).
+**Identity/mTLS:** SPIFFE/SPIRE, short-lived X.509 SVIDs (1hr TTL). Portal sits
+behind NGINX (plain HTTP to NGINX, mTLS between internal services).
 
-**Geo scheduling:** Every node geo-tagged at registration. Consumer workloads may
-specify country/region constraints. Scheduler refuses to violate hard residency.
+**Geo scheduling:** Every node geo-tagged at registration. Jobs may specify
+country/region constraints. Scheduler refuses to violate hard residency.
 
-**Disputes:** NTARI arbitrates via the Dispute Terminal. Signed telemetry is
-primary evidence. Arbiter controls full/partial redistribution.
+**Disputes:** NTARI arbitrates via the Dispute Terminal (`/dispute/queue` —
+staff-only, enforced by `is_staff` DB check). Signed telemetry is primary evidence.
 Default 50/50 split if unresolved after 5 business days.
 
 **Node classes:**
-- Class A: SOHO servers — full Docker runtime, all workload types
-- Class B: Mobile GPU — Android/iOS, idle-only, batch compute + AI inference
-- Class C: Smart TV — Tizen/webOS/AndroidTV, CDN edge cache
-- Class D: NAS/storage devices — object storage, CDN
+- Class A: SOHO servers — full Docker runtime, all workload types, ≥95% uptime
+- Class B: Mobile GPU — Android/iOS, idle-only, batch + AI inference, ≥85% uptime
+- Class C: Smart TV — Tizen/webOS/AndroidTV, CDN edge cache, ≥70% uptime
+- Class D: NAS/storage devices — object storage, CDN, ≥80% uptime
 
-## Current Phase
-**Phase 7 — Performance, Automation & Real-Time UX** (starting)
+## Production Deployment
+soholink.org live on NTARIHQ via Cloudflare Tunnel (`soholink-prod bb7b7f0d`).
+Docker Compose stack: portal + NGINX + cloudflared.
+- **`docker-compose.yml`** — portal + NGINX + cloudflared services
+- **`Dockerfile.portal`** — multi-stage Go build; final image copies binary + `web/`
+- **`nginx.conf`** — reverse proxy to `portal:8080` for `soholink.org`
+- **`.env`** — `DATABASE_URL`, `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`; gitignored
+- **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`)
+- **DNS** — CNAME `soholink.org` → tunnel (proxied)
 
-### Phase 3 — Marketplace Portal (complete)
-- Portal server with session middleware (HMAC tokens, cookie auth)
-- Login handler (bcrypt, role-based redirect)
-- Provider onboarding flow (ISP disclosure, Stripe Connect, return handler)
-- Provider provisioning page (resource profile form with price_multiplier)
-- Consumer marketplace (live node listing with computed pricing)
-- Consumer job submission (`/consumer/job` POST + `/consumer/job/{id}` GET)
-- Dispute queue terminal (arbiter controls, Accept/Reject/Review, Stripe refund)
-- `handleDisputeResolve` and `handleDisputeReview` fully implemented
-- `cmd/portal/main.go` wired and building clean
-- Migrations 001–006 all applied and passing integration test
+## First Live Pilot
+**Shenandoah Condominiums, 1 Dupont Way, Louisville KY 40207** — dense residential
+building adjacent to NTARI HQ. Target: onboard residents as contributors (personal
+laptops, smart TVs, idle phones) and validate the full node registration → heartbeat
+→ job completion → payout flow against real residential NAT and ISP conditions.
 
-### Phase 4 — Control Plane & Agent Hardening (complete)
-- Migration 007: `node_heartbeat_events` table, `uptime_pct` column on nodes
-- Uptime scorer goroutine (`internal/store/uptime.go`) — runs every 10 min in portal daemon
-- Heartbeat event INSERT in `handleHeartbeat` (API server)
-- Prometheus metrics package (`internal/metrics/metrics.go`) — counters, gauges, histogram
-- Metrics endpoints on separate plain HTTP port (portal `:9090`, API `:9091`)
-- `HeartbeatsTotal`, `JobsSubmittedTotal`, `NodesOnlineGauge` wired at call sites
-- `RunNodeGauge` goroutine polling online node count every 60s
-- Ansible playbook, NGINX config, systemd units, and deployment README in `deploy/`
-- `consumer_job_status.html` fully implemented (job ID, status badge, node, created time)
-
-### Phase 5 — Orchestrator & Observability (complete)
-- `cmd/orchestrator/main.go` wired: `store.Connect`, `store.RunMigrations`, `identity.NewSource`, `api.New`, graceful shutdown
-- Grafana dashboard definitions in `deploy/grafana/`: `network-health.json`, `job-activity.json`
-- Session token refresh: `POST /auth/refresh` endpoint with 5-minute sliding window
-- Auto-refresh script in `layout.html` — fires every 10 minutes when page is visible
-- Orchestrator systemd unit, secrets file, and Ansible tasks added to `deploy/`
-- Grafana import instructions added to `deploy/README.md`
-
-### Phase 6 — Metering, Payouts & Provider Experience (complete)
-- Migration 008: `job_metering` table, `started_at` / `completed_at` columns on jobs
-- `ComputeMetering` in `internal/store/metering.go` — resource consumption and earnings calculation
-- Job lifecycle wired: `scheduled` → `running` (on agent poll) → `completed` (on agent signal via `POST /jobs/{id}/complete`)
-- Provider dashboard shows real earnings from `job_metering` (this month, pending payout, all time, total jobs)
-- Migration 009: `payout_released_at TIMESTAMPTZ` on `job_metering` — payout idempotency column
-- `EligiblePayouts` in `internal/store/payouts.go` — selects completed jobs past 24-hour hold with no open dispute and unreleased payout
-- `RunPayoutReleaser` in `internal/store/payout_runner.go` — goroutine calling `TriggerPayout` then marking `payout_released_at`; wired into `cmd/portal/main.go` on 1-hour interval
-- Integration test `TestEligiblePayouts` in `internal/store/payouts_test.go`
-- Marketplace query filters out nodes below per-class uptime thresholds (A ≥95%, B ≥85%, C ≥70%, D ≥80%)
-- Provider provisioning page shows uptime status card: average uptime %, eligible class badges, threshold legend
-- `LoginRateLimiter` in `internal/portal/ratelimit.go` — `sync.Map`-backed, 5 failures per 15-minute window; wired into `handleLogin` with `RecordFailure` / `Reset` on all credential paths
-
-### Phase 7 — Performance, Automation & Real-Time UX (complete)
-- k6 load test scripts in `deploy/loadtest/`: `marketplace.js` (50 VUs / 30s, p95 < 500ms threshold), `login.js` (10 VUs / 60s, rate limiter exercise)
-- `cmd/seed/main.go` — seeds 10 providers, nodes, resource profiles, and consumers; sets bcrypt password hashes so load tests work out of the box; migration 010 adds `uq_nodes_provider_hostname` unique index
-- SPIRE agent deployment: `deploy/systemd/spire-agent.service`, `deploy/ansible/spire-agent.conf.j2`, Ansible tasks to download SPIRE 1.9.6, extract, configure, and enable; join token instructions in `deploy/README.md`
-- SSE job status streaming: `GET /consumer/job/{id}/status-stream` polls DB every 2s, pushes `text/event-stream` events; `consumer_job_status.html` updates badge and node ID live; `EventSource` feature-guarded with static fallback for Tizen < 4
-- Smart TV / 10-foot UI: TV media query (`min-width:1280px` + `hover:none`/`pointer:coarse`) scales base font to 20px, enlarges buttons, inputs, stat values, nav; universal `:focus-visible` outline for D-pad navigation
-
-### Phase 8 — Windows/NTARIHQ Production Deployment (complete)
-soholink.org live on NTARIHQ via Cloudflare Tunnel (soholink-prod bb7b7f0d), Docker Compose stack: portal + caddy + cloudflared. Ingress config pushed via Cloudflare API using cert.pem token.
-- **`docker-compose.yml`** — portal + Caddy + cloudflared services; cloudflared mounts `~/.cloudflared` volume, runs with `--protocol http2`
-- **`Dockerfile.portal`** — multi-stage Go 1.25 build; final image copies binary + `web/` templates
-- **`Caddyfile`** — reverse proxy to `portal:8080` for `soholink.org`
-- **`.env`** — `DATABASE_URL` pointing to postgres bridge IP, Ed25519 `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`; gitignored
-- **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`); ingress config managed via `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` API (local `config.yml` overridden by remote management in cloudflared 2026.x); `cert.pem` contains embedded `apiToken` for API auth
-- **DNS** — CNAME `soholink.org` → `bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4.cfargotunnel.com` (proxied)
+Pre-pilot checklist:
+- Validate agent installer on Windows laptops and Android devices
+- Test node registration and heartbeat stability through residential NAT
+- Verify `residential` ISP tier classification and ACH payout flow end-to-end
+- Validate uptime scorer thresholds (A ≥95%, B ≥85%, C ≥70%) against real hardware
+- Document a non-technical onboarding flow for Shenandoah residents

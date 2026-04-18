@@ -1,0 +1,156 @@
+{{define "content"}}
+<div class="container">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Participant</div>
+      <h2>Dashboard</h2>
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
+  </div>
+
+  {{if .HasNodes}}
+  <!-- ── Contributor Section ─────────────────────────────────────── -->
+  <div class="section-label">Your Nodes</div>
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Active nodes</div>
+      <div class="stat-value cyan">{{.NodeCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Avg uptime (7d)</div>
+      <div class="stat-value">{{printf "%.1f" .UptimePct}}<span style="font-size:1rem;color:var(--muted);">%</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Node class</div>
+      {{if .UptimeClass}}
+      <div class="stat-value cyan">{{.UptimeClass}}</div>
+      {{else}}
+      <div style="font-size:0.8rem;color:var(--muted);padding-top:0.4rem;">Unclassified — needs 7d uptime data</div>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="section-label">Earnings</div>
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">This month</div>
+      <div class="stat-value cyan">${{printf "%.2f" .ThisMonthDollars}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Pending payout</div>
+      <div class="stat-value">${{printf "%.2f" .PendingPayoutDollars}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">All time</div>
+      <div class="stat-value">${{printf "%.2f" .TotalDollars}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Jobs completed</div>
+      <div class="stat-value">{{.TotalJobs}}</div>
+    </div>
+  </div>
+
+  <div class="section-label">Active Workloads</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Workload</th>
+          <th>CPU</th>
+          <th>RAM</th>
+          <th>Started</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .ActiveJobs}}
+        {{range .ActiveJobs}}
+        <tr>
+          <td><code style="font-size:0.75rem;">{{slice .JobID 0 8}}&hellip;</code></td>
+          <td>{{.Workload}}</td>
+          <td>{{.CPUCores}} vCPU</td>
+          <td>{{.RAMMB}} MB</td>
+          <td style="color:var(--muted);font-size:0.8rem;">{{.StartedAt.Format "Jan 2, 15:04"}}</td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr>
+          <td colspan="5" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">
+            No active workloads
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:1rem;margin-bottom:2.5rem;">
+    <a href="/provider/provision" class="btn btn-outline" style="font-size:0.8rem;">Node Configuration</a>
+  </div>
+
+  {{else}}
+  <!-- ── No nodes yet ────────────────────────────────────────────── -->
+  <div class="card" style="margin-bottom:2.5rem;">
+    <div class="card-eyebrow">Contributor Setup</div>
+    <h3>Start earning from your hardware</h3>
+    <p style="margin:0.75rem 0 1.25rem;">
+      Register a node to contribute compute capacity and earn from every job
+      that runs on your hardware. Setup takes about five minutes.
+    </p>
+    <a href="/provider/onboarding" class="btn btn-primary" style="font-size:0.85rem;">Set Up a Node &rarr;</a>
+  </div>
+  {{end}}
+
+  <!-- ── Buyer Section ───────────────────────────────────────────── -->
+  <div class="section-label">Your Jobs</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Workload</th>
+          <th>Status</th>
+          <th>Submitted</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .SubmittedJobs}}
+        {{range .SubmittedJobs}}
+        <tr>
+          <td><code style="font-size:0.75rem;">{{slice .JobID 0 8}}&hellip;</code></td>
+          <td>{{.Workload}}</td>
+          <td>
+            {{if eq .Status "running"}}
+            <span class="badge badge-online">running</span>
+            {{else if eq .Status "completed"}}
+            <span class="badge" style="background:rgba(34,197,94,0.1);color:var(--ok);border-color:var(--ok);">completed</span>
+            {{else if eq .Status "failed"}}
+            <span class="badge" style="background:rgba(239,68,68,0.1);color:var(--danger);border-color:var(--danger);">failed</span>
+            {{else}}
+            <span class="badge">{{.Status}}</span>
+            {{end}}
+          </td>
+          <td style="color:var(--muted);font-size:0.8rem;">{{.CreatedAt.Format "Jan 2, 15:04"}}</td>
+          <td><a href="/consumer/job/{{.JobID}}" style="font-size:0.8rem;">View &rarr;</a></td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr>
+          <td colspan="5" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">
+            No jobs submitted yet
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:1rem;">
+    <a href="/consumer/marketplace" class="btn btn-primary" style="font-size:0.8rem;">Browse Marketplace &rarr;</a>
+  </div>
+
+</div>
+{{end}}
+{{template "layout" .}}

@@ -8,15 +8,6 @@
       </div>
       <form method="POST" action="/login">
         <div class="form-group">
-          <label>Role</label>
-          <div class="role-group">
-            <input class="role-input" type="radio" name="role" id="role-provider" value="provider" checked>
-            <label class="role-label" for="role-provider">Provider</label>
-            <input class="role-input" type="radio" name="role" id="role-consumer" value="consumer">
-            <label class="role-label" for="role-consumer">Consumer</label>
-          </div>
-        </div>
-        <div class="form-group">
           <label for="email">Email address</label>
           <input type="email" id="email" name="email"
                  autocomplete="email" required placeholder="you@example.com">
@@ -30,6 +21,9 @@
           Sign in &rarr;
         </button>
       </form>
+      <p style="text-align:center;margin-top:1.5rem;font-size:0.9rem;">
+        New to SoHoLINK? <a href="/register">Create an account</a>
+      </p>
     </div>
   </div>
 </div>

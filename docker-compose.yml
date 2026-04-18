@@ -1,4 +1,14 @@
 services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   portal:
     build:
       context: .
@@ -7,6 +17,8 @@ services:
     env_file: .env
     expose:
       - "8080"
+    depends_on:
+      - postgres
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ > /dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -31,3 +43,6 @@ services:
       - C:/Users/Jodson Graves/.cloudflared:/etc/cloudflared
     depends_on:
       - nginx
+
+volumes:
+  postgres_data:
