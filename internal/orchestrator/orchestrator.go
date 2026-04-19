@@ -30,6 +30,7 @@ type ScheduleFunc func(candidates []NodeEntry, tier SLATier) ([]NodeEntry, error
 type SubmitJobRequest struct {
 	ConsumerID        string
 	WorkloadType      string
+	ContainerImage    string
 	CountryConstraint string
 	CPUCores          int
 	RAMMB             int
@@ -109,13 +110,15 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 	_, err = tx.Exec(ctx, `
 		INSERT INTO jobs (
 			id, participant_id, node_id, workload_type, status,
-			country_constraint, cpu_cores, ram_mb, storage_gb, gpu_required
+			country_constraint, cpu_cores, ram_mb, storage_gb, gpu_required,
+			container_image
 		) VALUES (
 			$1, $2, $3, $4::workload_type, 'pending'::job_status,
-			$5, $6, $7, $8, $9
+			$5, $6, $7, $8, $9, $10
 		)`,
 		jobID, req.ConsumerID, node.NodeID, req.WorkloadType,
 		countryConstraint, req.CPUCores, req.RAMMB, req.StorageGB, req.GPURequired,
+		req.ContainerImage,
 	)
 	if err != nil {
 		return SubmitJobResponse{}, fmt.Errorf("insert job: %w", err)

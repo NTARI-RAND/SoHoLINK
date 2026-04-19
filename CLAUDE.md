@@ -58,18 +58,19 @@ or both.
 ## Repository Structure (current state)
 ```
 cmd/
-  agent/          ← Node agent daemon entry point (main.go complete)
+  agent/          ← Node agent daemon: main.go, service_windows.go, install_windows.go
   orchestrator/   ← Control plane entry point (stub)
   portal/         ← Web portal entry point (stub)
 internal/
-  agent/          ← Hardware detection, resource profiles, heartbeat, executor, telemetry
-  api/            ← Control plane HTTP API (node registration, heartbeat, telemetry routes)
+  agent/          ← Hardware detection, resource profiles, heartbeat, executor,
+                     telemetry, config.go (NodeConfig, ClaimNode, LoadConfig, SaveConfig)
+  api/            ← Control plane HTTP API (node registration, claim, heartbeat, telemetry)
   identity/       ← SPIRE integration, TLSClientConfig, TLSServerConfig, RequireSPIFFE middleware
   orchestrator/   ← NodeRegistry, job submission, node matching, job token issuance
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
-  scheduler/      ← Geo-aware job placement with residency constraints
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–011
+  scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–013
   network/        ← WireGuard bootstrapper (stub)
 web/
   templates/      ← layout.html, index.html, login.html, dashboard.html,
@@ -77,6 +78,8 @@ web/
                      consumer_marketplace.html, consumer_job_status.html,
                      dispute_queue.html
   static/css/     ← portal.css (complete design system)
+installer/
+  windows/        ← WiX v4 MSI: SoHoLINK.wxs, build.ps1, LICENSE.rtf, agpl-3.0.txt
 test/integration/ ← Phase 1 end-to-end integration test (build tag: integration)
 ```
 
@@ -94,6 +97,8 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 009 | `009_payout_released_at` | `payout_released_at TIMESTAMPTZ` on job_metering |
 | 010 | `010_unique_node_hostname` | `uq_nodes_provider_hostname` unique index on nodes |
 | 011 | `011_participants` | Unified `participants` table replacing `providers`+`consumers`; `participant_id` FKs on nodes/jobs/disputes |
+| 012 | `012_container_image` | `container_image TEXT` nullable column on `jobs` |
+| 013 | `013_node_registration_tokens` | `node_registration_tokens` table: single-use installer tokens tied to a participant |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -112,6 +117,7 @@ golang-migrate is idempotent — safe to run repeatedly.
 | `internal/store` | `uptime_test.go` | TestRunUptimeScorer — seeds 19152 heartbeats, verifies uptime_pct update |
 | `internal/api` | `*_test.go` | 7 API handler tests: node registration, heartbeat, job completion |
 | `internal/orchestrator` | `orchestrator_test.go` | 9 registry tests: geo match, GPU filter, offline exclusion, eviction, stale eviction |
+| `internal/scheduler` | `scheduler_test.go` | 8 scheduler tests: classScore, freshnessScore, ordering, tier size, insufficient candidates |
 | `test/integration` | `phase1_test.go` | End-to-end: migrations, SubmitJob, token round-trip, Stripe (skipped without key) |
 
 ## Local Dev Services
@@ -130,18 +136,23 @@ Use `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY`.
 ## Known TODOs
 These are acknowledged gaps, not bugs — do not silently fix them without discussion:
 
-1. **`cmd/agent/main.go` — telemetry mTLS client**: `runJob` uses a plain
-   `http.Client` for telemetry emission. The control plane wraps every route
-   with `identity.RequireSPIFFE`, which will reject a client with no SVID.
-   Must be replaced with `identity.NewSource` + `identity.TLSClientConfig`.
-
-2. **`cmd/agent/main.go` — container image placeholder**: `executor.Run` is
-   called with `Image: "alpine:latest"`. Real image must come from the job
-   assignment payload.
-
-3. **Orchestrator test binary blocked on NTARIHQ**: Windows Application Control
+1. **Orchestrator test binary blocked on NTARIHQ**: Windows Application Control
    (AppLocker/WDAC) blocks `internal/orchestrator` test binary execution on the
    dev machine. Tests pass in CI (Linux). Not a code issue — do not attempt to fix.
+
+2. **`/nodes/claim` — node class always `C`**: The claim endpoint inserts all
+   installer-claimed nodes as Class C. Class should be derived from hardware profile
+   or set by the participant during onboarding. Deferred until hardware classification
+   logic is defined.
+
+3. **Telemetry HMAC verification not server-side**: `token_secret` is returned by
+   `/nodes/claim` and stored in `agent.conf`. The control plane does not yet verify
+   HMAC signatures on telemetry payloads — it only checks SPIFFE identity. Add
+   server-side verification when the dispute evidence layer is hardened.
+
+4. **WiX installer bitmap assets**: `banner.bmp` and `dialog.bmp` are generated by
+   `build.ps1` as solid-color placeholders. Replace with branded artwork before
+   public release.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -213,6 +224,14 @@ country/region constraints. Scheduler refuses to violate hard residency.
 **Disputes:** NTARI arbitrates via the Dispute Terminal (`/dispute/queue` —
 staff-only, enforced by `is_staff` DB check). Signed telemetry is primary evidence.
 Default 50/50 split if unresolved after 5 business days.
+
+**Node self-registration (installer flow):** Participants generate a single-use token
+on their dashboard (`POST /node/token`). The Windows MSI wizard collects this token,
+the agent binary calls `POST /nodes/claim` on first run (SPIFFE mTLS, validated against
+`node_registration_tokens`), receives its `node_id` + `token_secret`, and writes
+`%PROGRAMDATA%\SoHoLINK\agent.conf`. Subsequent starts load the conf and skip the
+claim step. `/nodes/register` is retained for programmatic use (seeding, CI) but
+requires `X-Register-Secret` header matching `CONTROL_PLANE_REGISTER_SECRET` env var.
 
 **Node classes:**
 - Class A: SOHO servers — full Docker runtime, all workload types, ≥95% uptime

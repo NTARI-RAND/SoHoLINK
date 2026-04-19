@@ -63,6 +63,22 @@
           <td>
             <form method="POST" action="/consumer/job">
               <input type="hidden" name="node_id" value="{{.ID}}">
+              <div class="form-group" style="margin-top:0.75rem;">
+                <label style="font-size:0.75rem;color:var(--muted);">Container Image</label>
+                <input type="text" name="container_image"
+                       placeholder="e.g. ubuntu:22.04, python:3.12-slim"
+                       style="font-size:0.8rem;" required>
+              </div>
+              <div class="form-group">
+                <label style="font-size:0.75rem;color:var(--muted);">Workload Type</label>
+                <select name="workload_type" style="font-size:0.8rem;">
+                  <option value="app_hosting">App Hosting</option>
+                  <option value="batch_compute">Batch Compute</option>
+                  <option value="ai_inference">AI Inference</option>
+                  <option value="object_storage">Object Storage</option>
+                  <option value="cdn_edge">CDN Edge</option>
+                </select>
+              </div>
               <button type="submit" class="btn btn-outline btn-sm">Request</button>
             </form>
           </td>

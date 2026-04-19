@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SoHoLINK Node Agent — WiX v4 installer source.
+
+  Build with: wix build SoHoLINK.wxs -o SoHoLINK.msi
+  Or via:     installer/windows/build.ps1
+
+  Wizard screens:
+    WelcomeDlg → LicenseAgreementDlg → RegTokenDlg →
+    InstallDirDlg → VerifyReadyDlg → ProgressDlg → ExitDlg
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+    Name="SoHoLINK Node Agent"
+    Manufacturer="NTARI (Network Theory Applied Research Institute)"
+    Version="2.0.0"
+    UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+    Language="1033"
+    Codepage="1252"
+    Compressed="yes">
+
+    <SummaryInformation
+      Keywords="SoHoLINK compute node agent installer"
+      Description="Installs and registers the SoHoLINK node agent as a Windows service."
+      Manufacturer="NTARI" />
+
+    <!-- ── Upgrade handling ─────────────────────────────────────────── -->
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of SoHoLINK is already installed." />
+
+    <!-- ── Media ───────────────────────────────────────────────────── -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ── Properties ─────────────────────────────────────────────── -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="AGENT_REGISTER_TOKEN" Secure="yes" />
+    <Property Id="AGENT_COUNTRY_CODE" Value="US" Secure="yes" />
+    <Property Id="AGENT_CONTROL_PLANE_ADDR" Value="https://control.soholink.org:8443" Secure="yes" />
+    <Property Id="SPIFFE_ENDPOINT_SOCKET" Value="unix:///run/spire/sockets/agent.sock" Secure="yes" />
+    <Property Id="AGENT_PROVIDER_ID" Secure="yes" />
+    <Property Id="AGENT_NODE_CLASS" Value="C" Secure="yes" />
+
+    <!-- ── Directory layout ───────────────────────────────────────── -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="NTARIFOLDER" Name="NTARI">
+        <Directory Id="INSTALLFOLDER" Name="SoHoLINK" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="STARTMENUFOLDER" Name="SoHoLINK" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="SOHOLINKDATAFOLDER" Name="SoHoLINK" />
+    </StandardDirectory>
+
+    <!-- ── Feature ────────────────────────────────────────────────── -->
+    <Feature Id="MainFeature" Title="SoHoLINK Node Agent" Level="1">
+      <ComponentGroupRef Id="AgentComponents" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+      <ComponentGroupRef Id="DataDirComponents" />
+    </Feature>
+
+    <!-- ── Components ─────────────────────────────────────────────── -->
+    <ComponentGroup Id="AgentComponents" Directory="INSTALLFOLDER">
+
+      <Component Id="AgentBinary">
+        <File Id="AgentExe"
+              Source="soholink-agent.exe"
+              KeyPath="yes" />
+
+        <!-- Windows service: AUTO_START, runs as LocalSystem -->
+        <ServiceInstall
+          Id="SoHoLINKAgentSvc"
+          Name="SoHoLINKAgent"
+          DisplayName="SoHoLINK Node Agent"
+          Description="Contributes compute capacity to the SoHoLINK network."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Arguments="--service" />
+
+        <ServiceControl
+          Id="StartSoHoLINKAgent"
+          Name="SoHoLINKAgent"
+          Start="install"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+      </Component>
+
+      <Component Id="SpireAgentBinary">
+        <File Id="SpireAgentExe"
+              Source="spire-agent.exe"
+              KeyPath="yes" />
+
+        <ServiceInstall
+          Id="SoHoLINKSPIRESvc"
+          Name="SoHoLINKSPIREAgent"
+          DisplayName="SoHoLINK SPIRE Agent"
+          Description="Manages workload identity certificates for the SoHoLINK node agent."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Arguments="-config &quot;[SOHOLINKDATAFOLDER]spire-agent.conf&quot;" />
+
+        <ServiceControl
+          Id="StartSPIRESvc"
+          Name="SoHoLINKSPIREAgent"
+          Start="install"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+      </Component>
+
+      <!-- Write environment variables to the service registry key so the
+           agent process sees them regardless of user session. -->
+      <Component Id="ServiceEnvVars">
+        <RegistryKey Root="HKLM"
+                     Key="SYSTEM\CurrentControlSet\Services\SoHoLINKAgent\Environment">
+          <RegistryValue Type="string" Name="AGENT_REGISTER_TOKEN"
+                         Value="[AGENT_REGISTER_TOKEN]" KeyPath="yes" />
+          <RegistryValue Type="string" Name="AGENT_COUNTRY_CODE"
+                         Value="[AGENT_COUNTRY_CODE]" />
+          <RegistryValue Type="string" Name="AGENT_CONTROL_PLANE_ADDR"
+                         Value="[AGENT_CONTROL_PLANE_ADDR]" />
+          <RegistryValue Type="string" Name="SPIFFE_ENDPOINT_SOCKET"
+                         Value="[SPIFFE_ENDPOINT_SOCKET]" />
+          <RegistryValue Type="string" Name="AGENT_NODE_CLASS"
+                         Value="[AGENT_NODE_CLASS]" />
+        </RegistryKey>
+      </Component>
+
+    </ComponentGroup>
+
+    <ComponentGroup Id="ShortcutComponents" Directory="STARTMENUFOLDER">
+      <Component Id="DashboardShortcut">
+        <Shortcut Id="DashboardLink"
+                  Name="SoHoLINK Dashboard"
+                  Target="https://soholink.org/dashboard"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="CleanStartMenu" Directory="STARTMENUFOLDER" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\NTARI\SoHoLINK"
+                       Name="installed"
+                       Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="DataDirComponents" Directory="SOHOLINKDATAFOLDER">
+      <!-- Create %PROGRAMDATA%\SoHoLINK so the agent can write agent.conf -->
+      <Component Id="DataDir">
+        <CreateFolder />
+        <RegistryValue Root="HKLM"
+                       Key="Software\NTARI\SoHoLINK"
+                       Name="DataDir"
+                       Type="string"
+                       Value="[SOHOLINKDATAFOLDER]"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ── UI ─────────────────────────────────────────────────────── -->
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
+    <WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
+
+    <!-- Inject the custom Registration Token dialog between
+         WelcomeDlg and LicenseAgreementDlg. -->
+    <UI>
+      <!-- Override the first "Next" from WelcomeDlg to go to RegTokenDlg -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog"
+               Value="RegTokenDlg" Order="2">1</Publish>
+      <!-- Override LicenseAgreementDlg "Back" to return to RegTokenDlg -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog"
+               Value="RegTokenDlg">1</Publish>
+
+      <!-- RegTokenDlg: custom dialog to collect the registration token -->
+      <Dialog Id="RegTokenDlg" Width="370" Height="270" Title="Node Registration Token">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Node Registration Token" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="30"
+                 Text="Enter the one-time token from soholink.org/dashboard. It links this device to your account." />
+        <Control Id="TokenLabel" Type="Text" X="25" Y="65" Width="80" Height="12"
+                 Text="Registration Token:" />
+        <Control Id="TokenEdit" Type="Edit" X="25" Y="78" Width="320" Height="18"
+                 Property="AGENT_REGISTER_TOKEN" />
+        <Control Id="CountryLabel" Type="Text" X="25" Y="105" Width="80" Height="12"
+                 Text="Country Code:" />
+        <Control Id="CountryEdit" Type="Edit" X="25" Y="118" Width="60" Height="18"
+                 Property="AGENT_COUNTRY_CODE" />
+        <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="&amp;Back">
+          <Publish Event="NewDialog" Value="WelcomeDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="&amp;Next">
+          <Condition Action="disable">AGENT_REGISTER_TOKEN = ""</Condition>
+          <Condition Action="enable">AGENT_REGISTER_TOKEN &lt;&gt; ""</Condition>
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+
+  </Package>
+</Wix>

@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 func mustEnv(key string) string {
@@ -25,28 +29,143 @@ func mustEnv(key string) string {
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	var tokenSecret []byte
-	if s := os.Getenv("AGENT_TOKEN_SECRET"); s != "" {
-		var err error
-		tokenSecret, err = hex.DecodeString(s)
-		if err != nil {
-			log.Fatalf("AGENT_TOKEN_SECRET: hex decode: %v", err)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--install":
+			if err := installService(); err != nil {
+				fmt.Fprintf(os.Stderr, "install service: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("SoHoLINKAgent service installed.")
+			return
+		case "--uninstall":
+			if err := removeService(); err != nil {
+				fmt.Fprintf(os.Stderr, "remove service: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("SoHoLINKAgent service removed.")
+			return
+		case "--service":
+			if err := runAsService(); err != nil {
+				log.Fatalf("service: %v", err)
+			}
+			return
 		}
-	}
-
-	cfg := agent.AgentConfig{
-		NodeID:           mustEnv("AGENT_NODE_ID"),
-		ProviderID:       mustEnv("AGENT_PROVIDER_ID"),
-		NodeClass:        mustEnv("AGENT_NODE_CLASS"),
-		CountryCode:      mustEnv("AGENT_COUNTRY_CODE"),
-		ControlPlaneAddr: mustEnv("AGENT_CONTROL_PLANE_ADDR"),
-		SPIFFESocketPath: mustEnv("SPIFFE_ENDPOINT_SOCKET"),
-		Region:           os.Getenv("AGENT_REGION"),
-		TokenSecret:      tokenSecret,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	runMain(ctx)
+}
+
+func runMain(ctx context.Context) {
+
+	controlPlaneAddr := mustEnv("AGENT_CONTROL_PLANE_ADDR")
+	spiffeSocket := mustEnv("SPIFFE_ENDPOINT_SOCKET")
+
+	// First-run: if agent.conf does not exist, claim a node using the
+	// registration token supplied by the installer (AGENT_REGISTER_TOKEN).
+	confPath := agent.DefaultConfigPath()
+	nodeCfg, err := agent.LoadConfig(confPath)
+	if err != nil {
+		regToken := mustEnv("AGENT_REGISTER_TOKEN")
+		countryCode := mustEnv("AGENT_COUNTRY_CODE")
+
+		hostname, _ := os.Hostname()
+
+		// Need a temporary mTLS client to reach the control plane for claiming.
+		idSrc, idErr := identity.NewSource(ctx, spiffeSocket)
+		if idErr != nil {
+			log.Fatalf("claim: identity source: %v", idErr)
+		}
+		serverID := spiffeid.RequireFromString("spiffe://soholink.org/orchestrator")
+		claimClient := &http.Client{
+			Transport: &http.Transport{TLSClientConfig: identity.TLSClientConfig(idSrc, serverID)},
+			Timeout:   30 * time.Second,
+		}
+
+		hw0, hwErr := agent.Detect(ctx)
+		if hwErr != nil {
+			log.Fatalf("claim: hardware detection: %v", hwErr)
+		}
+
+		nodeCfg, err = agent.ClaimNode(ctx, claimClient, controlPlaneAddr, regToken,
+			hw0, hostname, countryCode, os.Getenv("AGENT_REGION"))
+		if err != nil {
+			log.Fatalf("claim node: %v", err)
+		}
+		if err := agent.SaveConfig(confPath, nodeCfg); err != nil {
+			log.Fatalf("save config: %v", err)
+		}
+		slog.Info("node claimed and config saved", "node_id", nodeCfg.NodeID, "path", confPath)
+
+		// Write SPIRE agent config if the control plane returned a join token.
+		if nodeCfg.SpireJoinToken != "" {
+			spireDataDir := filepath.Join(filepath.Dir(confPath), "spire", "data")
+			spireKeysDir := filepath.Join(filepath.Dir(confPath), "spire", "keys")
+			spireConf := fmt.Sprintf(`agent {
+    data_dir = %q
+    log_level = "INFO"
+    server_address = "spire.soholink.org"
+    server_port = "8081"
+    socket_path = %q
+    trust_domain = "soholink.org"
+    insecure_bootstrap = true
+}
+
+plugins {
+    NodeAttestor "join_token" {
+        plugin_data {
+            join_token = %q
+        }
+    }
+    KeyManager "disk" {
+        plugin_data {
+            directory = %q
+        }
+    }
+    WorkloadAttestor "unix" {
+        plugin_data {}
+    }
+}
+`, spireDataDir, spiffeSocket, nodeCfg.SpireJoinToken, spireKeysDir)
+
+			spireConfPath := filepath.Join(filepath.Dir(confPath), "spire-agent.conf")
+			if mkErr := os.MkdirAll(filepath.Dir(spireConfPath), 0o700); mkErr == nil {
+				if writeErr := os.WriteFile(spireConfPath, []byte(spireConf), 0o600); writeErr == nil {
+					slog.Info("wrote SPIRE agent config", "path", spireConfPath)
+				} else {
+					slog.Warn("failed to write SPIRE agent config", "error", writeErr)
+				}
+			}
+		}
+	}
+
+	var tokenSecret []byte
+	if nodeCfg.TokenSecret != "" {
+		var hexErr error
+		tokenSecret, hexErr = hex.DecodeString(nodeCfg.TokenSecret)
+		if hexErr != nil {
+			log.Fatalf("token_secret: hex decode: %v", hexErr)
+		}
+	} else if s := os.Getenv("AGENT_TOKEN_SECRET"); s != "" {
+		var hexErr error
+		tokenSecret, hexErr = hex.DecodeString(s)
+		if hexErr != nil {
+			log.Fatalf("AGENT_TOKEN_SECRET: hex decode: %v", hexErr)
+		}
+	}
+
+	cfg := agent.AgentConfig{
+		NodeID:           nodeCfg.NodeID,
+		ProviderID:       mustEnv("AGENT_PROVIDER_ID"),
+		NodeClass:        mustEnv("AGENT_NODE_CLASS"),
+		CountryCode:      mustEnv("AGENT_COUNTRY_CODE"),
+		ControlPlaneAddr: controlPlaneAddr,
+		SPIFFESocketPath: spiffeSocket,
+		Region:           os.Getenv("AGENT_REGION"),
+		TokenSecret:      tokenSecret,
+	}
 
 	hw, err := agent.Detect(ctx)
 	if err != nil {
@@ -71,6 +190,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	telemetryClient := heartbeatAgent.NewTelemetryClient()
+
 	go func() {
 		if err := agent.StartHeartbeatLoop(ctx, heartbeatAgent, 30*time.Second); err != nil {
 			slog.Error("heartbeat loop exited", "error", err)
@@ -92,7 +213,7 @@ func main() {
 				continue
 			}
 			for _, job := range jobs {
-				go runJob(ctx, executor, cfg.ControlPlaneAddr, cfg.NodeID, tokenSecret, hw, job)
+				go runJob(ctx, executor, telemetryClient, cfg.ControlPlaneAddr, cfg.NodeID, tokenSecret, hw, job)
 			}
 		}
 	}
@@ -103,21 +224,13 @@ func main() {
 func runJob(
 	ctx context.Context,
 	executor *agent.Executor,
+	telemetryClient *http.Client,
 	controlPlaneAddr, nodeID string,
 	tokenSecret []byte,
 	hw agent.HardwareProfile,
 	job agent.JobAssignment,
 ) {
 	slog.Info("starting job", "job_id", job.JobID)
-
-	// TODO(Phase 3): Replace with an mTLS client built via identity.TLSClientConfig.
-	// The control plane API server wraps every route with identity.RequireSPIFFE,
-	// which terminates the TLS handshake and returns 401 if the client does not
-	// present a valid SPIRE-issued X.509 SVID. A plain http.Client has no client
-	// certificate and will be rejected before reaching the telemetry handler.
-	// Use identity.NewSource(ctx, spiffeSocketPath) + identity.TLSClientConfig to
-	// build a transport that presents the node's SVID to the control plane.
-	telemetryClient := &http.Client{Timeout: 15 * time.Second}
 
 	done := make(chan struct{})
 	go func() {
@@ -140,8 +253,13 @@ func runJob(
 		}
 	}()
 
+	if job.Image == "" {
+		slog.Warn("job has no container image — skipping execution", "job_id", job.JobID)
+		return
+	}
+
 	spec := agent.ContainerSpec{
-		Image:    "alpine:latest", // placeholder — real image supplied by job assignment in Phase 3
+		Image:    job.Image,
 		JobID:    job.JobID,
 		JobToken: job.JobToken,
 		Caps: agent.CapProfile{

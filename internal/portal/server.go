@@ -2,13 +2,17 @@ package portal
 
 import (
 	"context"
-	"encoding/json"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -156,6 +160,9 @@ type DashboardData struct {
 	TotalJobs            int64
 	ActiveJobs           []ActiveJobRow
 	SubmittedJobs        []SubmittedJobRow
+	// RegToken is set after the participant clicks "Get Node Token".
+	// Empty on normal dashboard loads.
+	RegToken string
 }
 
 // JobStatusData is the template data for consumer_job_status.html.
@@ -247,6 +254,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleProviderProvision)))
 	mux.Handle("POST /provider/provision/profile",
 		RequireAuth(sm, http.HandlerFunc(ps.handleAddProfile)))
+	mux.Handle("POST /node/token",
+		RequireAuth(sm, http.HandlerFunc(ps.handleGenerateNodeToken)))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -525,18 +534,24 @@ func (ps *PortalServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
-	ctx := r.Context()
-
-	// Node count and average uptime.
-	var nodeCount int64
-	var uptimePct float64
-	err := ps.db.Pool.QueryRow(ctx,
-		`SELECT COUNT(*), COALESCE(AVG(uptime_pct), 0) FROM nodes WHERE participant_id = $1`,
-		claims.UserID,
-	).Scan(&nodeCount, &uptimePct)
+	data, err := ps.buildDashboardData(r.Context(), claims)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	ps.renderTemplate(w, "dashboard.html", data)
+}
+
+// buildDashboardData runs the four dashboard queries and returns a populated
+// DashboardData. RegToken is always empty — callers set it when needed.
+func (ps *PortalServer) buildDashboardData(ctx context.Context, claims SessionClaims) (DashboardData, error) {
+	var nodeCount int64
+	var uptimePct float64
+	if err := ps.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(AVG(uptime_pct), 0) FROM nodes WHERE participant_id = $1`,
+		claims.UserID,
+	).Scan(&nodeCount, &uptimePct); err != nil {
+		return DashboardData{}, err
 	}
 
 	uptimeClass := ""
@@ -549,10 +564,9 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 		uptimeClass = "C"
 	}
 
-	// Contributor earnings — only meaningful when the participant has nodes.
 	var totalCents, thisMonthCents, pendingCents, totalJobs int64
 	if nodeCount > 0 {
-		err = ps.db.Pool.QueryRow(ctx, `
+		if err := ps.db.Pool.QueryRow(ctx, `
 			SELECT
 			    COALESCE(SUM(jm.contributor_earned_cents), 0),
 			    COALESCE(SUM(CASE WHEN DATE_TRUNC('month', jm.computed_at) = DATE_TRUNC('month', NOW())
@@ -563,13 +577,11 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 			JOIN job_metering jm ON jm.job_id = j.id
 			WHERE n.participant_id = $1`,
 			claims.UserID,
-		).Scan(&totalCents, &thisMonthCents, &totalJobs)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+		).Scan(&totalCents, &thisMonthCents, &totalJobs); err != nil {
+			return DashboardData{}, err
 		}
 
-		err = ps.db.Pool.QueryRow(ctx, `
+		if err := ps.db.Pool.QueryRow(ctx, `
 			SELECT COALESCE(SUM(jm.contributor_earned_cents), 0)
 			FROM nodes n
 			JOIN jobs j ON j.node_id = n.id
@@ -577,14 +589,11 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 			WHERE n.participant_id = $1
 			  AND j.completed_at > NOW() - INTERVAL '24 hours'`,
 			claims.UserID,
-		).Scan(&pendingCents)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+		).Scan(&pendingCents); err != nil {
+			return DashboardData{}, err
 		}
 	}
 
-	// Active jobs running on participant's nodes.
 	var activeJobs []ActiveJobRow
 	if nodeCount > 0 {
 		aRows, err := ps.db.Pool.Query(ctx, `
@@ -597,26 +606,22 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 			claims.UserID,
 		)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return DashboardData{}, err
 		}
 		defer aRows.Close()
 		for aRows.Next() {
 			var row ActiveJobRow
 			if err := aRows.Scan(&row.JobID, &row.NodeID, &row.Workload,
 				&row.CPUCores, &row.RAMMB, &row.StartedAt); err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-				return
+				return DashboardData{}, err
 			}
 			activeJobs = append(activeJobs, row)
 		}
 		if err := aRows.Err(); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return DashboardData{}, err
 		}
 	}
 
-	// Jobs submitted by this participant as a buyer (most recent 10).
 	sRows, err := ps.db.Pool.Query(ctx, `
 		SELECT id, status, workload_type, created_at
 		FROM jobs
@@ -626,25 +631,22 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 		claims.UserID,
 	)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return DashboardData{}, err
 	}
 	defer sRows.Close()
 	var submittedJobs []SubmittedJobRow
 	for sRows.Next() {
 		var row SubmittedJobRow
 		if err := sRows.Scan(&row.JobID, &row.Status, &row.Workload, &row.CreatedAt); err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			return DashboardData{}, err
 		}
 		submittedJobs = append(submittedJobs, row)
 	}
 	if err := sRows.Err(); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+		return DashboardData{}, err
 	}
 
-	ps.renderTemplate(w, "dashboard.html", DashboardData{
+	return DashboardData{
 		Email:                claims.Email,
 		IsAuthenticated:      true,
 		HasNodes:             nodeCount > 0,
@@ -657,7 +659,7 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 		TotalJobs:            totalJobs,
 		ActiveJobs:           activeJobs,
 		SubmittedJobs:        submittedJobs,
-	})
+	}, nil
 }
 
 func (ps *PortalServer) handleConsumerMarketplace(w http.ResponseWriter, r *http.Request) {
@@ -897,18 +899,42 @@ func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	workloadType := r.FormValue("workload_type")
+	if workloadType == "" {
+		workloadType = "app_hosting"
+	}
+	containerImage := r.FormValue("container_image")
+	if containerImage == "" {
+		http.Error(w, "container_image is required", http.StatusBadRequest)
+		return
+	}
+
+	cpuCores := 2
+	ramMB := 4096
+	if v := r.FormValue("cpu_cores"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cpuCores = n
+		}
+	}
+	if v := r.FormValue("ram_mb"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			ramMB = n
+		}
+	}
+
 	resp, err := ps.orch.SubmitJob(r.Context(), orchestrator.SubmitJobRequest{
-		ConsumerID:   claims.UserID,
-		WorkloadType: "app_hosting",
-		CPUCores:     2,
-		RAMMB:        4096,
+		ConsumerID:     claims.UserID,
+		WorkloadType:   workloadType,
+		ContainerImage: containerImage,
+		CPUCores:       cpuCores,
+		RAMMB:          ramMB,
 	})
 	if err != nil {
 		http.Error(w, "failed to submit job", http.StatusInternalServerError)
 		return
 	}
 
-	metrics.JobsSubmittedTotal.WithLabelValues("app_hosting").Inc()
+	metrics.JobsSubmittedTotal.WithLabelValues(workloadType).Inc()
 	http.Redirect(w, r, "/consumer/job/"+resp.JobID, http.StatusSeeOther)
 }
 
@@ -1390,4 +1416,63 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 	}
 
 	http.Redirect(w, r, "/provider/provision", http.StatusSeeOther)
+}
+
+// handleGenerateNodeToken issues a single-use registration token tied to the
+// authenticated participant. The token is displayed once on the dashboard so
+// the installer wizard can copy it during first-run node claim.
+func (ps *PortalServer) handleGenerateNodeToken(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	token := hex.EncodeToString(raw)
+
+	_, err := ps.db.Pool.Exec(r.Context(),
+		`INSERT INTO node_registration_tokens (token, participant_id) VALUES ($1, $2)`,
+		token, claims.UserID,
+	)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate a SPIRE join token tied to this registration token's TTL.
+	// The spire-server binary is available via the shared socket volume.
+	spireJoinToken := ""
+	spireExpires := time.Time{}
+	spireOut, spireErr := exec.CommandContext(r.Context(),
+		"spire-server", "token", "generate",
+		"-socketPath", "/run/spire-server/private/api.sock",
+		"-ttl", "604800", // 7 days in seconds
+	).Output()
+	if spireErr == nil {
+		// Output format: "Token: <token>\n"
+		line := strings.TrimSpace(string(spireOut))
+		if after, ok := strings.CutPrefix(line, "Token: "); ok {
+			spireJoinToken = after
+			spireExpires = time.Now().Add(7 * 24 * time.Hour)
+			_, _ = ps.db.Pool.Exec(r.Context(),
+				`UPDATE node_registration_tokens
+				 SET spire_join_token = $1, spire_join_token_expires = $2
+				 WHERE token = $3`,
+				spireJoinToken, spireExpires, token,
+			)
+		}
+	} else {
+		slog.Warn("spire token generate failed — node will need manual SPIRE provisioning",
+			"error", spireErr)
+	}
+
+	// Re-render dashboard with the token surfaced once.
+	data, err := ps.buildDashboardData(r.Context(), claims)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	data.RegToken = token
+	ps.renderTemplate(w, "dashboard.html", data)
 }

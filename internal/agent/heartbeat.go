@@ -29,6 +29,7 @@ type AgentConfig struct {
 type JobAssignment struct {
 	JobID    string `json:"job_id"`
 	JobToken string `json:"job_token"`
+	Image    string `json:"container_image"`
 }
 
 // HeartbeatAgent manages registration, heartbeating, and job polling
@@ -66,6 +67,19 @@ func NewHeartbeatAgent(ctx context.Context, cfg AgentConfig, hw HardwareProfile)
 		client:   client,
 		idSource: idSource,
 	}, nil
+}
+
+// NewTelemetryClient returns an mTLS HTTP client that presents this node's
+// SPIRE-issued SVID to the control plane. Use this for telemetry and job
+// completion calls in runJob — the plain http.Client will be rejected by
+// the control plane's RequireSPIFFE middleware.
+func (a *HeartbeatAgent) NewTelemetryClient() *http.Client {
+	serverID := spiffeid.RequireFromString("spiffe://soholink.org/orchestrator")
+	tlsCfg := identity.TLSClientConfig(a.idSource, serverID)
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Timeout:   15 * time.Second,
+	}
 }
 
 // registerPayload is the JSON body for POST /nodes/register.

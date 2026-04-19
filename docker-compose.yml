@@ -9,6 +9,24 @@ services:
     ports:
       - "5432:5432"
 
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    restart: unless-stopped
+    command: ["-config", "/etc/spire/server.conf"]
+    volumes:
+      - ./deploy/spire/server.conf:/etc/spire/server.conf:ro
+      - spire_data:/opt/spire/data/server
+      - spire_socket:/run/spire-server/private
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck",
+             "-socketPath", "/run/spire-server/private/api.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   portal:
     build:
       context: .
@@ -17,8 +35,13 @@ services:
     env_file: .env
     expose:
       - "8080"
+    volumes:
+      - spire_socket:/run/spire-server/private:ro
     depends_on:
-      - postgres
+      postgres:
+        condition: service_started
+      spire-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ > /dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -46,3 +69,5 @@ services:
 
 volumes:
   postgres_data:
+  spire_data:
+  spire_socket:
