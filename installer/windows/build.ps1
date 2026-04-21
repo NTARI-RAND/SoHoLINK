@@ -101,5 +101,10 @@ try {
     Pop-Location
 }
 
+# ── Step 3: copy MSI to web/static for portal download ─────────────────────
+$staticOut = Join-Path $RepoRoot "web\static\SoHoLINK-Setup.msi"
+Copy-Item -Path $msiOut -Destination $staticOut -Force
+Write-Host "    Static    : $staticOut"
+
 Write-Host ""
 Write-Host "==> Done: $msiOut"

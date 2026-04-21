@@ -12,23 +12,47 @@
   {{if .HasNodes}}
   <!-- ── Contributor Section ─────────────────────────────────────── -->
   <div class="section-label">Your Nodes</div>
-  <div class="stat-grid">
-    <div class="stat-cell">
-      <div class="stat-label">Active nodes</div>
-      <div class="stat-value cyan">{{.NodeCount}}</div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Avg uptime (7d)</div>
-      <div class="stat-value">{{printf "%.1f" .UptimePct}}<span style="font-size:1rem;color:var(--muted);">%</span></div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Node class</div>
-      {{if .UptimeClass}}
-      <div class="stat-value cyan">{{.UptimeClass}}</div>
-      {{else}}
-      <div style="font-size:0.8rem;color:var(--muted);padding-top:0.4rem;">Unclassified — needs 7d uptime data</div>
-      {{end}}
-    </div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Hostname</th>
+          <th>Country</th>
+          <th>Class</th>
+          <th>Status</th>
+          <th>Uptime (7d)</th>
+          <th>Last Heartbeat</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Nodes}}
+        <tr>
+          <td><code style="font-size:0.8rem;">{{.Hostname}}</code></td>
+          <td>{{.CountryCode}}</td>
+          <td>
+            {{if .NodeClass}}
+            <span style="color:var(--accent);font-weight:600;">{{.NodeClass}}</span>
+            {{else}}
+            <span style="color:var(--muted);">—</span>
+            {{end}}
+          </td>
+          <td>
+            {{if eq .Status "online"}}
+            <span class="badge badge-online">&#9679;&nbsp;online</span>
+            {{else if eq .Status "draining"}}
+            <span class="badge badge-idle">&#9679;&nbsp;draining</span>
+            {{else}}
+            <span class="badge badge-offline">&#9679;&nbsp;offline</span>
+            {{end}}
+          </td>
+          <td>{{printf "%.1f" .UptimePct}}<span style="color:var(--muted);font-size:0.75rem;">%</span></td>
+          <td style="color:var(--muted);font-size:0.8rem;">{{.LastHeartbeat.Format "Jan 2, 15:04"}}</td>
+          <td><a href="/provider/provision" style="font-size:0.8rem;">Configure →</a></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
   </div>
 
   <div class="section-label">Earnings</div>

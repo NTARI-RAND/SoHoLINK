@@ -1,0 +1,107 @@
+{{define "content"}}
+<div class="container" style="max-width:720px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Shenandoah Pilot</div>
+      <h2>Contribute Your Device</h2>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:2rem;">
+    <p style="font-size:0.95rem;color:var(--text);line-height:1.8;">
+      SoHoLINK pays you to share idle compute capacity from your Windows PC or laptop.
+      When your device is idle, the SoHoLINK agent runs small jobs in the background
+      and you earn from every one. You set the limits. You can stop any time.
+    </p>
+  </div>
+
+  <div class="section-label">What you need</div>
+  <div class="card" style="margin-bottom:2rem;">
+    <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.75rem;">
+      <li style="display:flex;align-items:flex-start;gap:0.75rem;">
+        <span style="color:var(--ok);font-size:1rem;margin-top:0.1rem;">&#10003;</span>
+        <span>A Windows 10 or 11 PC or laptop (64-bit)</span>
+      </li>
+      <li style="display:flex;align-items:flex-start;gap:0.75rem;">
+        <span style="color:var(--ok);font-size:1rem;margin-top:0.1rem;">&#10003;</span>
+        <span>A home internet connection (any provider &mdash; Spectrum, AT&amp;T, etc.)</span>
+      </li>
+      <li style="display:flex;align-items:flex-start;gap:0.75rem;">
+        <span style="color:var(--ok);font-size:1rem;margin-top:0.1rem;">&#10003;</span>
+        <span>A free SoHoLINK account &mdash; takes about two minutes to set up</span>
+      </li>
+      <li style="display:flex;align-items:flex-start;gap:0.75rem;">
+        <span style="color:var(--ok);font-size:1rem;margin-top:0.1rem;">&#10003;</span>
+        <span>A bank account or PayPal to receive payouts</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="section-label">How it works</div>
+  <div style="display:flex;flex-direction:column;gap:1rem;margin-bottom:2rem;">
+    <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+      <span style="font-family:var(--display);font-size:1.8rem;font-weight:700;color:var(--accent);min-width:2rem;">1</span>
+      <div>
+        <h3 style="margin-bottom:0.25rem;">Create your account</h3>
+        <p>Sign up at soholink.org. Enter your email and choose a password. No credit card needed.</p>
+      </div>
+    </div>
+    <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+      <span style="font-family:var(--display);font-size:1.8rem;font-weight:700;color:var(--accent);min-width:2rem;">2</span>
+      <div>
+        <h3 style="margin-bottom:0.25rem;">Get your Node Token</h3>
+        <p>From your dashboard, click <strong style="color:var(--text);">Get Node Token</strong>. Copy the code that appears &mdash; you will paste it into the installer in the next step.</p>
+      </div>
+    </div>
+    <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+      <span style="font-family:var(--display);font-size:1.8rem;font-weight:700;color:var(--accent);min-width:2rem;">3</span>
+      <div>
+        <h3 style="margin-bottom:0.25rem;">Run the installer</h3>
+        <p>Download and run <strong style="color:var(--text);">SoHoLINK-Setup.msi</strong>. When prompted, paste your Node Token. The installer sets up a background service that starts automatically with Windows.</p>
+      </div>
+    </div>
+    <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+      <span style="font-family:var(--display);font-size:1.8rem;font-weight:700;color:var(--accent);min-width:2rem;">4</span>
+      <div>
+        <h3 style="margin-bottom:0.25rem;">Connect your payout account</h3>
+        <p>From your dashboard, follow the <strong style="color:var(--text);">Set Up a Node</strong> link to connect your bank account or PayPal via Stripe. Payouts are released automatically after each completed job.</p>
+      </div>
+    </div>
+    <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+      <span style="font-family:var(--display);font-size:1.8rem;font-weight:700;color:var(--accent);min-width:2rem;">5</span>
+      <div>
+        <h3 style="margin-bottom:0.25rem;">You&rsquo;re done</h3>
+        <p>Your dashboard shows your node status and earnings in real time. The agent runs only when your device is idle. You can pause or uninstall any time from Windows Settings.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Common questions</div>
+  <div style="display:flex;flex-direction:column;gap:1rem;margin-bottom:2.5rem;">
+    <div class="card">
+      <h3 style="margin-bottom:0.4rem;">Will this slow down my computer?</h3>
+      <p>The agent only runs jobs when your device is idle. You can set CPU and RAM limits from your dashboard. If you start using your computer, running jobs are paused.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:0.4rem;">How much will I earn?</h3>
+      <p>Earnings depend on how often your device is online and how much work is available on the network. You keep 60&ndash;70% of the compute revenue your node generates. Payouts are processed automatically.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:0.4rem;">Is my data safe?</h3>
+      <p>The agent runs jobs inside isolated containers &mdash; workloads cannot access your personal files, photos, or documents. All communication with the network uses encrypted certificates issued by SPIRE.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:0.4rem;">How do I stop?</h3>
+      <p>Open Windows Settings &rarr; Apps &rarr; SoHoLINK and click Uninstall. The service stops immediately and is completely removed. Your earnings are paid out on the normal schedule.</p>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+    <a href="/register" class="btn btn-primary">Create Account &rarr;</a>
+    <a href="/static/SoHoLINK-Setup.msi" class="btn btn-outline">Download Installer</a>
+  </div>
+
+</div>
+{{end}}
+{{template "layout" .}}

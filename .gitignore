@@ -71,3 +71,4 @@ mobile/flutter-app/android/local.properties
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+web/static/*.msi

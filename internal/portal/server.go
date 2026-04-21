@@ -146,6 +146,17 @@ type SubmittedJobRow struct {
 	CreatedAt time.Time
 }
 
+// NodeRow is a single node entry for the dashboard node list.
+type NodeRow struct {
+	ID            string
+	Hostname      string
+	Status        string
+	NodeClass     string
+	CountryCode   string
+	UptimePct     float64
+	LastHeartbeat time.Time
+}
+
 // DashboardData is the template data for provider_dashboard.html.
 type DashboardData struct {
 	Email                string
@@ -160,6 +171,7 @@ type DashboardData struct {
 	TotalJobs            int64
 	ActiveJobs           []ActiveJobRow
 	SubmittedJobs        []SubmittedJobRow
+	Nodes                []NodeRow
 	// RegToken is set after the participant clicks "Get Node Token".
 	// Empty on normal dashboard loads.
 	RegToken string
@@ -212,6 +224,7 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 
 	// Public routes.
 	mux.HandleFunc("GET /", ps.handleIndex)
+	mux.HandleFunc("GET /join", ps.handleJoinPage)
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
@@ -362,6 +375,10 @@ func (ps *PortalServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 func (ps *PortalServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ps.renderTemplate(w, "index.html", nil)
+}
+
+func (ps *PortalServer) handleJoinPage(w http.ResponseWriter, r *http.Request) {
+	ps.renderTemplate(w, "join.html", struct{ IsAuthenticated bool }{})
 }
 
 func (ps *PortalServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
@@ -554,6 +571,34 @@ func (ps *PortalServer) buildDashboardData(ctx context.Context, claims SessionCl
 		return DashboardData{}, err
 	}
 
+	// Per-node detail rows.
+	var nodes []NodeRow
+	nodeRows, err := ps.db.Pool.Query(ctx, `
+		SELECT id, hostname, status::text, node_class::text, country_code,
+		       uptime_pct, COALESCE(last_heartbeat_at, created_at)
+		FROM nodes
+		WHERE participant_id = $1
+		ORDER BY created_at ASC`,
+		claims.UserID,
+	)
+	if err != nil {
+		return DashboardData{}, err
+	}
+	defer nodeRows.Close()
+	for nodeRows.Next() {
+		var n NodeRow
+		if err := nodeRows.Scan(
+			&n.ID, &n.Hostname, &n.Status, &n.NodeClass,
+			&n.CountryCode, &n.UptimePct, &n.LastHeartbeat,
+		); err != nil {
+			return DashboardData{}, err
+		}
+		nodes = append(nodes, n)
+	}
+	if err := nodeRows.Err(); err != nil {
+		return DashboardData{}, err
+	}
+
 	uptimeClass := ""
 	switch {
 	case uptimePct >= 95:
@@ -659,6 +704,7 @@ func (ps *PortalServer) buildDashboardData(ctx context.Context, claims SessionCl
 		TotalJobs:            totalJobs,
 		ActiveJobs:           activeJobs,
 		SubmittedJobs:        submittedJobs,
+		Nodes:                nodes,
 	}, nil
 }
 
