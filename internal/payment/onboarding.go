@@ -30,17 +30,6 @@ func (c *Client) CreateConnectedAccount(ctx context.Context, displayName, email 
 				Requested: stripe.Bool(true),
 			},
 		},
-		Controller: &stripe.AccountCreateControllerParams{
-			Fees: &stripe.AccountCreateControllerFeesParams{
-				Payer: stripe.String("application"),
-			},
-			Losses: &stripe.AccountCreateControllerLossesParams{
-				Payments: stripe.String("application"),
-			},
-			StripeDashboard: &stripe.AccountCreateControllerStripeDashboardParams{
-				Type: stripe.String("express"),
-			},
-		},
 		Settings: &stripe.AccountCreateSettingsParams{
 			Payouts: &stripe.AccountCreateSettingsPayoutsParams{
 				Schedule: &stripe.AccountCreateSettingsPayoutsScheduleParams{
