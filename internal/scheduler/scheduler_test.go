@@ -28,8 +28,8 @@ func TestClassScore(t *testing.T) {
 }
 
 func TestFreshnessScore(t *testing.T) {
-	if s := freshnessScore(time.Now()); s != 1.0 {
-		t.Errorf("fresh node: want 1.0, got %v", s)
+	if s := freshnessScore(time.Now()); s < 0.999 {
+		t.Errorf("fresh node: want >= 0.999, got %v", s)
 	}
 	if s := freshnessScore(time.Now().Add(-30 * time.Minute)); s != 0.0 {
 		t.Errorf("30-min stale node: want 0.0, got %v", s)

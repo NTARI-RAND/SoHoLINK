@@ -58,7 +58,7 @@ func seedAPIParticipant(t *testing.T, db *store.DB, email string) string {
 	return id
 }
 
-func postJSON(t *testing.T, handler http.HandlerFunc, path string, body any) *httptest.ResponseRecorder {
+func postJSON(t *testing.T, handler http.HandlerFunc, path string, body any, headers ...map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -66,6 +66,11 @@ func postJSON(t *testing.T, handler http.HandlerFunc, path string, body any) *ht
 	}
 	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
+	for _, hm := range headers {
+		for k, v := range hm {
+			r.Header.Set(k, v)
+		}
+	}
 	w := httptest.NewRecorder()
 	handler(w, r)
 	return w
@@ -74,6 +79,7 @@ func postJSON(t *testing.T, handler http.HandlerFunc, path string, body any) *ht
 // ── handleRegisterNode ───────────────────────────────────────────────────────
 
 func TestHandleRegisterNode_Valid(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 	participantID := seedAPIParticipant(t, db, "reg_node@test.com")
@@ -88,7 +94,7 @@ func TestHandleRegisterNode_Valid(t *testing.T) {
 			"CPUCores": 4,
 			"RAMMB":    8192,
 		},
-	})
+	}, map[string]string{"X-Register-Secret": "test-secret"})
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -108,12 +114,13 @@ func TestHandleRegisterNode_Valid(t *testing.T) {
 }
 
 func TestHandleRegisterNode_MissingFields(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 
 	w := postJSON(t, ps.handleRegisterNode, "/nodes/register", map[string]any{
 		"node_id": "",
-	})
+	}, map[string]string{"X-Register-Secret": "test-secret"})
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -121,6 +128,7 @@ func TestHandleRegisterNode_MissingFields(t *testing.T) {
 }
 
 func TestHandleRegisterNode_Upsert(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 	participantID := seedAPIParticipant(t, db, "upsert_node@test.com")
@@ -135,13 +143,13 @@ func TestHandleRegisterNode_Upsert(t *testing.T) {
 	}
 
 	// first registration
-	w1 := postJSON(t, ps.handleRegisterNode, "/nodes/register", payload)
+	w1 := postJSON(t, ps.handleRegisterNode, "/nodes/register", payload, map[string]string{"X-Register-Secret": "test-secret"})
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first register: expected 200, got %d: %s", w1.Code, w1.Body.String())
 	}
 
 	// second registration — same node_id, should upsert not error
-	w2 := postJSON(t, ps.handleRegisterNode, "/nodes/register", payload)
+	w2 := postJSON(t, ps.handleRegisterNode, "/nodes/register", payload, map[string]string{"X-Register-Secret": "test-secret"})
 	if w2.Code != http.StatusOK {
 		t.Fatalf("upsert: expected 200, got %d: %s", w2.Code, w2.Body.String())
 	}
@@ -161,6 +169,7 @@ func TestHandleRegisterNode_Upsert(t *testing.T) {
 // ── handleHeartbeat ──────────────────────────────────────────────────────────
 
 func TestHandleHeartbeat_Valid(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 	participantID := seedAPIParticipant(t, db, "hb_valid@test.com")
@@ -173,7 +182,7 @@ func TestHandleHeartbeat_Valid(t *testing.T) {
 		"node_class":   "A",
 		"country_code": "US",
 		"hardware_profile": map[string]any{"CPUCores": 2, "RAMMB": 4096},
-	})
+	}, map[string]string{"X-Register-Secret": "test-secret"})
 
 	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id": "30000000-0000-0000-0000-000000000003",

@@ -300,7 +300,7 @@ func TestHandleSubmitJob_ValidNode(t *testing.T) {
 	participantID := seedParticipant(t, db, "jobsubmit@test.com", "pass1234")
 	nodeID := seedNode(t, db, participantID, "online", "A", "US")
 
-	body := strings.NewReader("node_id=" + nodeID)
+	body := strings.NewReader("node_id=" + nodeID + "&container_image=nginx%3Alatest")
 	r := httptest.NewRequest(http.MethodPost, "/consumer/job", body)
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r = withClaims(r, SessionClaims{UserID: participantID, Email: "jobsubmit@test.com"})
@@ -358,12 +358,13 @@ func TestHandleSubmitJob_NodeOffline(t *testing.T) {
 
 func TestHandleDisputeResolve_InvalidPct(t *testing.T) {
 	db := setupTestDB(t)
+	arbiterID := seedStaffParticipant(t, db, "arbiter@test.com", "pw-staff-1")
 	ps := newTestPortalServer(t, db)
 
 	body := strings.NewReader("consumer_refund_pct=150")
 	r := httptest.NewRequest(http.MethodPost, "/dispute/unused-id/resolve", body)
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r = withClaims(r, SessionClaims{UserID: "arbiter-id", Email: "arbiter@test.com"})
+	r = withClaims(r, SessionClaims{UserID: arbiterID, Email: "arbiter@test.com"})
 	w := httptest.NewRecorder()
 
 	ps.handleDisputeResolve(w, r)
@@ -377,6 +378,7 @@ func TestHandleDisputeResolve_AlreadyResolved(t *testing.T) {
 	db := setupTestDB(t)
 	ps := newTestPortalServer(t, db)
 	participantID := seedParticipant(t, db, "disputer@test.com", "pass1234")
+	arbiterID := seedStaffParticipant(t, db, "arbiter2@test.com", "pw-staff-2")
 	nodeID := seedNode(t, db, participantID, "online", "A", "US")
 	jobID := seedJob(t, db, participantID, nodeID)
 	disputeID := seedResolvedDispute(t, db, jobID, nodeID, participantID)
@@ -384,7 +386,7 @@ func TestHandleDisputeResolve_AlreadyResolved(t *testing.T) {
 	body := strings.NewReader("consumer_refund_pct=50")
 	r := httptest.NewRequest(http.MethodPost, "/dispute/"+disputeID+"/resolve", body)
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r = withClaims(r, SessionClaims{UserID: participantID, Email: "disputer@test.com"})
+	r = withClaims(r, SessionClaims{UserID: arbiterID, Email: "arbiter2@test.com"})
 	r.SetPathValue("id", disputeID)
 	w := httptest.NewRecorder()
 

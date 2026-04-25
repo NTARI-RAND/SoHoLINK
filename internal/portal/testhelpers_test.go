@@ -107,6 +107,27 @@ func seedParticipant(t *testing.T, db *store.DB, email, password string) string 
 	return id
 }
 
+// seedStaffParticipant inserts a participant with is_staff = true and returns
+// the new participant ID. Used by tests that exercise staff-gated handlers
+// like handleDisputeResolve.
+func seedStaffParticipant(t *testing.T, db *store.DB, email, password string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	var id string
+	err = db.Pool.QueryRow(context.Background(),
+		`INSERT INTO participants (email, password_hash, display_name, soho_name, is_staff)
+		 VALUES ($1, $2, $3, $4, true) RETURNING id`,
+		email, string(hash), email, "staff-node",
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("seedStaffParticipant: %v", err)
+	}
+	return id
+}
+
 // seedNode inserts a node row owned by participantID and returns the node UUID.
 func seedNode(t *testing.T, db *store.DB, participantID, status, class, country string) string {
 	t.Helper()
