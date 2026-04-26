@@ -13,14 +13,31 @@ Participants own and control their hardware. NTARI never touches the hardware.
 This is a ground-up v2 rebuild. The old build is on the `legacy-v1` branch.
 Do not reference it. Do not continue or fix it.
 
+## Workflow Discipline
+SoHoLINK uses a three-layer workflow. Claude Code is layer 2 — the execution layer.
+
+1. **Claude Chat (design layer):** Produces the specification. Audits files, reads
+   SDK source, identifies all changes needed, proposes the complete implementation
+   plan. Does not write code.
+2. **Claude Code (execution layer):** Receives precise, fully-specified instructions.
+   Writes only what is specified. Does not deviate, does not add unrequested cleanup,
+   does not take autonomous action between instructions.
+3. **Human (review layer):** Reviews every diff before commit. Approves or rejects.
+
+**Never act between instructions.** Autonomous cleanup, reformatting, memory writes,
+or CLAUDE.md edits that were not requested are violations of this discipline.
+When in doubt, stop and report — do not act.
+
+Commit messages are written by the human verbatim. Do not append Co-Authored-By,
+Signed-off-by, or similar trailers.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
 - **Module:** `github.com/NetworkTheoryAppliedResearchInstitute/soholink`
 - **Domain:** soholink.org
 - **Trust domain:** spiffe://soholink.org
-- **Working branch:** v2-rebuild
-- **Main branch:** master
+- **Working branch:** master
 
 ## Technology Stack
 | Layer | Technology |
@@ -62,8 +79,11 @@ cmd/
   orchestrator/   ← Control plane entry point (stub)
   portal/         ← Web portal entry point (stub)
 internal/
-  agent/          ← Hardware detection, resource profiles, heartbeat, executor,
-                     telemetry, config.go (NodeConfig, ClaimNode, LoadConfig, SaveConfig)
+  agent/          ← Hardware detection, resource profiles, heartbeat,
+                     executor (with allowlist enforcement, hardened HostConfig,
+                     per-job network, tmpfs scratch, CUPS device mount on Unix),
+                     allowlist, optout, printers (cross-platform via build tags),
+                     telemetry, config (NodeConfig, ClaimNode, LoadConfig, SaveConfig)
   api/            ← Control plane HTTP API (node registration, claim, heartbeat, telemetry)
   identity/       ← SPIRE integration, TLSClientConfig, TLSServerConfig, RequireSPIFFE middleware
   orchestrator/   ← NodeRegistry, job submission, node matching, job token issuance
@@ -110,6 +130,7 @@ golang-migrate is idempotent — safe to run repeatedly.
 ## Test Coverage (current state — all green in CI)
 | Package | File | Tests |
 |---|---|---|
+| `internal/agent` | `*_test.go` (8 files) | 85 tests: allowlist verification, executor hardening (allowlist + root rejection, HostConfig baseline, tmpfs presence, CUPS device mount), hardware detection, opt-out store concurrency, printer detection (Unix + Windows), profile scheduling, telemetry signing |
 | `internal/portal` | `middleware_test.go` | Ed25519 token create/verify, tampered sig, expiry, RequireAuth redirect |
 | `internal/portal` | `handlers_test.go` | 19 handler tests: login, register, job submission, dispute resolution |
 | `internal/store` | `payouts_test.go` | EligiblePayouts query with seeded DB |
@@ -154,6 +175,34 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `build.ps1` as solid-color placeholders. Replace with branded artwork before
    public release.
 
+5. **Orchestrator `/allowlist` endpoint not published (B1 carry-forward)**: Agent
+   calls `<control-plane>/allowlist` at startup; endpoint doesn't exist yet. Fresh
+   agents will fail to start until B7 ships this.
+
+6. **WorkloadType string mismatch (B1 carry-forward, resolve in B3)**: Orchestrator
+   sends raw strings ("inference", "batch"); agent enum is
+   compute/storage/print_traditional/print_3d. Will surface as job rejection once B2
+   wires IsResourceEnabled.
+
+7. **Orchestrator `/jobs/<id>/complete` ignores JSON body (B1 carry-forward, resolve
+   in B5)**: Agent sends `{"tmpfs_exhausted": bool}` but the handler accepts no body.
+
+8. **Job completion fires on any non-error return regardless of ExitCode (resolve in
+   B5)**: Metering triggers even on exit-nonzero. Pre-existing bug.
+
+9. **CUPS bind-mount path untested in CI**: `executor_devices_unix.go` is only
+   exercised by inspection on the Windows dev box. `TestBuildHostConfig_CUPSDeviceAccess`
+   skips on Windows. Needs a Linux GitHub Actions matrix entry or first run on
+   Shenandoah pilot host.
+
+10. **`AllowedDestinations` egress filtering deferred (B1 carry-forward)**:
+    `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
+    from the allowlist but not consumed in the executor.
+
+11. **`DeviceUSBPrinter` not yet wired (B1 carry-forward, resolve in B4)**:
+    `deviceMountsFor` recognizes the constant but produces no mapping.
+    `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
+
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
 
@@ -171,6 +220,15 @@ These have caused bugs before — read before touching related code:
 - Storage quotas: `container.HostConfig.StorageOpt["size"]` (a `map[string]string`).
 - `dockerclient.IsErrNotFound(err)` to check image presence before pulling.
 - Deferred `ContainerRemove` must use `context.Background()`.
+- `ImageInspect` is variadic: `(ctx context.Context, ref string, opts ...ImageInspectOption)`.
+  Fakes and interface definitions must include the variadic parameter — omitting it
+  causes a compile error even when no options are passed.
+- `Devices []DeviceMapping` is on `container.Resources`, not directly on
+  `container.HostConfig`. Go struct literals do not promote embedded fields — set it
+  inside `Resources: container.Resources{..., Devices: ...}`.
+- `mount.Mount` with `TypeTmpfs`: `Source` must be empty string. Options go in
+  `TmpfsOptions{SizeBytes, Mode}`. Setting `Source` on a tmpfs mount causes a
+  Docker daemon error.
 
 **golang-migrate:**
 - Use `stdlib.OpenDBFromPool(pool)` to bridge pgx pool to `database/sql`.
@@ -261,3 +319,81 @@ Pre-pilot checklist:
 - Verify `residential` ISP tier classification and ACH payout flow end-to-end
 - Validate uptime scorer thresholds (A ≥95%, B ≥85%, C ≥70%) against real hardware
 - Document a non-technical onboarding flow for Shenandoah residents
+
+## Executor Security Baseline (post-B1)
+Every container launched by the agent enforces this baseline — do not relax without
+a signed-off design change:
+
+1. **Allowlist lookup first** — rejects tag-only refs and unknown digests before any
+   Docker call. `Allowlist.Lookup` is the gate; if it returns an error, `Run` returns
+   immediately.
+2. **Root-user rejection** — image inspect reads `Config.User`; empty, "0", "0:0",
+   "root", and "root:<group>" all count as root. A nil `Config` is treated as uid 0.
+3. **Per-job Docker network** — `EgressNone` → internal bridge (no host routing);
+   `EgressOutbound` → standard bridge. Network created before container, removed
+   after container is gone (LIFO defer order enforces this).
+4. **Hardened HostConfig** — `ReadonlyRootfs: true`, `CapDrop: ["ALL"]`,
+   `SecurityOpt: ["no-new-privileges:true"]`. Default seccomp profile preserved
+   automatically by Docker (verified: `Seccomp_filters: 2` with no-new-privileges,
+   vs. 1 for `seccomp=unconfined`).
+5. **tmpfs scratch** — `/tmp` mounted tmpfs, capped at 256 MiB (`tmpfsScratchSize`),
+   mode `01777`. `Source` field is empty — required for `TypeTmpfs` mounts.
+6. **Device mounts** — `deviceMountsFor(entry.DeviceAccess)` dispatches per platform:
+   Unix wires CUPS socket bind-mount; Windows stub returns empty set.
+7. **ENOSPC detection** — on non-zero exit, last 100 lines of stderr scanned for
+   "no space left on device" / "enospc". Result forwarded as `TmpfsExhausted` in
+   `ExecutionResult` and in the JSON completion body to the control plane.
+
+## Build Phases
+
+### Sub-phase A — Foundation (complete)
+Portal, database migrations 001–013, SPIFFE/SPIRE identity, Stripe Connect onboarding,
+job submission, scheduler, node registration (claim + token flow), Windows MSI installer,
+Phase 1 end-to-end integration test.
+
+### Sub-phase B1 — Executor Hardening (complete, 2026-04-26)
+Commits `43db91d` and `665ef44` on master. Allowlist enforcement, root-user rejection,
+per-job Docker network, hardened HostConfig, tmpfs scratch, CUPS bind-mount on Unix,
+ENOSPC detection. Carry-forwards → see Known TODOs 5–11.
+
+### Sub-phase B2 — Job-Poll Opt-Out Wiring
+Inject `OptOutStore` into `AgentConfig`. Consult `IsResourceEnabled(workloadType, printerID)`
+before accepting any job. Job dispatch must include `WorkloadType`; absent → declined.
+
+### Sub-phase B3 — Wire Format Additions
+Add `Printers []PrinterInfo` and current opt-out state to `ClaimNode` and `registerHWPayload`.
+Resolve WorkloadType string mismatch (TODO 6) — orchestrator sends canonical enum values
+matching the agent enum.
+
+### Sub-phase B4 — Print Job Confirmation Flow
+Pending-confirmation state for print workloads. Tray notification + portal page surface
+job spec to contributor with explicit acknowledgment text. Acceptance logged with
+timestamp + spec hash. Decline → orchestrator routes to next printer node. Auto-decline
+timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec` so
+`DeviceUSBPrinter` finally produces a device mapping (resolves TODO 11).
+
+### Sub-phase B5 — Long-Running Job Lifecycle
+Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
+Failure detection (filament runout, thermal runaway, print detachment) reported as
+`failed` with cause. Payout eligibility gated on `picked_up`/`delivered` for prints,
+`completed` for compute/storage. Orchestrator `/jobs/<id>/complete` consumes JSON body.
+Metering conditioned on exit code 0 (resolves TODOs 7 and 8).
+
+### Sub-phase B6 — Portal UI for Opt-Out Management
+`GET /api/opt-out` returns current opt-out state. `POST /api/opt-out` accepts updates
+and pushes to affected agents via heartbeat response. Dashboard page: detected
+resources per node, per-printer toggles, per-category toggles. Surfaces
+`TmpfsExhausted` alerts.
+
+### Sub-phase B7 — Allowlist Signing Tool + First Publication
+`scripts/allowlist-sign/main.go` ops tool. Generate production Ed25519 signing
+keypair (private key in secrets manager, public key baked into agent binary via
+ldflags). Sign v1 allowlist with Shenandoah pilot's actual `soholink/compute-worker`
+and `soholink/storage-worker` digests. Publish via orchestrator `/allowlist` endpoint
+(resolves TODO 5). Wires Docker integration tests
+(`SOHOLINK_DOCKER_TESTS=1`, `-tags=docker_integration`).
+
+### Sub-phase B8 — Windows-Native Print Agent
+Post-pilot architectural workstream. Native execution path separate from the
+containerized agent, targeting Windows print spooler integration. Likely native
+agent with Win32 API bindings, separate trust model from containerized workloads.
