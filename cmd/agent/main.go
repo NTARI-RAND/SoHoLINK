@@ -184,7 +184,16 @@ plugins {
 		os.Exit(1)
 	}
 
-	executor, err := agent.NewExecutor()
+	// TODO(B1): use mTLS client for allowlist fetch. The signed allowlist
+	// protects integrity, so plain HTTP is acceptable for now, but this
+	// should be tightened when mTLS is wired more broadly.
+	allowlist, err := agent.LoadAllowlistFromURL(controlPlaneAddr+"/allowlist", nil)
+	if err != nil {
+		slog.Error("allowlist load failed", "error", err)
+		os.Exit(1)
+	}
+
+	executor, err := agent.NewExecutor(allowlist)
 	if err != nil {
 		slog.Error("executor init failed", "error", err)
 		os.Exit(1)

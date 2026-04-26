@@ -2,13 +2,17 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	dockerclient "github.com/docker/docker/client"
 )
+
+var ErrRootContainerNotAllowed = errors.New("container runs as root")
 
 // ContainerSpec describes the workload container to run.
 type ContainerSpec struct {
@@ -26,14 +30,26 @@ type ExecutionResult struct {
 	Error    string
 }
 
+// imageInspector is the subset of the Docker client used for image
+// inspection. Extracted so tests can fake it without a Docker daemon.
+type imageInspector interface {
+	ImageInspect(ctx context.Context, ref string, opts ...dockerclient.ImageInspectOption) (image.InspectResponse, error)
+}
+
 // Executor manages Docker container lifecycle for SoHoLINK workloads.
 type Executor struct {
-	client *dockerclient.Client
+	client    *dockerclient.Client
+	inspector imageInspector
+	allowlist *Allowlist
 }
 
 // NewExecutor creates an Executor using the Docker socket and environment
-// variables (DOCKER_HOST, DOCKER_TLS_VERIFY, etc.).
-func NewExecutor() (*Executor, error) {
+// variables (DOCKER_HOST, DOCKER_TLS_VERIFY, etc.). allowlist must be
+// non-nil; a nil allowlist causes a fail-closed error at construction.
+func NewExecutor(allowlist *Allowlist) (*Executor, error) {
+	if allowlist == nil {
+		return nil, fmt.Errorf("new executor: allowlist required")
+	}
 	cli, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
 		dockerclient.WithAPIVersionNegotiation(),
@@ -41,7 +57,22 @@ func NewExecutor() (*Executor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new executor: %w", err)
 	}
-	return &Executor{client: cli}, nil
+	return &Executor{
+		client:    cli,
+		inspector: cli,
+		allowlist: allowlist,
+	}, nil
+}
+
+// newExecutorForTest builds an Executor with a caller-supplied inspector
+// and no real Docker client. Tests that don't start containers can pass
+// nil for the client field.
+func newExecutorForTest(allowlist *Allowlist, inspector imageInspector) *Executor {
+	return &Executor{
+		client:    nil,
+		inspector: inspector,
+		allowlist: allowlist,
+	}
 }
 
 // Run pulls the image if not locally present, creates and starts the container
@@ -55,17 +86,37 @@ func NewExecutor() (*Executor, error) {
 //     The Docker API has no StorageSizeBytes field; StorageOpt is the correct
 //     mechanism for overlay2 storage quotas.
 func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult, error) {
-	// Pull image only if not already present locally.
-	if _, err := e.client.ImageInspect(ctx, spec.Image); err != nil {
+	// Allowlist check — must be the first action, before any Docker call.
+	if _, err := e.allowlist.Lookup(spec.Image); err != nil {
+		return ExecutionResult{}, fmt.Errorf("run: %w", err)
+	}
+
+	// Inspect; pull if missing, then re-inspect to read the image metadata.
+	inspect, err := e.inspector.ImageInspect(ctx, spec.Image)
+	if err != nil {
 		if !dockerclient.IsErrNotFound(err) {
 			return ExecutionResult{}, fmt.Errorf("run: image inspect: %w", err)
 		}
-		reader, err := e.client.ImagePull(ctx, spec.Image, image.PullOptions{})
-		if err != nil {
-			return ExecutionResult{}, fmt.Errorf("run: image pull: %w", err)
+		reader, perr := e.client.ImagePull(ctx, spec.Image, image.PullOptions{})
+		if perr != nil {
+			return ExecutionResult{}, fmt.Errorf("run: image pull: %w", perr)
 		}
 		_, _ = io.Copy(io.Discard, reader)
 		reader.Close()
+		inspect, err = e.inspector.ImageInspect(ctx, spec.Image)
+		if err != nil {
+			return ExecutionResult{}, fmt.Errorf("run: image inspect after pull: %w", err)
+		}
+	}
+
+	// Root-user check. A nil Config means no USER directive was set, which
+	// is equivalent to uid 0.
+	var user string
+	if inspect.Config != nil {
+		user = inspect.Config.User
+	}
+	if isRootUser(user) {
+		return ExecutionResult{}, fmt.Errorf("run: %w", ErrRootContainerNotAllowed)
 	}
 
 	// Build env slice: caller-supplied vars plus the two SoHoLINK injections.
@@ -148,4 +199,17 @@ func (e *Executor) Stop(ctx context.Context, containerID string) error {
 		return fmt.Errorf("remove container %s: %w", containerID, err)
 	}
 	return nil
+}
+
+// isRootUser reports whether the image's USER directive resolves to uid 0.
+// Empty, "0", "0:0", "root", and "root:<group>" all count as root.
+func isRootUser(user string) bool {
+	if user == "" {
+		return true
+	}
+	u := user
+	if i := strings.Index(u, ":"); i >= 0 {
+		u = u[:i]
+	}
+	return u == "0" || u == "root"
 }
