@@ -19,6 +19,7 @@ import (
 var (
 	ErrRootContainerNotAllowed = errors.New("container runs as root")
 	ErrUnknownEgressTier       = errors.New("unknown egress tier")
+	ErrWorkloadOptedOut        = errors.New("workload type opted out by contributor")
 )
 
 const (
@@ -54,15 +55,19 @@ type Executor struct {
 	client    *dockerclient.Client
 	inspector imageInspector
 	allowlist *Allowlist
+	optout    *OptOutStore
 	log       *slog.Logger
 }
 
 // NewExecutor creates an Executor using the Docker socket and environment
-// variables (DOCKER_HOST, DOCKER_TLS_VERIFY, etc.). allowlist must be
-// non-nil; a nil allowlist causes a fail-closed error at construction.
-func NewExecutor(allowlist *Allowlist) (*Executor, error) {
+// variables (DOCKER_HOST, DOCKER_TLS_VERIFY, etc.). Both allowlist and optout
+// must be non-nil; either being nil causes a fail-closed error at construction.
+func NewExecutor(allowlist *Allowlist, optout *OptOutStore) (*Executor, error) {
 	if allowlist == nil {
 		return nil, fmt.Errorf("new executor: allowlist required")
+	}
+	if optout == nil {
+		return nil, fmt.Errorf("new executor: optout store required")
 	}
 	cli, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
@@ -75,6 +80,7 @@ func NewExecutor(allowlist *Allowlist) (*Executor, error) {
 		client:    cli,
 		inspector: cli,
 		allowlist: allowlist,
+		optout:    optout,
 		log:       slog.Default(),
 	}, nil
 }
@@ -82,11 +88,12 @@ func NewExecutor(allowlist *Allowlist) (*Executor, error) {
 // newExecutorForTest builds an Executor with a caller-supplied inspector
 // and no real Docker client. Tests that don't start containers can pass
 // nil for the client field.
-func newExecutorForTest(allowlist *Allowlist, inspector imageInspector) *Executor {
+func newExecutorForTest(allowlist *Allowlist, inspector imageInspector, optout *OptOutStore) *Executor {
 	return &Executor{
 		client:    nil,
 		inspector: inspector,
 		allowlist: allowlist,
+		optout:    optout,
 		log:       slog.Default(),
 	}
 }
@@ -99,6 +106,11 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 	entry, err := e.allowlist.Lookup(spec.Image)
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("run: %w", err)
+	}
+
+	// Opt-out gate — consult contributor consent before any Docker interaction.
+	if !e.optout.IsResourceEnabled(entry.Type, "") {
+		return ExecutionResult{}, fmt.Errorf("run: %w: %s", ErrWorkloadOptedOut, entry.Type)
 	}
 
 	// Inspect; pull if missing, then re-inspect to read the image metadata.

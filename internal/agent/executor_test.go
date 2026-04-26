@@ -47,9 +47,21 @@ func minimalAllowlist() *Allowlist {
 
 const allowedImage = "soholink/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// TestNewExecutor_NilAllowlist confirms fail-closed construction.
+// permissiveOptOutStore returns an OptOutStore with every resource category
+// enabled. Used by tests that exercise non-opt-out behaviour so they are not
+// blocked by the gate.
+func permissiveOptOutStore() *OptOutStore {
+	return NewOptOutStore(ResourceOptOut{
+		ComputeEnabled:  true,
+		StorageEnabled:  true,
+		PrintingEnabled: true,
+		EnabledPrinters: map[string]bool{"printer-1": true},
+	})
+}
+
+// TestNewExecutor_NilAllowlist confirms fail-closed construction on nil allowlist.
 func TestNewExecutor_NilAllowlist(t *testing.T) {
-	_, err := NewExecutor(nil)
+	_, err := NewExecutor(nil, permissiveOptOutStore())
 	if err == nil {
 		t.Fatal("expected error for nil allowlist, got nil")
 	}
@@ -58,10 +70,21 @@ func TestNewExecutor_NilAllowlist(t *testing.T) {
 	}
 }
 
+// TestNewExecutor_NilOptOutRejected confirms fail-closed construction on nil optout.
+func TestNewExecutor_NilOptOutRejected(t *testing.T) {
+	_, err := NewExecutor(minimalAllowlist(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil optout, got nil")
+	}
+	if !strings.Contains(err.Error(), "optout store required") {
+		t.Errorf("error %q does not mention 'optout store required'", err)
+	}
+}
+
 // TestRun_TagOnlyImageRejected confirms Lookup rejects tag-only references
 // before any Docker call is made.
 func TestRun_TagOnlyImageRejected(t *testing.T) {
-	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{})
+	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{}, permissiveOptOutStore())
 	spec := ContainerSpec{Image: "soholink/worker:latest"}
 	_, err := ex.Run(context.Background(), spec)
 	if !errors.Is(err, ErrImageNotAllowed) {
@@ -71,7 +94,7 @@ func TestRun_TagOnlyImageRejected(t *testing.T) {
 
 // TestRun_DigestNotInAllowlist confirms Lookup rejects an unknown digest.
 func TestRun_DigestNotInAllowlist(t *testing.T) {
-	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{})
+	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{}, permissiveOptOutStore())
 	spec := ContainerSpec{
 		Image: "soholink/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	}
@@ -90,7 +113,7 @@ func TestRun_RootContainerRejected(t *testing.T) {
 			},
 		},
 	}
-	ex := newExecutorForTest(minimalAllowlist(), inspector)
+	ex := newExecutorForTest(minimalAllowlist(), inspector, permissiveOptOutStore())
 	spec := ContainerSpec{Image: allowedImage}
 	_, err := ex.Run(context.Background(), spec)
 	if !errors.Is(err, ErrRootContainerNotAllowed) {
@@ -103,7 +126,7 @@ func TestRun_RootContainerRejected_NilConfig(t *testing.T) {
 	inspector := &fakeInspector{
 		response: image.InspectResponse{Config: nil},
 	}
-	ex := newExecutorForTest(minimalAllowlist(), inspector)
+	ex := newExecutorForTest(minimalAllowlist(), inspector, permissiveOptOutStore())
 	spec := ContainerSpec{Image: allowedImage}
 	_, err := ex.Run(context.Background(), spec)
 	if !errors.Is(err, ErrRootContainerNotAllowed) {
@@ -134,7 +157,7 @@ func TestRun_RootUserForms(t *testing.T) {
 					},
 				},
 			}
-			ex := newExecutorForTest(minimalAllowlist(), inspector)
+			ex := newExecutorForTest(minimalAllowlist(), inspector, permissiveOptOutStore())
 			spec := ContainerSpec{Image: allowedImage}
 			_, err := ex.Run(context.Background(), spec)
 			if !errors.Is(err, ErrRootContainerNotAllowed) {
@@ -255,5 +278,70 @@ func TestBuildHostConfig_NoCUPSOnWindows(t *testing.T) {
 		if m.Type == mount.TypeBind {
 			t.Errorf("expected no bind mounts on Windows, got: %v", m)
 		}
+	}
+}
+
+// --- opt-out gate tests ---
+
+func TestRun_ComputeOptedOut(t *testing.T) {
+	store := NewOptOutStore(DefaultOptOut()) // all disabled
+	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{}, store)
+	spec := ContainerSpec{Image: allowedImage}
+	_, err := ex.Run(context.Background(), spec)
+	if !errors.Is(err, ErrWorkloadOptedOut) {
+		t.Errorf("expected ErrWorkloadOptedOut, got %v", err)
+	}
+}
+
+func TestRun_StorageOptedOut(t *testing.T) {
+	al := &Allowlist{
+		Version: 1,
+		Entries: []AllowlistEntry{{
+			Name:   "storage-worker",
+			Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			Type:   WorkloadStorage,
+			Egress: EgressNone,
+		}},
+	}
+	store := NewOptOutStore(DefaultOptOut())
+	ex := newExecutorForTest(al, &fakeInspector{}, store)
+	spec := ContainerSpec{Image: "soholink/storage-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+	_, err := ex.Run(context.Background(), spec)
+	if !errors.Is(err, ErrWorkloadOptedOut) {
+		t.Errorf("expected ErrWorkloadOptedOut, got %v", err)
+	}
+}
+
+func TestRun_PrintOptedOutNoPrinter(t *testing.T) {
+	al := &Allowlist{
+		Version: 1,
+		Entries: []AllowlistEntry{{
+			Name:   "print-worker",
+			Digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			Type:   WorkloadPrintTraditional,
+			Egress: EgressNone,
+		}},
+	}
+	// PrintingEnabled true but no printer opted in — printerID "" must fail.
+	store := NewOptOutStore(ResourceOptOut{
+		PrintingEnabled: true,
+		EnabledPrinters: map[string]bool{},
+	})
+	ex := newExecutorForTest(al, &fakeInspector{}, store)
+	spec := ContainerSpec{Image: "soholink/print-worker@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+	_, err := ex.Run(context.Background(), spec)
+	if !errors.Is(err, ErrWorkloadOptedOut) {
+		t.Errorf("expected ErrWorkloadOptedOut, got %v", err)
+	}
+}
+
+func TestRun_OptOutGateAfterAllowlist(t *testing.T) {
+	// Unknown digest — allowlist rejects before opt-out is consulted.
+	store := NewOptOutStore(DefaultOptOut()) // opted out
+	ex := newExecutorForTest(minimalAllowlist(), &fakeInspector{}, store)
+	spec := ContainerSpec{Image: "soholink/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	_, err := ex.Run(context.Background(), spec)
+	if !errors.Is(err, ErrImageNotAllowed) {
+		t.Errorf("expected ErrImageNotAllowed (allowlist fires first), got %v", err)
 	}
 }

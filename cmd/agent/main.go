@@ -195,7 +195,14 @@ plugins {
 		os.Exit(1)
 	}
 
-	executor, err := agent.NewExecutor(allowlist)
+	oo, ooErr := agent.LoadOptOutFromFile(agent.OptOutCachePath())
+	if ooErr != nil {
+		slog.Warn("opt-out load failed, defaulting to all disabled", "error", ooErr)
+		oo = agent.DefaultOptOut()
+	}
+	optOutStore := agent.NewOptOutStore(oo)
+
+	executor, err := agent.NewExecutor(allowlist, optOutStore)
 	if err != nil {
 		slog.Error("executor init failed", "error", err)
 		os.Exit(1)
