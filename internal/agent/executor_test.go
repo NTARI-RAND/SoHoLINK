@@ -3,14 +3,21 @@ package agent
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+// cupsSocketTestPath mirrors cupsSocketHostPath from executor_devices_unix.go.
+// Duplicated here as a literal because the constant lives behind a Unix
+// build tag and executor_test.go is built on all platforms.
+const cupsSocketTestPath = "/var/run/cups/cups.sock"
 
 // fakeInspector satisfies imageInspector without a Docker daemon.
 type fakeInspector struct {
@@ -143,4 +150,110 @@ func TestRun_RootUserForms(t *testing.T) {
 // Full end-to-end coverage lives in the integration test suite (commit 2).
 func TestRun_NonRootPassesUserCheck(t *testing.T) {
 	t.Skip("requires Docker daemon — covered by integration tests in commit 2")
+}
+
+// --- buildHostConfig tests ---
+
+func entryWith(da ...DeviceAccess) *AllowlistEntry {
+	return &AllowlistEntry{
+		Name:         "worker",
+		Digest:       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Type:         WorkloadCompute,
+		Egress:       EgressNone,
+		DeviceAccess: da,
+	}
+}
+
+func TestBuildHostConfig_AppliesSecurityBaseline(t *testing.T) {
+	spec := ContainerSpec{Image: allowedImage}
+	hc := buildHostConfig(spec, entryWith())
+
+	if !hc.ReadonlyRootfs {
+		t.Error("expected ReadonlyRootfs = true")
+	}
+	if len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" {
+		t.Errorf("expected CapDrop=[ALL], got %v", hc.CapDrop)
+	}
+	if len(hc.SecurityOpt) != 1 || hc.SecurityOpt[0] != "no-new-privileges:true" {
+		t.Errorf("expected SecurityOpt=[no-new-privileges:true], got %v", hc.SecurityOpt)
+	}
+	if hc.Privileged {
+		t.Error("expected Privileged = false")
+	}
+}
+
+func TestBuildHostConfig_TmpfsScratchPresent(t *testing.T) {
+	spec := ContainerSpec{Image: allowedImage}
+	hc := buildHostConfig(spec, entryWith())
+
+	var found bool
+	for _, m := range hc.Mounts {
+		if m.Type == mount.TypeTmpfs && m.Target == "/tmp" {
+			found = true
+			if m.TmpfsOptions == nil {
+				t.Fatal("tmpfs mount at /tmp has nil TmpfsOptions")
+			}
+			if m.TmpfsOptions.SizeBytes != tmpfsScratchSize {
+				t.Errorf("tmpfs SizeBytes = %d, want %d", m.TmpfsOptions.SizeBytes, tmpfsScratchSize)
+			}
+		}
+	}
+	if !found {
+		t.Error("no tmpfs mount at /tmp found in HostConfig.Mounts")
+	}
+}
+
+func TestBuildHostConfig_PreservesResourceCaps(t *testing.T) {
+	spec := ContainerSpec{
+		Image: allowedImage,
+		Caps: CapProfile{
+			CPUEnabled:   true,
+			CPUCores:     4,
+			RAMBytes:     2 * 1024 * 1024 * 1024,
+			StorageBytes: 10 * 1024 * 1024 * 1024,
+		},
+	}
+	hc := buildHostConfig(spec, entryWith())
+
+	if hc.Resources.NanoCPUs != 4*1e9 {
+		t.Errorf("NanoCPUs = %d, want %d", hc.Resources.NanoCPUs, int64(4*1e9))
+	}
+	if hc.Resources.Memory != spec.Caps.RAMBytes {
+		t.Errorf("Memory = %d, want %d", hc.Resources.Memory, spec.Caps.RAMBytes)
+	}
+	if hc.StorageOpt["size"] != "10737418240" {
+		t.Errorf("StorageOpt[size] = %q, want %q", hc.StorageOpt["size"], "10737418240")
+	}
+}
+
+func TestBuildHostConfig_CUPSDeviceAccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("CUPS bind mount not applicable on Windows")
+	}
+	spec := ContainerSpec{Image: allowedImage}
+	hc := buildHostConfig(spec, entryWith(DeviceCUPSSocket))
+
+	var found bool
+	for _, m := range hc.Mounts {
+		if m.Type == mount.TypeBind && m.Source == cupsSocketTestPath && m.Target == cupsSocketTestPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected bind mount for %s, got mounts: %v", cupsSocketTestPath, hc.Mounts)
+	}
+}
+
+func TestBuildHostConfig_NoCUPSOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only stub test")
+	}
+	spec := ContainerSpec{Image: allowedImage}
+	hc := buildHostConfig(spec, entryWith(DeviceCUPSSocket))
+
+	for _, m := range hc.Mounts {
+		if m.Type == mount.TypeBind {
+			t.Errorf("expected no bind mounts on Windows, got: %v", m)
+		}
+	}
 }

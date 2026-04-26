@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -289,8 +291,12 @@ func runJob(
 	// Signal job completion to the control plane so it can set completed_at
 	// and trigger metering. Only called on successful execution.
 	completeURL := controlPlaneAddr + "/jobs/" + job.JobID + "/complete"
-	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, http.NoBody)
+	completeBody, _ := json.Marshal(map[string]any{
+		"tmpfs_exhausted": result.TmpfsExhausted,
+	})
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, bytes.NewReader(completeBody))
 	if reqErr == nil {
+		req.Header.Set("Content-Type", "application/json")
 		resp, doErr := telemetryClient.Do(req)
 		if doErr != nil {
 			slog.Warn("complete job signal failed", "job_id", job.JobID, "error", doErr)

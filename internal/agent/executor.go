@@ -1,18 +1,30 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	dockerclient "github.com/docker/docker/client"
 )
 
-var ErrRootContainerNotAllowed = errors.New("container runs as root")
+var (
+	ErrRootContainerNotAllowed = errors.New("container runs as root")
+	ErrUnknownEgressTier       = errors.New("unknown egress tier")
+)
+
+const (
+	tmpfsScratchSize = 256 * 1024 * 1024
+	jobNetworkPrefix = "soholink-job-"
+)
 
 // ContainerSpec describes the workload container to run.
 type ContainerSpec struct {
@@ -25,9 +37,10 @@ type ContainerSpec struct {
 
 // ExecutionResult carries the outcome of a completed container run.
 type ExecutionResult struct {
-	JobID    string
-	ExitCode int
-	Error    string
+	JobID          string
+	ExitCode       int
+	Error          string
+	TmpfsExhausted bool
 }
 
 // imageInspector is the subset of the Docker client used for image
@@ -41,6 +54,7 @@ type Executor struct {
 	client    *dockerclient.Client
 	inspector imageInspector
 	allowlist *Allowlist
+	log       *slog.Logger
 }
 
 // NewExecutor creates an Executor using the Docker socket and environment
@@ -61,6 +75,7 @@ func NewExecutor(allowlist *Allowlist) (*Executor, error) {
 		client:    cli,
 		inspector: cli,
 		allowlist: allowlist,
+		log:       slog.Default(),
 	}, nil
 }
 
@@ -72,22 +87,17 @@ func newExecutorForTest(allowlist *Allowlist, inspector imageInspector) *Executo
 		client:    nil,
 		inspector: inspector,
 		allowlist: allowlist,
+		log:       slog.Default(),
 	}
 }
 
-// Run pulls the image if not locally present, creates and starts the container
-// with resource caps from spec.Caps, waits for it to exit, removes it, and
-// returns the exit code.
-//
-// Resource mapping:
-//   - Memory:  container.HostConfig.Resources.Memory   (bytes)
-//   - CPU:     container.HostConfig.Resources.NanoCPUs (cores × 1e9)
-//   - Storage: container.HostConfig.StorageOpt["size"] (bytes as string)
-//     The Docker API has no StorageSizeBytes field; StorageOpt is the correct
-//     mechanism for overlay2 storage quotas.
+// Run executes the workload described by spec: allowlist check, root-user
+// check, per-job network creation, hardened container start, wait, and
+// cleanup. See buildHostConfig for the security baseline applied.
 func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult, error) {
 	// Allowlist check — must be the first action, before any Docker call.
-	if _, err := e.allowlist.Lookup(spec.Image); err != nil {
+	entry, err := e.allowlist.Lookup(spec.Image)
+	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("run: %w", err)
 	}
 
@@ -127,32 +137,30 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 	env = append(env, "SOHOLINK_JOB_ID="+spec.JobID)
 	env = append(env, "SOHOLINK_JOB_TOKEN="+spec.JobToken)
 
-	// Build resource limits.
-	var nanoCPUs int64
-	if spec.Caps.CPUEnabled {
-		nanoCPUs = int64(spec.Caps.CPUCores) * 1e9
+	// Create per-job network. Defer registered FIRST so it runs LAST (after
+	// container removal — Docker requires the network be empty before removal).
+	networkID, err := e.createJobNetwork(ctx, spec.JobID, entry.Egress)
+	if err != nil {
+		return ExecutionResult{}, fmt.Errorf("run: %w", err)
 	}
+	defer func() {
+		if rmErr := e.client.NetworkRemove(context.Background(), networkID); rmErr != nil {
+			e.log.Warn("network remove failed",
+				"job_id", spec.JobID, "network_id", networkID, "error", rmErr)
+		}
+	}()
 
-	storageOpt := map[string]string{}
-	if spec.Caps.StorageBytes > 0 {
-		storageOpt["size"] = fmt.Sprintf("%d", spec.Caps.StorageBytes)
-	}
-
-	hostCfg := &container.HostConfig{
-		Resources: container.Resources{
-			Memory:   spec.Caps.RAMBytes,
-			NanoCPUs: nanoCPUs,
+	hostCfg := buildHostConfig(spec, entry)
+	netCfg := &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			jobNetworkPrefix + spec.JobID: {},
 		},
-		StorageOpt: storageOpt,
 	}
 
 	resp, err := e.client.ContainerCreate(ctx,
-		&container.Config{
-			Image: spec.Image,
-			Env:   env,
-		},
+		&container.Config{Image: spec.Image, Env: env},
 		hostCfg,
-		nil, // networkingConfig — use Docker default
+		netCfg,
 		nil, // platform — use host platform
 		"",  // auto-generate container name
 	)
@@ -161,11 +169,14 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 	}
 	containerID := resp.ID
 
-	// Always remove the container when Run returns, regardless of outcome.
-	defer e.client.ContainerRemove( //nolint:errcheck
-		context.Background(), containerID,
-		container.RemoveOptions{Force: true},
-	)
+	// Container removal — registered SECOND so it runs FIRST (before network removal).
+	defer func() {
+		if rmErr := e.client.ContainerRemove(context.Background(), containerID,
+			container.RemoveOptions{Force: true}); rmErr != nil {
+			e.log.Warn("container remove failed",
+				"job_id", spec.JobID, "container_id", containerID, "error", rmErr)
+		}
+	}()
 
 	if err := e.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return ExecutionResult{}, fmt.Errorf("run: container start: %w", err)
@@ -186,6 +197,9 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 		if waitResp.Error != nil {
 			result.Error = waitResp.Error.Message
 		}
+		if waitResp.StatusCode != 0 {
+			result.TmpfsExhausted = e.scanStderrForENOSPC(ctx, containerID)
+		}
 		return result, nil
 	}
 }
@@ -199,6 +213,97 @@ func (e *Executor) Stop(ctx context.Context, containerID string) error {
 		return fmt.Errorf("remove container %s: %w", containerID, err)
 	}
 	return nil
+}
+
+// createJobNetwork creates a dedicated Docker network for a single job.
+// EgressNone produces an internal network (no host routing, no internet);
+// EgressOutbound produces a standard bridge with outbound enabled.
+// Per-destination egress filtering (AllowedDestinations) is not consumed here.
+func (e *Executor) createJobNetwork(ctx context.Context, jobID string, tier EgressTier) (string, error) {
+	opts := network.CreateOptions{Driver: "bridge"}
+	switch tier {
+	case EgressNone:
+		opts.Internal = true
+	case EgressOutbound:
+		// standard bridge
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownEgressTier, tier)
+	}
+	resp, err := e.client.NetworkCreate(ctx, jobNetworkPrefix+jobID, opts)
+	if err != nil {
+		return "", fmt.Errorf("network create: %w", err)
+	}
+	return resp.ID, nil
+}
+
+// scanStderrForENOSPC reads the container's recent stderr and returns true
+// if a "no space left on device" or ENOSPC marker is present. Best-effort
+// diagnostic — read failures are logged at debug and treated as "not exhausted".
+func (e *Executor) scanStderrForENOSPC(ctx context.Context, containerID string) bool {
+	rc, err := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStderr: true,
+		Tail:       "100",
+	})
+	if err != nil {
+		e.log.Debug("scan stderr: container logs read failed",
+			"container_id", containerID, "error", err)
+		return false
+	}
+	defer rc.Close()
+
+	scanner := bufio.NewScanner(rc)
+	for scanner.Scan() {
+		line := strings.ToLower(scanner.Text())
+		if strings.Contains(line, "no space left on device") || strings.Contains(line, "enospc") {
+			return true
+		}
+	}
+	return false
+}
+
+// buildHostConfig assembles the HostConfig for a job, applying the SoHoLINK
+// security baseline (ReadonlyRootfs, CapDrop ALL, no-new-privileges) plus
+// per-job tmpfs scratch and any device mappings declared by the allowlist
+// entry. The default seccomp profile is preserved automatically by Docker —
+// verified in the seccomp spike (Seccomp_filters: 2 with no-new-privileges,
+// vs. 1 for seccomp=unconfined).
+func buildHostConfig(spec ContainerSpec, entry *AllowlistEntry) *container.HostConfig {
+	var nanoCPUs int64
+	if spec.Caps.CPUEnabled {
+		nanoCPUs = int64(spec.Caps.CPUCores) * 1e9
+	}
+
+	storageOpt := map[string]string{}
+	if spec.Caps.StorageBytes > 0 {
+		storageOpt["size"] = fmt.Sprintf("%d", spec.Caps.StorageBytes)
+	}
+
+	mounts := []mount.Mount{
+		{
+			Type:   mount.TypeTmpfs,
+			Target: "/tmp",
+			TmpfsOptions: &mount.TmpfsOptions{
+				SizeBytes: tmpfsScratchSize,
+				Mode:      0o1777,
+			},
+		},
+	}
+
+	devices := deviceMountsFor(entry.DeviceAccess)
+	mounts = append(mounts, devices.mounts...)
+
+	return &container.HostConfig{
+		Resources: container.Resources{
+			Memory:   spec.Caps.RAMBytes,
+			NanoCPUs: nanoCPUs,
+			Devices:  devices.deviceMappings,
+		},
+		StorageOpt:     storageOpt,
+		ReadonlyRootfs: true,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges:true"},
+		Mounts:         mounts,
+	}
 }
 
 // isRootUser reports whether the image's USER directive resolves to uid 0.
