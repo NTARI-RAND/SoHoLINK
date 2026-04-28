@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
 // HardwareProfile holds the agent-reported capabilities of a node.
@@ -30,7 +32,10 @@ type NodeEntry struct {
 
 // MatchRequest describes the resource requirements for a workload placement.
 type MatchRequest struct {
-	WorkloadType      string
+	// WorkloadType is recorded for dispatch but not used to filter candidates.
+	// Node selection is hardware-capability only; the agent's opt-out store is
+	// the enforcement gate for workload type consent.
+	WorkloadType      types.MarketplaceWorkloadType
 	CountryConstraint string // empty = any country
 	CPUCores          int
 	RAMMB             int

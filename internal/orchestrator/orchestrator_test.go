@@ -1,8 +1,11 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
 // newOnlineNode is a test helper that builds a NodeEntry with Status "online".
@@ -27,7 +30,7 @@ func TestNodeRegistry_FindMatch_NoNodesAvailable(t *testing.T) {
 	r := NewNodeRegistry()
 
 	_, err := r.FindMatch(MatchRequest{
-		WorkloadType: "inference",
+		WorkloadType: types.MarketplaceAIInference,
 		CPUCores:     2,
 		RAMMB:        4096,
 	})
@@ -41,7 +44,7 @@ func TestNodeRegistry_FindMatch_NodeSelected(t *testing.T) {
 	r.Register(newOnlineNode("node-us-1", "US", 8, 16384, 100, false))
 
 	candidates, err := r.FindMatch(MatchRequest{
-		WorkloadType: "batch",
+		WorkloadType: types.MarketplaceBatchCompute,
 		CPUCores:     4,
 		RAMMB:        8192,
 		StorageGB:    50,
@@ -63,7 +66,7 @@ func TestNodeRegistry_FindMatch_GeoConstraint(t *testing.T) {
 	r.Register(newOnlineNode("node-gb-1", "GB", 8, 16384, 100, false))
 
 	candidates, err := r.FindMatch(MatchRequest{
-		WorkloadType:      "batch",
+		WorkloadType:      types.MarketplaceBatchCompute,
 		CountryConstraint: "US",
 		CPUCores:          2,
 		RAMMB:             4096,
@@ -85,7 +88,7 @@ func TestNodeRegistry_FindMatch_GPURequired(t *testing.T) {
 	r.Register(newOnlineNode("node-gpu-1", "US", 8, 16384, 100, true))
 
 	candidates, err := r.FindMatch(MatchRequest{
-		WorkloadType: "inference",
+		WorkloadType: types.MarketplaceAIInference,
 		CPUCores:     2,
 		RAMMB:        4096,
 		GPURequired:  true,
@@ -108,7 +111,7 @@ func TestNodeRegistry_FindMatch_OfflineNodeExcluded(t *testing.T) {
 	r.Register(offline)
 
 	_, err := r.FindMatch(MatchRequest{
-		WorkloadType: "batch",
+		WorkloadType: types.MarketplaceBatchCompute,
 		CPUCores:     2,
 		RAMMB:        4096,
 	})
@@ -122,7 +125,7 @@ func TestNodeRegistry_FindMatch_InsufficientResources(t *testing.T) {
 	r.Register(newOnlineNode("node-small", "US", 2, 2048, 20, false))
 
 	_, err := r.FindMatch(MatchRequest{
-		WorkloadType: "batch",
+		WorkloadType: types.MarketplaceBatchCompute,
 		CPUCores:     8,
 		RAMMB:        16384,
 		StorageGB:    100,
@@ -171,5 +174,56 @@ func TestNodeRegistry_EvictStale(t *testing.T) {
 	}
 	if len(candidates) != 1 || candidates[0].NodeID != "node-fresh" {
 		t.Errorf("expected only node-fresh, got %+v", candidates)
+	}
+}
+
+func TestSubmitJobRequest_Validate(t *testing.T) {
+	cases := []struct {
+		name        string
+		req         SubmitJobRequest
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "valid",
+			req:     SubmitJobRequest{ConsumerID: "c", WorkloadType: types.MarketplaceAppHosting},
+			wantErr: false,
+		},
+		{
+			name:        "empty consumer",
+			req:         SubmitJobRequest{WorkloadType: types.MarketplaceAppHosting},
+			wantErr:     true,
+			errContains: "ConsumerID",
+		},
+		{
+			name:        "empty workload type",
+			req:         SubmitJobRequest{ConsumerID: "c"},
+			wantErr:     true,
+			errContains: "WorkloadType is required",
+		},
+		{
+			name:        "unknown workload type",
+			req:         SubmitJobRequest{ConsumerID: "c", WorkloadType: types.MarketplaceWorkloadType("banana")},
+			wantErr:     true,
+			errContains: "banana",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.req.Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errContains)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }

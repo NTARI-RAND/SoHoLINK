@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
 const jobTokenTTL = 24 * time.Hour
@@ -29,13 +30,27 @@ type ScheduleFunc func(candidates []NodeEntry, tier SLATier) ([]NodeEntry, error
 // SubmitJobRequest describes a consumer's workload placement request.
 type SubmitJobRequest struct {
 	ConsumerID        string
-	WorkloadType      string
+	WorkloadType      types.MarketplaceWorkloadType
 	ContainerImage    string
 	CountryConstraint string
 	CPUCores          int
 	RAMMB             int
 	GPURequired       bool
 	StorageGB         int
+}
+
+// Validate checks all required fields and returns the first error found.
+func (r SubmitJobRequest) Validate() error {
+	if r.ConsumerID == "" {
+		return fmt.Errorf("ConsumerID is required")
+	}
+	if r.WorkloadType == "" {
+		return fmt.Errorf("WorkloadType is required")
+	}
+	if !r.WorkloadType.IsValid() {
+		return fmt.Errorf("unknown WorkloadType %q", r.WorkloadType)
+	}
+	return nil
 }
 
 // SubmitJobResponse carries the placement result returned to the consumer.
@@ -69,11 +84,8 @@ func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule Sche
 // the scheduler, writes the job to PostgreSQL, generates a signed job token,
 // and returns the placement result.
 func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (SubmitJobResponse, error) {
-	if req.ConsumerID == "" {
-		return SubmitJobResponse{}, fmt.Errorf("submit job: ConsumerID is required")
-	}
-	if req.WorkloadType == "" {
-		return SubmitJobResponse{}, fmt.Errorf("submit job: WorkloadType is required")
+	if err := req.Validate(); err != nil {
+		return SubmitJobResponse{}, fmt.Errorf("submit job: %w", err)
 	}
 
 	candidates, err := o.registry.FindMatch(MatchRequest{

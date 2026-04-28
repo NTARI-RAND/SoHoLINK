@@ -24,6 +24,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
 // jobSubmitter is the subset of orchestrator.Orchestrator used by the portal.
@@ -945,9 +946,14 @@ func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	workloadType := r.FormValue("workload_type")
-	if workloadType == "" {
-		workloadType = "app_hosting"
+	workloadTypeStr := r.FormValue("workload_type")
+	if workloadTypeStr == "" {
+		workloadTypeStr = string(types.MarketplaceAppHosting)
+	}
+	wt, err := types.ParseMarketplaceWorkloadType(workloadTypeStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid workload_type: %s", err), http.StatusBadRequest)
+		return
 	}
 	containerImage := r.FormValue("container_image")
 	if containerImage == "" {
@@ -970,7 +976,7 @@ func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) 
 
 	resp, err := ps.orch.SubmitJob(r.Context(), orchestrator.SubmitJobRequest{
 		ConsumerID:     claims.UserID,
-		WorkloadType:   workloadType,
+		WorkloadType:   wt,
 		ContainerImage: containerImage,
 		CPUCores:       cpuCores,
 		RAMMB:          ramMB,
@@ -980,7 +986,7 @@ func (ps *PortalServer) handleSubmitJob(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	metrics.JobsSubmittedTotal.WithLabelValues(workloadType).Inc()
+	metrics.JobsSubmittedTotal.WithLabelValues(string(wt)).Inc()
 	http.Redirect(w, r, "/consumer/job/"+resp.JobID, http.StatusSeeOther)
 }
 

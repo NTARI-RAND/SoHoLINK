@@ -37,6 +37,8 @@ func mustHex(key string) []byte {
 }
 
 func main() {
+	orchestrator.MustValidateWorkloadMapping()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	dbURL        := mustEnv("DATABASE_URL")
