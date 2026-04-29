@@ -18,7 +18,7 @@ import (
 // AllowlistPublicKey is the base64-encoded Ed25519 public key used to verify
 // allowlist signatures. It is injected at build time via ldflags:
 //
-//	go build -ldflags "-X internal/agent.AllowlistPublicKey=<base64key>" ...
+//	go build -ldflags "-X github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent.AllowlistPublicKey=<base64key>" ...
 //
 // An empty value causes Verify() to return ErrAllowlistNoKey. Production
 // builds MUST set this.

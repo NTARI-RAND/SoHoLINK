@@ -32,7 +32,11 @@ jobs:
           go-version: '1.24'
 
       - name: Verify build
-        run: go build ./...
+        env:
+          ALLOWLIST_PUBLIC_KEY: ${{ secrets.ALLOWLIST_PUBLIC_KEY }}
+        run: |
+          go build -ldflags "-X github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent.AllowlistPublicKey=$ALLOWLIST_PUBLIC_KEY" ./cmd/agent/...
+          go build ./...
 
       - name: Run unit tests (no DB required)
         run: go test -v ./internal/portal/ ./internal/agent/ ./internal/network/

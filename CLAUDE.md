@@ -160,6 +160,12 @@ All running in Docker on localhost:
 Stripe keys are environment variables — never hardcode them.
 Use `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY`.
 
+For agent MSI builds, `ALLOWLIST_PUBLIC_KEY` (base64-encoded Ed25519 public
+key, produced by `scripts/allowlist-genkey`) is read by `installer/windows/build.ps1`.
+Set `RELEASE=1` for production builds — the build will hard-fail if the public
+key is missing. Dev builds without `RELEASE=1` warn and continue, producing a
+binary that will fail at first allowlist fetch.
+
 ## Known TODOs
 These are acknowledged gaps, not bugs — do not silently fix them without discussion:
 
@@ -290,6 +296,22 @@ These have caused bugs before — read before touching related code:
   exists so tests can exercise validation logic without constructing an
   `Orchestrator`. Tests that require "this constructor must never be hardened"
   are wrong tests, not right constructors.
+
+**Build-time ldflags injection (post-B7 commit 3):**
+- `internal/agent.AllowlistPublicKey` is a package-level `var string` injected
+  at build time via `-ldflags "-X ..."`. The full ldflags target is
+  `github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent.AllowlistPublicKey`
+  (full module path, not relative).
+- `installer/windows/build.ps1` reads `$env:ALLOWLIST_PUBLIC_KEY` and injects
+  it. Behavior on empty: hard-fail when `$env:RELEASE -eq "1"`, warn-and-continue
+  otherwise. Production MSI builds must set `RELEASE=1`.
+- `.github/workflows/ci.yml` reads `${{ secrets.ALLOWLIST_PUBLIC_KEY }}` and
+  injects it into the agent build. Empty key produces a binary that fails at
+  first allowlist fetch with `ErrAllowlistNoKey` — fine for CI verification,
+  not fine for distributable builds.
+- An empty `AllowlistPublicKey` is a runtime fail-closed condition (Verify
+  returns `ErrAllowlistNoKey`), not a build error. The fail-closed behavior is
+  why warn-and-continue is acceptable for dev builds.
 
 ## Coding Conventions
 - All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget cleanups)

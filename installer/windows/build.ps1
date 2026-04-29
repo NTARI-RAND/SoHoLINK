@@ -72,13 +72,28 @@ $agentOut = Join-Path $PSScriptRoot "soholink-agent.exe"
 Write-Host ""
 Write-Host "==> Compiling agent binary..."
 
+# Resolve the allowlist public key for ldflags injection.
+# Required for production (RELEASE=1) builds; dev builds may proceed without it,
+# but the resulting agent will fail at first allowlist fetch with ErrAllowlistNoKey.
+$AllowlistPublicKey = $env:ALLOWLIST_PUBLIC_KEY
+if ([string]::IsNullOrWhiteSpace($AllowlistPublicKey)) {
+    if ($env:RELEASE -eq "1") {
+        Write-Error "ALLOWLIST_PUBLIC_KEY env var is required for RELEASE=1 builds"
+        exit 1
+    }
+    Write-Warning "ALLOWLIST_PUBLIC_KEY not set; agent will fail at first allowlist fetch (dev build)"
+    $AllowlistPublicKey = ""
+}
+
 $env:GOOS   = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "0"
 
+$ldflagsValue = "-s -w -X main.version=$Version -X github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent.AllowlistPublicKey=$AllowlistPublicKey"
+
 Push-Location $RepoRoot
 try {
-    & go build -ldflags "-s -w -X main.version=$Version" -o $agentOut ./cmd/agent/...
+    & go build -ldflags $ldflagsValue -o $agentOut ./cmd/agent/...
     if ($LASTEXITCODE -ne 0) { throw "go build failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
