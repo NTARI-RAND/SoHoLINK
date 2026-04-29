@@ -81,9 +81,12 @@ cmd/
 internal/
   agent/          ← Hardware detection, resource profiles, heartbeat,
                      executor (with allowlist enforcement, hardened HostConfig,
-                     per-job network, tmpfs scratch, CUPS device mount on Unix),
+                     per-job network, tmpfs scratch, CUPS device mount on Unix,
+                     contributor opt-out gate),
                      allowlist, optout, printers (cross-platform via build tags),
                      telemetry, config (NodeConfig, ClaimNode, LoadConfig, SaveConfig)
+  types/          ← Cross-cutting vocabulary (MarketplaceWorkloadType enum,
+                     Validate/Parse helpers); imported by portal and orchestrator
   api/            ← Control plane HTTP API (node registration, claim, heartbeat, telemetry)
   identity/       ← SPIRE integration, TLSClientConfig, TLSServerConfig, RequireSPIFFE middleware
   orchestrator/   ← NodeRegistry, job submission, node matching, job token issuance
@@ -130,7 +133,8 @@ golang-migrate is idempotent — safe to run repeatedly.
 ## Test Coverage (current state — all green in CI)
 | Package | File | Tests |
 |---|---|---|
-| `internal/agent` | `*_test.go` (8 files) | 85 tests: allowlist verification, executor hardening (allowlist + root rejection, HostConfig baseline, tmpfs presence, CUPS device mount), hardware detection, opt-out store concurrency, printer detection (Unix + Windows), profile scheduling, telemetry signing |
+| `internal/agent` | `*_test.go` (8 files) | 90 tests: allowlist verification, executor hardening (allowlist + root rejection, HostConfig baseline, tmpfs presence, CUPS device mount, opt-out gate ordering and fail-closed), hardware detection, opt-out store concurrency, printer detection (Unix + Windows), profile scheduling, telemetry signing |
+| `internal/types` | `workload_test.go` | 3 tests: IsValid coverage, ParseMarketplaceWorkloadType round-trip and unknown-rejection |
 | `internal/portal` | `middleware_test.go` | Ed25519 token create/verify, tampered sig, expiry, RequireAuth redirect |
 | `internal/portal` | `handlers_test.go` | 19 handler tests: login, register, job submission, dispute resolution |
 | `internal/store` | `payouts_test.go` | EligiblePayouts query with seeded DB |
@@ -138,6 +142,8 @@ golang-migrate is idempotent — safe to run repeatedly.
 | `internal/store` | `uptime_test.go` | TestRunUptimeScorer — seeds 19152 heartbeats, verifies uptime_pct update |
 | `internal/api` | `*_test.go` | 7 API handler tests: node registration, heartbeat, job completion |
 | `internal/orchestrator` | `orchestrator_test.go` | 9 registry tests: geo match, GPU filter, offline exclusion, eviction, stale eviction |
+| `internal/orchestrator` | `workload_test.go` | 5 tests: marketplace→agent mapping coverage, MustValidateWorkloadMapping pass and panic-on-missing |
+| `internal/orchestrator` | `submit_test.go` | TestSubmitJobRequest_Validate — table-driven, 4 cases (valid, empty consumer, empty workload type, unknown workload type) |
 | `internal/scheduler` | `scheduler_test.go` | 8 scheduler tests: classScore, freshnessScore, ordering, tier size, insufficient candidates |
 | `test/integration` | `phase1_test.go` | End-to-end: migrations, SubmitJob, token round-trip, Stripe (skipped without key) |
 
@@ -175,33 +181,50 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `build.ps1` as solid-color placeholders. Replace with branded artwork before
    public release.
 
-5. **Orchestrator `/allowlist` endpoint not published (B1 carry-forward)**: Agent
-   calls `<control-plane>/allowlist` at startup; endpoint doesn't exist yet. Fresh
-   agents will fail to start until B7 ships this.
+5. **Orchestrator `/allowlist` endpoint not published (carry-forward, resolve in
+   B7)**: Agent calls `<control-plane>/allowlist` at startup; endpoint doesn't exist
+   yet. Fresh agents will fail to start until B7 ships this. Existing agents with
+   cached allowlists are unaffected.
 
-6. **WorkloadType string mismatch (B1 carry-forward, resolve in B3)**: Orchestrator
-   sends raw strings ("inference", "batch"); agent enum is
-   compute/storage/print_traditional/print_3d. Will surface as job rejection once B2
-   wires IsResourceEnabled.
-
-7. **Orchestrator `/jobs/<id>/complete` ignores JSON body (B1 carry-forward, resolve
+6. **Orchestrator `/jobs/<id>/complete` ignores JSON body (carry-forward, resolve
    in B5)**: Agent sends `{"tmpfs_exhausted": bool}` but the handler accepts no body.
 
-8. **Job completion fires on any non-error return regardless of ExitCode (resolve in
-   B5)**: Metering triggers even on exit-nonzero. Pre-existing bug.
+7. **Job completion fires on any non-error return regardless of ExitCode (resolve in
+   B5)**: Metering triggers even on exit-nonzero. Pre-existing bug discovered during
+   B2 audit.
 
-9. **CUPS bind-mount path untested in CI**: `executor_devices_unix.go` is only
+8. **CUPS bind-mount path untested in CI**: `executor_devices_unix.go` is only
    exercised by inspection on the Windows dev box. `TestBuildHostConfig_CUPSDeviceAccess`
    skips on Windows. Needs a Linux GitHub Actions matrix entry or first run on
    Shenandoah pilot host.
 
-10. **`AllowedDestinations` egress filtering deferred (B1 carry-forward)**:
-    `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
-    from the allowlist but not consumed in the executor.
+9. **`AllowedDestinations` egress filtering deferred (carry-forward)**:
+   `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
+   from the allowlist but not consumed in the executor.
 
-11. **`DeviceUSBPrinter` not yet wired (B1 carry-forward, resolve in B4)**:
+10. **`DeviceUSBPrinter` not yet wired (carry-forward, resolve in B4)**:
     `deviceMountsFor` recognizes the constant but produces no mapping.
     `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
+
+11. **`FindMatch` does not filter on `WorkloadType` (B3 carry-forward)**: Documented
+    inline on `MatchRequest.WorkloadType`. Jobs may be dispatched to nodes whose
+    contributors have opted out of that workload type — the agent rejects them (B2
+    gate is the security boundary), but the round-trip is wasted effort. Fix
+    requires orchestrator visibility into agent opt-out state, which isn't plumbed
+    today (heartbeat is fire-and-forget). Likely B6 or later.
+
+12. **Orchestrator unit tests don't hit a real database (B3 carry-forward)**: B3
+    fixed the dead `"inference"` / `"batch"` test fixture values. The underlying
+    gap remains: `SubmitJob`'s DB cast (`$4::workload_type`) is never exercised in
+    unit tests because they don't hit a real DB. Test-rigor concern, not a
+    B-phase blocker.
+
+13. **Defense 3 (submit-time mapping consistency check) deferred to B7**: During
+    B3 design, three defenses against marketplace-vs-agent mapping staleness were
+    identified. Defenses 1 (typed enum at API boundary) and 2 (startup
+    exhaustiveness check via `MustValidateWorkloadMapping`) shipped in B3.
+    Defense 3 requires the orchestrator to fetch and consult the allowlist on
+    every submit, which depends on the `/allowlist` endpoint — folded into B7.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -239,6 +262,34 @@ These have caused bugs before — read before touching related code:
   `template.ParseFiles(layoutPath, pagePath)` to avoid last-parsed-wins collision.
   Do not revert to a shared parsed set.
 - `template.ParseFiles` names templates by base filename only — keep base names unique.
+
+**Workload type vocabulary (post-B3):**
+- Two enums, by design — they evolve independently:
+  - `types.MarketplaceWorkloadType` (in `internal/types/workload.go`) is the
+    customer-facing enum. Five values: `app_hosting`, `batch_compute`, `ai_inference`,
+    `object_storage`, `cdn_edge`. Constants prefixed `Marketplace*`. Values match the
+    PostgreSQL `workload_type` enum from migration 001 exactly.
+  - `agent.WorkloadType` (in `internal/agent/`) is the hardware-affinity / opt-out
+    enum: `compute`, `storage`, `print_traditional`, `print_3d`.
+- Translation lives in `internal/orchestrator/workload.go` as the
+  `marketplaceToAgent` map. Multiple marketplace values may map to the same agent
+  value (`app_hosting`, `batch_compute`, `ai_inference`, `cdn_edge` → `compute`).
+- `MustValidateWorkloadMapping()` panics if any marketplace value lacks a mapping
+  entry. Wired as the **very first action** in `cmd/orchestrator/main.go` —
+  before env validation, before DB connection. Mapping staleness is a noisy boot
+  failure, never a silent dispatch-time failure.
+- **Opt-out enforcement reads workload type from `AllowlistEntry.Type`, not from
+  the wire.** The orchestrator is not a security boundary for opt-out. A
+  misbehaving or compromised orchestrator that mislabels a job's workload type
+  cannot route past a contributor's opt-out — the agent ignores the wire claim
+  entirely. Mirror this on any future similar gate.
+- **Print is deliberately out of the marketplace enum.** Print's submission flow
+  is consent-per-job, not anonymous-matching. Decision deferred to whichever phase
+  first needs to submit print jobs through the marketplace API (likely B4 or B6).
+- **Validation lives on a method, not inline.** `SubmitJobRequest.Validate()`
+  exists so tests can exercise validation logic without constructing an
+  `Orchestrator`. Tests that require "this constructor must never be hardened"
+  are wrong tests, not right constructors.
 
 ## Coding Conventions
 - All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget cleanups)
@@ -354,16 +405,34 @@ Phase 1 end-to-end integration test.
 ### Sub-phase B1 — Executor Hardening (complete, 2026-04-26)
 Commits `43db91d` and `665ef44` on master. Allowlist enforcement, root-user rejection,
 per-job Docker network, hardened HostConfig, tmpfs scratch, CUPS bind-mount on Unix,
-ENOSPC detection. Carry-forwards → see Known TODOs 5–11.
+ENOSPC detection. Carry-forwards → see Known TODOs 5, 6, 9, 10.
 
-### Sub-phase B2 — Job-Poll Opt-Out Wiring
-Inject `OptOutStore` into `AgentConfig`. Consult `IsResourceEnabled(workloadType, printerID)`
-before accepting any job. Job dispatch must include `WorkloadType`; absent → declined.
+### Sub-phase B2 — Job-Poll Opt-Out Wiring (complete, 2026-04-26)
+Commit `85b8498` on master. `Executor.optout` is a fail-closed constructor
+dependency (`NewExecutor` returns an error on nil store). Opt-out gate sits
+inside `Executor.Run` immediately after `Allowlist.Lookup` and before
+`ImageInspect` — single enforcement point, mirrors B1's pattern. New sentinel
+`ErrWorkloadOptedOut`. Workload type read from trusted `AllowlistEntry.Type`,
+never from wire (see Critical API Notes). `cmd/agent/main.go` loads
+`opt-out.json` via `agent.OptOutCachePath()`; missing or malformed file →
+warn-and-fall-back to `agent.DefaultOptOut()` (all categories disabled — fresh
+agents accept no work until contributor opts in via portal in B6). `printerID=""`
+threading deferred to B4. 5 new agent unit tests.
 
-### Sub-phase B3 — Wire Format Additions
-Add `Printers []PrinterInfo` and current opt-out state to `ClaimNode` and `registerHWPayload`.
-Resolve WorkloadType string mismatch (TODO 6) — orchestrator sends canonical enum values
-matching the agent enum.
+### Sub-phase B3 — Typed Marketplace Enum + Mapping (complete, 2026-04-27)
+Commits `7f6919e` and `0121be4` on master. New `internal/types/` package owns
+`MarketplaceWorkloadType` (5 values matching the migration 001 `workload_type`
+enum). `internal/orchestrator/workload.go` owns `marketplaceToAgent` map
+translating to `agent.WorkloadType`. `MustValidateWorkloadMapping()` is the
+first action in orchestrator `main()` — mapping staleness is a noisy boot
+failure, not a silent dispatch failure. `SubmitJobRequest.Validate()` lifted
+out of inline checks for testability. Portal handler validates form input at the
+HTTP boundary, defaulting empty `workload_type` through the typed
+`MarketplaceAppHosting` constant. `MatchRequest.WorkloadType` carries an
+explicit field comment documenting that `FindMatch` does not yet filter on it
+(see TODO 11). Resolved former TODO 6 (WorkloadType string mismatch).
+8 new unit tests across `internal/types` (3) and `internal/orchestrator` (5).
+Defense 3 deferred to B7 (see TODO 13).
 
 ### Sub-phase B4 — Print Job Confirmation Flow
 Pending-confirmation state for print workloads. Tray notification + portal page surface
@@ -391,7 +460,12 @@ keypair (private key in secrets manager, public key baked into agent binary via
 ldflags). Sign v1 allowlist with Shenandoah pilot's actual `soholink/compute-worker`
 and `soholink/storage-worker` digests. Publish via orchestrator `/allowlist` endpoint
 (resolves TODO 5). Wires Docker integration tests
-(`SOHOLINK_DOCKER_TESTS=1`, `-tags=docker_integration`).
+(`SOHOLINK_DOCKER_TESTS=1`, `-tags=docker_integration`). Also lands Defense 3
+(submit-time mapping consistency check, deferred from B3 — see TODO 13): once
+the orchestrator can fetch the signed allowlist, `SubmitJob` can verify that the
+incoming marketplace workload type maps to the same agent workload type that
+the targeted node's allowlist entry advertises, closing the staleness window
+between marketplace, mapping, and node-side allowlist.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
