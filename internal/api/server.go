@@ -12,8 +12,10 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
-// APIServer is the SoHoLINK control plane HTTP server. All connections use
-// mTLS via SPIRE SVIDs; every request must carry a valid SPIFFE identity.
+// APIServer is the SoHoLINK control plane HTTP server. Node and job routes
+// require mTLS via SPIRE SVIDs. A small set of plain routes (/health,
+// /allowlist) sit outside the SPIFFE middleware so fresh agents and external
+// monitors can reach them without an SVID.
 type APIServer struct {
 	srv        *http.Server
 	metricsSrv *http.Server
@@ -22,19 +24,23 @@ type APIServer struct {
 	idSource   *identity.Source
 }
 
-// New constructs an APIServer. It registers all routes on a single mux,
-// wraps the mux with RequireSPIFFE middleware, and configures the TLS
-// settings from the SPIRE identity source. metricsAddr is the address for
-// the plain HTTP metrics server (e.g. ":9091") — not wrapped with mTLS.
-func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string) *APIServer {
-	mux := http.NewServeMux()
+// New constructs an APIServer. Node/job routes are registered on an inner mux
+// wrapped with RequireSPIFFE. Plain routes (/health, /allowlist) are registered
+// on the outer top-level mux. metricsAddr is the address for the separate plain
+// HTTP metrics server — not wrapped with mTLS.
+func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string, allowlistPath string) *APIServer {
+	// authMux: all routes that require a valid SPIFFE SVID.
+	authMux := http.NewServeMux()
+	registerNodeRoutes(authMux, db, registry)
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	// top: plain routes + SPIFFE-protected subtree.
+	top := http.NewServeMux()
+	top.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 	})
-
-	registerNodeRoutes(mux, db, registry)
+	top.HandleFunc("GET /allowlist", handleGetAllowlist(allowlistPath))
+	top.Handle("/", identity.RequireSPIFFE(authMux))
 
 	s := &APIServer{
 		db:       db,
@@ -43,7 +49,7 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 	}
 	s.srv = &http.Server{
 		Addr:         addr,
-		Handler:      identity.RequireSPIFFE(mux),
+		Handler:      top,
 		TLSConfig:    identity.TLSServerConfig(idSource),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,

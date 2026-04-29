@@ -47,6 +47,11 @@ func main() {
 	metricsAddr  := mustEnv("METRICS_ADDR")
 	spiffeSocket := mustEnv("SPIFFE_ENDPOINT_SOCKET")
 
+	allowlistPath := os.Getenv("ALLOWLIST_PATH")
+	if allowlistPath == "" {
+		allowlistPath = "/etc/soholink/allowlist.json"
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
@@ -72,7 +77,7 @@ func main() {
 	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
 	_ = orch  // orchestrator used by api.New via registry; available for future direct use
 
-	srv := api.New(db, registry, idSource, apiAddr, metricsAddr)
+	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
 
 	go func() {
 		slog.Info("API server listening", "addr", apiAddr)
