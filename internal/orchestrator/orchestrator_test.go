@@ -1,10 +1,15 @@
 package orchestrator
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
@@ -225,5 +230,76 @@ func TestSubmitJobRequest_Validate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// writeTempAllowlist marshals al to a temp file and returns its path.
+func writeTempAllowlist(t *testing.T, al agent.Allowlist) string {
+	t.Helper()
+	data, err := json.Marshal(al)
+	if err != nil {
+		t.Fatalf("marshal allowlist: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "allowlist.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write allowlist: %v", err)
+	}
+	return path
+}
+
+func TestSubmitJob_RejectsImageNotInAllowlist(t *testing.T) {
+	path := writeTempAllowlist(t, agent.Allowlist{
+		Version:  1,
+		IssuedAt: time.Now(),
+		Entries: []agent.AllowlistEntry{
+			{
+				Name:   "soholink/compute-worker",
+				Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				Type:   agent.WorkloadCompute,
+				Egress: agent.EgressOutbound,
+			},
+		},
+	})
+	orch := New(nil, NewNodeRegistry(), nil, nil, path)
+
+	_, err := orch.SubmitJob(context.Background(), SubmitJobRequest{
+		ConsumerID:     "c1",
+		WorkloadType:   types.MarketplaceAppHosting,
+		ContainerImage: "soholink/other-worker@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	})
+	if err == nil {
+		t.Fatal("expected error for image not in allowlist, got nil")
+	}
+	if !strings.Contains(err.Error(), "image not in allowlist") {
+		t.Errorf("expected 'image not in allowlist' in error, got: %v", err)
+	}
+}
+
+func TestSubmitJob_RejectsMappingInconsistency(t *testing.T) {
+	// Allowlist declares image as storage, but ai_inference maps to compute.
+	path := writeTempAllowlist(t, agent.Allowlist{
+		Version:  1,
+		IssuedAt: time.Now(),
+		Entries: []agent.AllowlistEntry{
+			{
+				Name:   "soholink/storage-worker",
+				Digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				Type:   agent.WorkloadStorage,
+				Egress: agent.EgressOutbound,
+			},
+		},
+	})
+	orch := New(nil, NewNodeRegistry(), nil, nil, path)
+
+	_, err := orch.SubmitJob(context.Background(), SubmitJobRequest{
+		ConsumerID:     "c1",
+		WorkloadType:   types.MarketplaceAIInference,
+		ContainerImage: "soholink/storage-worker@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	})
+	if err == nil {
+		t.Fatal("expected error for workload type mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "workload type mismatch") {
+		t.Errorf("expected 'workload type mismatch' in error, got: %v", err)
 	}
 }

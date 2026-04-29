@@ -74,7 +74,7 @@ func main() {
 	}
 
 	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
+	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
 	_ = orch  // orchestrator used by api.New via registry; available for future direct use
 
 	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)

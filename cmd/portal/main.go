@@ -63,6 +63,11 @@ func main() {
 	metricsAddr     := mustEnv("METRICS_ADDR")
 	webhookSecret   := mustEnv("STRIPE_WEBHOOK_SECRET")
 
+	allowlistPath := os.Getenv("ALLOWLIST_PATH")
+	if allowlistPath == "" {
+		allowlistPath = "/etc/soholink/allowlist.json"
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
@@ -81,7 +86,7 @@ func main() {
 	paymentClient := payment.New(stripeKey)
 
 	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
+	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
 
 	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr, webhookSecret)
 	if err != nil {

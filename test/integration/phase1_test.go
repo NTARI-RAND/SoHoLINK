@@ -4,10 +4,13 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/scheduler"
@@ -98,13 +101,18 @@ func TestPhase1EndToEnd(t *testing.T) {
 	})
 
 	tokenSecret := []byte("phase1-integration-test-secret")
-	orch := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule)
+	allowlistPath := writeTestAllowlist(t,
+		"soholink/test-image",
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		agent.WorkloadCompute)
+	orch := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
 
 	resp, err := orch.SubmitJob(ctx, orchestrator.SubmitJobRequest{
-		ConsumerID:   consumerID,
-		WorkloadType: "app_hosting",
-		CPUCores:     2,
-		RAMMB:        4096,
+		ConsumerID:     consumerID,
+		WorkloadType:   "app_hosting",
+		ContainerImage: "soholink/test-image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		CPUCores:       2,
+		RAMMB:          4096,
 	})
 	if err != nil {
 		t.Fatalf("SubmitJob: %v", err)
@@ -163,4 +171,29 @@ func TestPhase1EndToEnd(t *testing.T) {
 			t.Logf("CreateDestinationCharge: got expected Stripe error: %v", err)
 		}
 	})
+}
+
+func writeTestAllowlist(t *testing.T, name, digest string, entryType agent.WorkloadType) string {
+	t.Helper()
+	al := agent.Allowlist{
+		Version:  1,
+		IssuedAt: time.Now(),
+		Entries: []agent.AllowlistEntry{
+			{
+				Name:   name,
+				Digest: digest,
+				Type:   entryType,
+				Egress: agent.EgressOutbound,
+			},
+		},
+	}
+	data, err := json.Marshal(al)
+	if err != nil {
+		t.Fatalf("marshal test allowlist: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "allowlist.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write test allowlist: %v", err)
+	}
+	return path
 }

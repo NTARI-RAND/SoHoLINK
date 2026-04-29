@@ -2,11 +2,14 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
@@ -63,21 +66,44 @@ type SubmitJobResponse struct {
 
 // Orchestrator coordinates job placement across the node registry and database.
 type Orchestrator struct {
-	db          *store.DB
-	registry    *NodeRegistry
-	tokenSecret []byte
-	schedule    ScheduleFunc
+	db            *store.DB
+	registry      *NodeRegistry
+	tokenSecret   []byte
+	schedule      ScheduleFunc
+	allowlistPath string
 }
 
 // New constructs an Orchestrator. schedule is called during SubmitJob to rank
 // candidates; pass scheduler.Schedule from internal/scheduler.
-func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule ScheduleFunc) *Orchestrator {
+func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule ScheduleFunc, allowlistPath string) *Orchestrator {
 	return &Orchestrator{
-		db:          db,
-		registry:    registry,
-		tokenSecret: tokenSecret,
-		schedule:    schedule,
+		db:            db,
+		registry:      registry,
+		tokenSecret:   tokenSecret,
+		schedule:      schedule,
+		allowlistPath: allowlistPath,
 	}
+}
+
+// loadAllowlist reads and parses the signed allowlist from disk.
+// Per Defense 3 design (B7 commit 5), the orchestrator does not verify
+// the Ed25519 signature here — the operator-placed file is trusted; the
+// agent's signature verification is the security boundary for workload
+// identity. This loader is for consistency checking only.
+//
+// Fail-closed: any error here causes SubmitJob to reject. An empty or
+// missing file means no submits are accepted, matching the agent's
+// posture of "no allowlist = no work."
+func loadAllowlist(path string) (*agent.Allowlist, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("load allowlist %s: %w", path, err)
+	}
+	al := &agent.Allowlist{}
+	if err := json.Unmarshal(data, al); err != nil {
+		return nil, fmt.Errorf("parse allowlist %s: %w", path, err)
+	}
+	return al, nil
 }
 
 // SubmitJob validates the request, finds matching nodes, runs them through
@@ -86,6 +112,29 @@ func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule Sche
 func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (SubmitJobResponse, error) {
 	if err := req.Validate(); err != nil {
 		return SubmitJobResponse{}, fmt.Errorf("submit job: %w", err)
+	}
+
+	// Defense 3 (B7 commit 5): verify marketplace workload type, mapping,
+	// and allowlist entry all agree on the workload's agent type. Fail-closed
+	// on missing or unparseable allowlist (no allowlist = no submits).
+	al, err := loadAllowlist(o.allowlistPath)
+	if err != nil {
+		return SubmitJobResponse{}, fmt.Errorf("submit job: %w", err)
+	}
+	entry, err := al.Lookup(req.ContainerImage)
+	if err != nil {
+		return SubmitJobResponse{}, fmt.Errorf("submit job: image not in allowlist: %w", err)
+	}
+	expectedAgentType, ok := marketplaceToAgent[req.WorkloadType]
+	if !ok {
+		// Should be unreachable: req.Validate() rejects unknown marketplace
+		// types, and MustValidateWorkloadMapping at startup ensures every
+		// known type has a mapping entry.
+		return SubmitJobResponse{}, fmt.Errorf("submit job: no mapping for workload type %q", req.WorkloadType)
+	}
+	if entry.Type != expectedAgentType {
+		return SubmitJobResponse{}, fmt.Errorf("submit job: workload type mismatch: marketplace=%s maps to agent=%s, but allowlist entry for %s declares agent=%s",
+			req.WorkloadType, expectedAgentType, req.ContainerImage, entry.Type)
 	}
 
 	candidates, err := o.registry.FindMatch(MatchRequest{
