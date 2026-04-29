@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "issued_at": "2026-01-01T00:00:00Z",
+  "entries": [
+    {
+      "name": "soholink/compute-worker",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "type": "compute",
+      "egress": "outbound",
+      "allowed_destinations": [],
+      "device_access": []
+    },
+    {
+      "name": "soholink/storage-worker",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "type": "storage",
+      "egress": "outbound",
+      "allowed_destinations": [],
+      "device_access": []
+    }
+  ],
+  "signature": ""
+}

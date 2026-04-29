@@ -166,6 +166,10 @@ Set `RELEASE=1` for production builds — the build will hard-fail if the public
 key is missing. Dev builds without `RELEASE=1` warn and continue, producing a
 binary that will fail at first allowlist fetch.
 
+Operator runbooks for allowlist keypair bootstrap, signing, deployment, key
+rotation, and loss recovery: `docs/operations/allowlist-signing.md`.
+Unsigned template: `examples/allowlist.example.json`.
+
 ## Known TODOs
 These are acknowledged gaps, not bugs — do not silently fix them without discussion:
 
@@ -231,6 +235,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     exhaustiveness check via `MustValidateWorkloadMapping`) shipped in B3.
     Defense 3 requires the orchestrator to fetch and consult the allowlist on
     every submit, which depends on the `/allowlist` endpoint — folded into B7.
+
+14. **Orchestrator not in production Compose stack (B7 carry-forward)**: The
+    production `docker-compose.yml` runs portal + NGINX + cloudflared only. The
+    orchestrator process is not deployed. Agents cannot reach `/allowlist` or
+    submit jobs against the live stack. Deploying the orchestrator to NTARIHQ
+    and wiring it into the Compose stack (with its own `ALLOWLIST_PATH` env var
+    pointing to `/etc/soholink/allowlist.json`) is a prerequisite for the
+    Shenandoah pilot end-to-end test.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
