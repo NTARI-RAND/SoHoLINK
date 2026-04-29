@@ -96,6 +96,23 @@ func (a *Allowlist) canonicalSigningBytes() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+// Sign computes a signature over the allowlist's canonical bytes using priv
+// and stores the base64-encoded signature in a.Signature. Any existing
+// signature is overwritten. Reuses canonicalSigningBytes so Sign and Verify
+// cannot diverge.
+func (a *Allowlist) Sign(priv ed25519.PrivateKey) error {
+	if len(priv) != ed25519.PrivateKeySize {
+		return fmt.Errorf("sign: invalid private key length: got %d, want %d", len(priv), ed25519.PrivateKeySize)
+	}
+	msg, err := a.canonicalSigningBytes()
+	if err != nil {
+		return fmt.Errorf("sign: canonicalize: %w", err)
+	}
+	sig := ed25519.Sign(priv, msg)
+	a.Signature = base64.StdEncoding.EncodeToString(sig)
+	return nil
+}
+
 // Verify checks that the allowlist's signature matches the configured public
 // key. Returns nil on success, ErrAllowlistNoKey if no key is configured,
 // or ErrAllowlistSignature on any verification failure.

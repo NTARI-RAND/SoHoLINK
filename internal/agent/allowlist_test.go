@@ -271,3 +271,28 @@ func TestLoadAllowlistFromURL_RejectsTamperedCache(t *testing.T) {
 		t.Fatalf("expected ErrAllowlistSignature on tampered cache, got %v", err)
 	}
 }
+
+func TestAllowlist_SignVerifyRoundTrip(t *testing.T) {
+	priv := withTestKey(t)
+	al := sampleAllowlist()
+	if err := al.Sign(priv); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if al.Signature == "" {
+		t.Fatal("expected Signature to be populated after Sign")
+	}
+	if err := al.Verify(); err != nil {
+		t.Fatalf("Verify after Sign: %v", err)
+	}
+}
+
+func TestAllowlist_SignRejectsBadKey(t *testing.T) {
+	al := sampleAllowlist()
+	err := al.Sign([]byte("too short"))
+	if err == nil {
+		t.Fatal("expected error on short private key, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid private key length") {
+		t.Errorf("error %q does not mention 'invalid private key length'", err)
+	}
+}
