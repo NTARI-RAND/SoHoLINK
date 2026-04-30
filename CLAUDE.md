@@ -149,7 +149,7 @@ golang-migrate is idempotent — safe to run repeatedly.
 | `internal/api` | `*_test.go` | 7 API handler tests: node registration, heartbeat, job completion |
 | `internal/orchestrator` | `orchestrator_test.go` | 9 registry tests: geo match, GPU filter, offline exclusion, eviction, stale eviction |
 | `internal/orchestrator` | `workload_test.go` | 5 tests: marketplace→agent mapping coverage, MustValidateWorkloadMapping pass and panic-on-missing |
-| `internal/orchestrator` | `submit_test.go` | TestSubmitJobRequest_Validate — table-driven, 4 cases (valid, empty consumer, empty workload type, unknown workload type) |
+| `internal/orchestrator` | `orchestrator_test.go` (Validate) | TestSubmitJobRequest_Validate — table-driven, 4 cases (valid, empty consumer, empty workload type, unknown workload type) |
 | `internal/orchestrator` | `orchestrator_test.go` (Defense 3) | 2 tests: TestSubmitJob_RejectsImageNotInAllowlist, TestSubmitJob_RejectsMappingInconsistency. Happy path covered by integration test |
 | `internal/api` | `allowlist_test.go` | 2 tests: TestHandleGetAllowlist_ServesFile, TestHandleGetAllowlist_ReturnsNotFoundWhenMissing |
 | `internal/agent` | `allowlist_test.go` (Sign) | 2 additional tests: TestAllowlist_SignVerifyRoundTrip, TestAllowlist_SignRejectsBadKey |
