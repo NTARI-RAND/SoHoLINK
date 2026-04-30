@@ -103,6 +103,12 @@ web/
   static/css/     ← portal.css (complete design system)
 installer/
   windows/        ← WiX v4 MSI: SoHoLINK.wxs, build.ps1, LICENSE.rtf, agpl-3.0.txt
+scripts/
+  allowlist-genkey/  ← Operator tool: generate Ed25519 signing keypair (one-time)
+  allowlist-sign/    ← Operator tool: sign allowlist JSON with private key
+docs/
+  operations/     ← Operator runbooks (allowlist-signing.md)
+examples/         ← Templates (allowlist.example.json + README)
 test/integration/ ← Phase 1 end-to-end integration test (build tag: integration)
 ```
 
@@ -144,6 +150,9 @@ golang-migrate is idempotent — safe to run repeatedly.
 | `internal/orchestrator` | `orchestrator_test.go` | 9 registry tests: geo match, GPU filter, offline exclusion, eviction, stale eviction |
 | `internal/orchestrator` | `workload_test.go` | 5 tests: marketplace→agent mapping coverage, MustValidateWorkloadMapping pass and panic-on-missing |
 | `internal/orchestrator` | `submit_test.go` | TestSubmitJobRequest_Validate — table-driven, 4 cases (valid, empty consumer, empty workload type, unknown workload type) |
+| `internal/orchestrator` | `orchestrator_test.go` (Defense 3) | 2 tests: TestSubmitJob_RejectsImageNotInAllowlist, TestSubmitJob_RejectsMappingInconsistency. Happy path covered by integration test |
+| `internal/api` | `allowlist_test.go` | 2 tests: TestHandleGetAllowlist_ServesFile, TestHandleGetAllowlist_ReturnsNotFoundWhenMissing |
+| `internal/agent` | `allowlist_test.go` (Sign) | 2 additional tests: TestAllowlist_SignVerifyRoundTrip, TestAllowlist_SignRejectsBadKey |
 | `internal/scheduler` | `scheduler_test.go` | 8 scheduler tests: classScore, freshnessScore, ordering, tier size, insufficient candidates |
 | `test/integration` | `phase1_test.go` | End-to-end: migrations, SubmitJob, token round-trip, Stripe (skipped without key) |
 
@@ -191,58 +200,63 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `build.ps1` as solid-color placeholders. Replace with branded artwork before
    public release.
 
-5. **Orchestrator `/allowlist` endpoint not published (carry-forward, resolve in
-   B7)**: Agent calls `<control-plane>/allowlist` at startup; endpoint doesn't exist
-   yet. Fresh agents will fail to start until B7 ships this. Existing agents with
-   cached allowlists are unaffected.
-
-6. **Orchestrator `/jobs/<id>/complete` ignores JSON body (carry-forward, resolve
+5. **Orchestrator `/jobs/<id>/complete` ignores JSON body (carry-forward, resolve
    in B5)**: Agent sends `{"tmpfs_exhausted": bool}` but the handler accepts no body.
 
-7. **Job completion fires on any non-error return regardless of ExitCode (resolve in
+6. **Job completion fires on any non-error return regardless of ExitCode (resolve in
    B5)**: Metering triggers even on exit-nonzero. Pre-existing bug discovered during
    B2 audit.
 
-8. **CUPS bind-mount path untested in CI**: `executor_devices_unix.go` is only
+7. **CUPS bind-mount path untested in CI**: `executor_devices_unix.go` is only
    exercised by inspection on the Windows dev box. `TestBuildHostConfig_CUPSDeviceAccess`
    skips on Windows. Needs a Linux GitHub Actions matrix entry or first run on
    Shenandoah pilot host.
 
-9. **`AllowedDestinations` egress filtering deferred (carry-forward)**:
+8. **`AllowedDestinations` egress filtering deferred (carry-forward)**:
    `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
    from the allowlist but not consumed in the executor.
 
-10. **`DeviceUSBPrinter` not yet wired (carry-forward, resolve in B4)**:
-    `deviceMountsFor` recognizes the constant but produces no mapping.
-    `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
+9. **`DeviceUSBPrinter` not yet wired (carry-forward, resolve in B4)**:
+   `deviceMountsFor` recognizes the constant but produces no mapping.
+   `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
 
-11. **`FindMatch` does not filter on `WorkloadType` (B3 carry-forward)**: Documented
+10. **`FindMatch` does not filter on `WorkloadType` (B3 carry-forward)**: Documented
     inline on `MatchRequest.WorkloadType`. Jobs may be dispatched to nodes whose
     contributors have opted out of that workload type — the agent rejects them (B2
     gate is the security boundary), but the round-trip is wasted effort. Fix
     requires orchestrator visibility into agent opt-out state, which isn't plumbed
     today (heartbeat is fire-and-forget). Likely B6 or later.
 
-12. **Orchestrator unit tests don't hit a real database (B3 carry-forward)**: B3
+11. **Orchestrator unit tests don't hit a real database (B3 carry-forward)**: B3
     fixed the dead `"inference"` / `"batch"` test fixture values. The underlying
     gap remains: `SubmitJob`'s DB cast (`$4::workload_type`) is never exercised in
     unit tests because they don't hit a real DB. Test-rigor concern, not a
     B-phase blocker.
 
-13. **Defense 3 (submit-time mapping consistency check) deferred to B7**: During
-    B3 design, three defenses against marketplace-vs-agent mapping staleness were
-    identified. Defenses 1 (typed enum at API boundary) and 2 (startup
-    exhaustiveness check via `MustValidateWorkloadMapping`) shipped in B3.
-    Defense 3 requires the orchestrator to fetch and consult the allowlist on
-    every submit, which depends on the `/allowlist` endpoint — folded into B7.
-
-14. **Orchestrator not in production Compose stack (B7 carry-forward)**: The
+12. **Orchestrator not in production Compose stack (B7 carry-forward)**: The
     production `docker-compose.yml` runs portal + NGINX + cloudflared only. The
     orchestrator process is not deployed. Agents cannot reach `/allowlist` or
     submit jobs against the live stack. Deploying the orchestrator to NTARIHQ
     and wiring it into the Compose stack (with its own `ALLOWLIST_PATH` env var
     pointing to `/etc/soholink/allowlist.json`) is a prerequisite for the
     Shenandoah pilot end-to-end test.
+
+13. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
+    tooling, the `/allowlist` endpoint, the build-time public-key injection,
+    Defense 3, and the operations runbook (commits `4514c10`, `1481cf6`,
+    `dd8ffd1`, `17a63f8`, `9710f32`). The remaining piece — generating the
+    production keypair, signing v1 with real Shenandoah worker image digests,
+    and placing the signed file at `/etc/soholink/allowlist.json` on the
+    orchestrator host — is blocked on the worker images existing. References
+    to `soholink/compute-worker` and `soholink/storage-worker` exist only in
+    test fixtures today. When the worker images are built and published,
+    follow `docs/operations/allowlist-signing.md` to complete this step.
+
+14. **`/health` endpoint moved off SPIFFE auth (B7 commit 2)**: As part of
+    restructuring the orchestrator mux to expose `/allowlist` plain-HTTP, the
+    `/health` route was also moved to the plain top-level mux. External monitors
+    and load balancers can now reach `/health` without an SVID. Documented as
+    deliberate, not regression. No action item — listed for visibility.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -325,6 +339,29 @@ These have caused bugs before — read before touching related code:
   returns `ErrAllowlistNoKey`), not a build error. The fail-closed behavior is
   why warn-and-continue is acceptable for dev builds.
 
+**Orchestrator-side allowlist consumption (post-B7 commit 5 / Defense 3):**
+- Both `cmd/orchestrator/main.go` and `cmd/portal/main.go` read `ALLOWLIST_PATH`
+  (default `/etc/soholink/allowlist.json`) and pass it to `orchestrator.New`.
+  Both binaries construct Orchestrators that handle SubmitJob, so both need
+  the path.
+- `internal/orchestrator/orchestrator.go` defines `loadAllowlist(path)` which
+  reads + parses on every call. **The orchestrator does not verify the
+  Ed25519 signature** — by design (Defense 3 design call A1). The agent is
+  the security boundary for workload identity; the orchestrator's check is
+  consistency only. This means the orchestrator binary does not need
+  `AllowlistPublicKey` baked in.
+- `SubmitJob` calls `loadAllowlist` after `req.Validate()` and before
+  `FindMatch`. Three rejection conditions: (a) file missing/unparseable,
+  (b) image not in allowlist, (c) `marketplaceToAgent[req.WorkloadType] !=
+  allowlistEntry.Type`. All three return errors with `"submit job: ..."`
+  prefix and a descriptive sub-message.
+- Fail-closed: missing or malformed allowlist file rejects all submits.
+  Matches the agent's "no allowlist = no work" posture.
+- Per-submit file read is intentional. Allowlist updates are rare; an
+  `os.ReadFile` is cheap relative to the existing DB calls in `SubmitJob`.
+  If submit performance ever becomes a bottleneck, swap to startup-load
+  with reload-on-SIGHUP — interface stays the same.
+
 ## Coding Conventions
 - All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget cleanups)
 - All inter-service calls use mTLS via SPIRE SVIDs
@@ -384,7 +421,8 @@ requires `X-Register-Secret` header matching `CONTROL_PLANE_REGISTER_SECRET` env
 
 ## Production Deployment
 soholink.org live on NTARIHQ via Cloudflare Tunnel (`soholink-prod bb7b7f0d`).
-Docker Compose stack: portal + NGINX + cloudflared.
+Docker Compose stack: portal + NGINX + cloudflared. **Orchestrator process
+not yet in the Compose stack** — see TODO 12.
 - **`docker-compose.yml`** — portal + NGINX + cloudflared services
 - **`Dockerfile.portal`** — multi-stage Go build; final image copies binary + `web/`
 - **`nginx.conf`** — reverse proxy to `portal:8080` for `soholink.org`
@@ -488,18 +526,53 @@ and pushes to affected agents via heartbeat response. Dashboard page: detected
 resources per node, per-printer toggles, per-category toggles. Surfaces
 `TmpfsExhausted` alerts.
 
-### Sub-phase B7 — Allowlist Signing Tool + First Publication
-`scripts/allowlist-sign/main.go` ops tool. Generate production Ed25519 signing
-keypair (private key in secrets manager, public key baked into agent binary via
-ldflags). Sign v1 allowlist with Shenandoah pilot's actual `soholink/compute-worker`
-and `soholink/storage-worker` digests. Publish via orchestrator `/allowlist` endpoint
-(resolves TODO 5). Wires Docker integration tests
-(`SOHOLINK_DOCKER_TESTS=1`, `-tags=docker_integration`). Also lands Defense 3
-(submit-time mapping consistency check, deferred from B3 — see TODO 13): once
-the orchestrator can fetch the signed allowlist, `SubmitJob` can verify that the
-incoming marketplace workload type maps to the same agent workload type that
-the targeted node's allowlist entry advertises, closing the staleness window
-between marketplace, mapping, and node-side allowlist.
+### Sub-phase B7 — Allowlist Signing + Distribution + Defense 3 (complete, 2026-04-29)
+Five commits on master closing TODO 5 (orchestrator `/allowlist` endpoint) and
+TODO 13 (Defense 3). Operator action to generate the actual production
+keypair and sign v1 deferred to TODO 13 (post-worker-image existence).
+
+- **Commit `4514c10`** — `feat(agent): add Allowlist.Sign + allowlist-genkey + allowlist-sign tools`.
+  New `Sign` method on `*Allowlist` mirroring existing `Verify` (reuses
+  `canonicalSigningBytes` so they cannot diverge). Two operator binaries
+  under `scripts/`: `allowlist-genkey` (one-time keypair bootstrap, refuses
+  to overwrite, 0600 perms on private key) and `allowlist-sign` (signs an
+  unsigned allowlist JSON, supports stdin/stdout or file flags).
+- **Commit `1481cf6`** — `feat(api): publish GET /allowlist endpoint`. New
+  `internal/api/allowlist.go` handler reads `ALLOWLIST_PATH` file on every
+  request, serves as `application/json` with `Cache-Control: no-store`.
+  `internal/api/server.go` restructured: top-level mux holds plain routes
+  (`/allowlist` + `/health`), nested mux holds SPIFFE-protected node/job
+  routes. `/health` deliberately moved off SPIFFE auth so external monitors
+  can reach it (TODO 14).
+- **Commit `dd8ffd1`** — `build(installer,ci): inject AllowlistPublicKey via ldflags`.
+  `installer/windows/build.ps1` reads `$env:ALLOWLIST_PUBLIC_KEY`,
+  hard-fails when `$env:RELEASE -eq "1"` and key is missing, otherwise
+  warns and continues. `.github/workflows/ci.yml` reads
+  `${{ secrets.ALLOWLIST_PUBLIC_KEY }}` and injects on every build. Doc
+  comment in `internal/agent/allowlist.go` corrected to show the full
+  module path (was misleading `internal/agent.AllowlistPublicKey`).
+- **Commit `17a63f8`** — `docs(b7): allowlist signing runbook + example template`.
+  `docs/operations/allowlist-signing.md` (213 lines): one-time keypair
+  bootstrap, building/signing allowlist, deployment, key rotation, loss
+  recovery. `examples/allowlist.example.json` template with placeholder
+  digests. `examples/README.md` explaining usage.
+- **Commit `9710f32`** — `feat(orchestrator): Defense 3 submit-time mapping consistency check`.
+  `Orchestrator` struct gains `allowlistPath`. `New()` constructor signature
+  extended (also threaded through `cmd/orchestrator/main.go` and
+  `cmd/portal/main.go` — both binaries construct orchestrators).
+  `loadAllowlist()` helper parses but does not verify signature (operator
+  trusts local file; agent is the security boundary). `SubmitJob` now
+  rejects unknown images, mapping-inconsistent submissions, and missing/
+  unparseable allowlist files. Two new unit tests cover rejection paths;
+  integration test (`phase1_test.go`) covers the happy path with a real DB.
+
+Operator action remaining (deferred to TODO 13): generate production
+keypair via `scripts/allowlist-genkey`, store private key per the four
+storage requirements in the runbook, upload public key to GitHub Actions
+secret + local env var, build v1 allowlist with real worker image digests,
+sign, deploy to `/etc/soholink/allowlist.json` on the orchestrator host.
+Blocked on worker images (`soholink/compute-worker`,
+`soholink/storage-worker`) being built and published.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
