@@ -42,3 +42,15 @@ func SPIFFEIDFromContext(ctx context.Context) (spiffeid.ID, bool) {
 	id, ok := ctx.Value(contextKey{}).(spiffeid.ID)
 	return id, ok
 }
+
+// UnavailableHandler returns an http.Handler that responds 503 to every
+// request with a JSON body explaining that the SPIFFE identity source is
+// not available. Used when the SPIRE Workload API socket cannot be reached
+// and the orchestrator runs in degraded mode without mTLS — see TODO 12.
+func UnavailableHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"identity unavailable","detail":"SPIRE workload API socket not reachable; SPIFFE-protected routes are disabled"}`))
+	})
+}
