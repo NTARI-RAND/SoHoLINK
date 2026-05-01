@@ -233,15 +233,27 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     unit tests because they don't hit a real DB. Test-rigor concern, not a
     B-phase blocker.
 
-12. **Orchestrator not in production Compose stack (B7 carry-forward)**: The
-    production `docker-compose.yml` runs portal + NGINX + cloudflared only. The
-    orchestrator process is not deployed. Agents cannot reach `/allowlist` or
-    submit jobs against the live stack. Deploying the orchestrator to NTARIHQ
-    and wiring it into the Compose stack (with its own `ALLOWLIST_PATH` env var
-    pointing to `/etc/soholink/allowlist.json`) is a prerequisite for the
-    Shenandoah pilot end-to-end test.
+12. **Orchestrator unhealthy in production — SPIRE Workload API unreachable**:
+    `identity.NewSource` in `cmd/orchestrator/main.go` calls
+    `workloadapi.NewX509Source` which blocks then fatals when the SPIFFE Workload
+    API socket is unreachable. No SPIRE agent is present in the Compose stack, so
+    the orchestrator crash-loops on every start. Two remediation options:
+    - **Option A (short-term):** Make identity init non-fatal — skip SPIFFE source
+      if the socket is absent, disable mTLS on agent-facing routes, log a warning.
+      Unblocks the Shenandoah pilot without full SPIRE wiring.
+    - **Option B (correct-term):** Add SPIRE agent service to the Compose stack
+      with Docker workload attestor, register workload entries for the orchestrator
+      SPIFFE ID. See TODO 13.
 
-13. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
+13. **No SPIRE agent in Compose stack**: `deploy/spire/server.conf` configures
+    the SPIRE server only — `NodeAttestor "join_token"`, no `WorkloadAttestor`.
+    The Compose stack has no `spire-agent` service. Full SPIRE wiring requires:
+    adding a `spire-agent` service with Docker workload attestor
+    (`unix_workload_attestor`), registering workload entries for each container
+    (orchestrator, portal), and providing agent config and join token. Until this
+    is done, no container can obtain a SVID from the local socket.
+
+14. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
     tooling, the `/allowlist` endpoint, the build-time public-key injection,
     Defense 3, and the operations runbook (commits `4514c10`, `1481cf6`,
     `dd8ffd1`, `17a63f8`, `9710f32`). The remaining piece — generating the
@@ -252,7 +264,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     test fixtures today. When the worker images are built and published,
     follow `docs/operations/allowlist-signing.md` to complete this step.
 
-14. **`/health` endpoint moved off SPIFFE auth (B7 commit 2)**: As part of
+15. **`/health` endpoint moved off SPIFFE auth (B7 commit 2)**: As part of
     restructuring the orchestrator mux to expose `/allowlist` plain-HTTP, the
     `/health` route was also moved to the plain top-level mux. External monitors
     and load balancers can now reach `/health` without an SVID. Documented as
@@ -421,14 +433,16 @@ requires `X-Register-Secret` header matching `CONTROL_PLANE_REGISTER_SECRET` env
 
 ## Production Deployment
 soholink.org live on NTARIHQ via Cloudflare Tunnel (`soholink-prod bb7b7f0d`).
-Docker Compose stack: portal + NGINX + cloudflared. **Orchestrator process
-not yet in the Compose stack** — see TODO 12.
-- **`docker-compose.yml`** — portal + NGINX + cloudflared services
+Docker Compose stack: portal + NGINX + cloudflared + orchestrator. Orchestrator
+added in `6f8d9a2` — currently **unhealthy** (crash-looping): `identity.NewSource`
+blocks at startup because no SPIRE agent is present in the Compose stack — see TODO 12.
+- **`docker-compose.yml`** — portal + NGINX + cloudflared + orchestrator services
 - **`Dockerfile.portal`** — multi-stage Go build; final image copies binary + `web/`
+- **`Dockerfile.orchestrator`** — multi-stage Go build; final image copies orchestrator binary
 - **`nginx.conf`** — reverse proxy to `portal:8080` for `soholink.org`
 - **`.env`** — `DATABASE_URL`, `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`; gitignored
 - **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`)
-- **DNS** — CNAME `soholink.org` → tunnel (proxied)
+- **DNS** — CNAME `soholink.org` → tunnel (proxied); CNAME `api.soholink.org` → tunnel (proxied), live
 
 ## First Live Pilot
 **Shenandoah Condominiums, 1 Dupont Way, Louisville KY 40207** — dense residential
@@ -573,6 +587,14 @@ secret + local env var, build v1 allowlist with real worker image digests,
 sign, deploy to `/etc/soholink/allowlist.json` on the orchestrator host.
 Blocked on worker images (`soholink/compute-worker`,
 `soholink/storage-worker`) being built and published.
+
+### Deployment checkpoint — `6f8d9a2` (2026-04-30)
+Orchestrator added to production Compose stack (`Dockerfile.orchestrator`,
+`docker-compose.yml` orchestrator service, `deploy/allowlist/` mount point).
+`api.soholink.org` ingress added to cloudflared config; CNAME live in Cloudflare.
+Orchestrator image builds cleanly; container is unhealthy in production —
+`identity.NewSource` fatals on missing SPIRE Workload API socket at startup.
+See TODOs 12 and 13.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
