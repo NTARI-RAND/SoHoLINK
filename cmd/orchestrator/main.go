@@ -67,10 +67,19 @@ func main() {
 	}
 	slog.Info("migrations applied")
 
-	idSource, err := identity.NewSource(ctx, spiffeSocket)
+	// Try to obtain a SPIFFE identity source with a bounded timeout.
+	// If the SPIRE Workload API socket is unreachable, continue in degraded
+	// mode: the API server binds plain HTTP, /health and /allowlist stay
+	// reachable, SPIFFE-protected routes return 503. See TODO 12.
+	idCtx, idCancel := context.WithTimeout(ctx, 5*time.Second)
+	idSource, err := identity.NewSource(idCtx, spiffeSocket)
+	idCancel()
 	if err != nil {
-		slog.Error("SPIFFE identity source failed", "error", err)
-		os.Exit(1)
+		slog.Warn("SPIFFE identity source unavailable; continuing in degraded mode",
+			"error", err,
+			"socket", spiffeSocket,
+		)
+		idSource = nil
 	}
 
 	registry := orchestrator.NewNodeRegistry()
