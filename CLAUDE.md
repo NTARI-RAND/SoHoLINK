@@ -234,16 +234,12 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     B-phase blocker.
 
 12. **Orchestrator unhealthy in production — SPIRE Workload API unreachable**:
-    `identity.NewSource` in `cmd/orchestrator/main.go` calls
-    `workloadapi.NewX509Source` which blocks then fatals when the SPIFFE Workload
-    API socket is unreachable. No SPIRE agent is present in the Compose stack, so
-    the orchestrator crash-loops on every start. Two remediation options:
-    - **Option A (short-term):** Make identity init non-fatal — skip SPIFFE source
-      if the socket is absent, disable mTLS on agent-facing routes, log a warning.
-      Unblocks the Shenandoah pilot without full SPIRE wiring.
-    - **Option B (correct-term):** Add SPIRE agent service to the Compose stack
-      with Docker workload attestor, register workload entries for the orchestrator
-      SPIFFE ID. See TODO 13.
+    **RESOLVED via Option A, 2026-05-01** (commits `303744b`, `6a6f3e3`,
+    `0a28f88`). `identity.NewSource` now runs under a 5-second bounded context;
+    on failure the orchestrator continues in degraded mode: plain HTTP,
+    SPIFFE-protected routes return 503 with JSON body, `/health` always returns
+    200 with `"identity":"unavailable"`. Production container is healthy.
+    Option B (full SPIRE wiring) remains the correct long-term path — see TODO 13.
 
 13. **No SPIRE agent in Compose stack**: `deploy/spire/server.conf` configures
     the SPIRE server only — `NodeAttestor "join_token"`, no `WorkloadAttestor`.
@@ -252,6 +248,12 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     (`unix_workload_attestor`), registering workload entries for each container
     (orchestrator, portal), and providing agent config and join token. Until this
     is done, no container can obtain a SVID from the local socket.
+    **Note (Option B healthcheck reconciliation):** When Option B is implemented,
+    the Compose `healthcheck` for the orchestrator (currently probing plain HTTP
+    `/health`) must be updated — once `Start()` switches to `ListenAndServeTLS`,
+    the probe needs mTLS or a sidecar. The `/health` route was intentionally placed
+    on the plain outer mux so it stays reachable in degraded mode; verify this
+    placement still works after full SPIRE wiring.
 
 14. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
     tooling, the `/allowlist` endpoint, the build-time public-key injection,
@@ -269,6 +271,15 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     `/health` route was also moved to the plain top-level mux. External monitors
     and load balancers can now reach `/health` without an SVID. Documented as
     deliberate, not regression. No action item — listed for visibility.
+
+16. **NTARIHQ Application Control — elevated subprocess required for boot-path
+    management**: Windows Application Control (AppLocker/WDAC) on NTARIHQ blocks
+    non-elevated PowerShell from managing scheduled tasks and stopping processes in
+    Session 0. `Disable-ScheduledTask` and `Stop-Process` fail with access denied.
+    Workaround: `Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile
+    -Command ""<cmd>""" -Wait`. Any future automation that manages boot-path
+    services on NTARIHQ must either run elevated or use a pre-authorized scheduled
+    task. Host policy constraint — not a code issue, do not attempt to bypass.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -588,13 +599,14 @@ sign, deploy to `/etc/soholink/allowlist.json` on the orchestrator host.
 Blocked on worker images (`soholink/compute-worker`,
 `soholink/storage-worker`) being built and published.
 
-### Deployment checkpoint — `6f8d9a2` (2026-04-30)
+### Deployment checkpoint — `6f8d9a2` (2026-04-30) · resolved `0a28f88` (2026-05-01)
 Orchestrator added to production Compose stack (`Dockerfile.orchestrator`,
 `docker-compose.yml` orchestrator service, `deploy/allowlist/` mount point).
 `api.soholink.org` ingress added to cloudflared config; CNAME live in Cloudflare.
-Orchestrator image builds cleanly; container is unhealthy in production —
-`identity.NewSource` fatals on missing SPIRE Workload API socket at startup.
-See TODOs 12 and 13.
+Orchestrator image builds cleanly and container is healthy in production following
+TODO 12 Option A resolution (commits `303744b`, `6a6f3e3`, `0a28f88`): degraded
+mode with plain HTTP, 503 on SPIFFE-protected routes, 200 on `/health`.
+Full SPIRE wiring (Option B) still pending — see TODO 13.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
