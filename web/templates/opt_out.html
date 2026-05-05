@@ -1,0 +1,142 @@
+{{define "title"}}Resource Opt-Out — SoHoLINK{{end}}
+{{define "content"}}
+<style>
+  .opt-out-node { margin-bottom: 2.5rem; }
+  .opt-out-node h2 { margin-bottom: 0.25rem; font-size: 1.25rem; }
+  .opt-out-node .sync-line { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; margin-bottom: 1rem; }
+  .toggle-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; cursor: pointer; }
+  .toggle-row.sub { padding-left: 1.5rem; border-left: 2px solid var(--border); margin-left: 0.5rem; }
+  .toggle-row input[type="checkbox"] { width: 1.1rem; height: 1.1rem; cursor: pointer; flex-shrink: 0; }
+  .printer-list { margin-top: 0.75rem; padding-left: 0.5rem; }
+  .printer-list[hidden] { display: none; }
+  .printer-name { display: block; }
+  .printer-id { display: block; font-family: monospace; font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+  .printers-empty { color: var(--muted); font-style: italic; padding: 0.5rem 0 0.5rem 1.5rem; }
+  .save-row { margin-top: 1rem; display: flex; align-items: center; gap: 0.75rem; }
+  .btn-save { padding: 0.5rem 1rem; background: var(--accent); color: var(--bg); border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+  .btn-save:hover { opacity: 0.9; }
+  .save-status { font-size: 0.85rem; color: var(--muted); }
+  .save-status.success { color: var(--accent); }
+  .save-status.error { color: #d14; }
+</style>
+
+<div class="eyebrow">Account</div>
+<h1>Resource Opt-Out</h1>
+<p style="color: var(--muted); max-width: 640px;">
+  Choose which kinds of work each of your nodes accepts. Changes apply to new jobs only —
+  work already running on a node continues to completion. After you save, your node
+  picks up the change on its next heartbeat.
+</p>
+
+{{if not .Nodes}}
+<p style="color: var(--muted); margin-top: 2rem;">You have no nodes registered yet.</p>
+{{else}}
+{{range .Nodes}}
+<section id="node-{{.ID}}" class="opt-out-node" data-node-id="{{.ID}}">
+  <div class="section-label">Node</div>
+  <h2><code style="font-size: 1rem;">{{.Hostname}}</code></h2>
+  <p class="sync-line">{{.SyncStatus}}</p>
+
+  <div class="card">
+    <label class="toggle-row">
+      <input type="checkbox" data-kind="compute" {{if not .OptOutCompute}}checked{{end}}>
+      <span>Accept compute jobs</span>
+    </label>
+    <label class="toggle-row">
+      <input type="checkbox" data-kind="storage" {{if not .OptOutStorage}}checked{{end}}>
+      <span>Accept storage jobs</span>
+    </label>
+    <label class="toggle-row">
+      <input type="checkbox" data-kind="printing" {{if not .OptOutPrinting}}checked{{end}}>
+      <span>Accept print jobs</span>
+    </label>
+
+    <div class="printer-list" data-printer-list {{if .OptOutPrinting}}hidden{{end}}>
+      {{if .Printers}}
+        {{range .Printers}}
+        <label class="toggle-row sub">
+          <input type="checkbox" data-printer-id="{{.PrinterID}}" {{if .Enabled}}checked{{end}}>
+          <span>
+            <span class="printer-name">Allow {{.DisplayName}}</span>
+            <span class="printer-id">{{.PrinterID}}</span>
+          </span>
+        </label>
+        {{end}}
+      {{else}}
+        <p class="printers-empty">No printers detected — none will accept work.</p>
+      {{end}}
+    </div>
+
+    <div class="save-row">
+      <button type="button" class="btn-save" data-save>Save changes</button>
+      <span class="save-status" data-status></span>
+    </div>
+  </div>
+</section>
+{{end}}
+{{end}}
+
+<script>
+(function () {
+  document.querySelectorAll('.opt-out-node').forEach(function (section) {
+    var nodeID = section.dataset.nodeId;
+    var printingToggle = section.querySelector('input[data-kind="printing"]');
+    var printerList = section.querySelector('[data-printer-list]');
+    var saveBtn = section.querySelector('[data-save]');
+    var statusEl = section.querySelector('[data-status]');
+
+    printingToggle.addEventListener('change', function () {
+      if (printingToggle.checked) {
+        printerList.removeAttribute('hidden');
+      } else {
+        printerList.setAttribute('hidden', '');
+      }
+    });
+
+    saveBtn.addEventListener('click', function () {
+      statusEl.textContent = 'Saving...';
+      statusEl.className = 'save-status';
+
+      var compute = section.querySelector('input[data-kind="compute"]');
+      var storage = section.querySelector('input[data-kind="storage"]');
+      var printing = section.querySelector('input[data-kind="printing"]');
+
+      var printers = [];
+      section.querySelectorAll('input[data-printer-id]').forEach(function (cb) {
+        printers.push({ printer_id: cb.dataset.printerId, enabled: cb.checked });
+      });
+
+      // Toggles use POSITIVE framing ("Accept X jobs"); DB stores opt_out booleans.
+      // checked = participating = opt_out FALSE. Invert for the wire.
+      var body = {
+        node_id: nodeID,
+        compute: !compute.checked,
+        storage: !storage.checked,
+        printing: !printing.checked,
+        printers: printers
+      };
+
+      fetch('/api/opt-out', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body)
+      })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          return resp.json();
+        })
+        .then(function (data) {
+          statusEl.textContent = 'Saved · Version ' + data.version;
+          statusEl.className = 'save-status success';
+        })
+        .catch(function () {
+          statusEl.textContent = 'Save failed';
+          statusEl.className = 'save-status error';
+        });
+    });
+  });
+})();
+</script>
+{{end}}
+{{template "layout" .}}

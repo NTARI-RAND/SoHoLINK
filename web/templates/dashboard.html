@@ -23,6 +23,7 @@
           <th>Uptime (7d)</th>
           <th>Last Heartbeat</th>
           <th></th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -49,6 +50,7 @@
           <td>{{printf "%.1f" .UptimePct}}<span style="color:var(--muted);font-size:0.75rem;">%</span></td>
           <td style="color:var(--muted);font-size:0.8rem;">{{.LastHeartbeat.Format "Jan 2, 15:04"}}</td>
           <td><a href="/provider/provision" style="font-size:0.8rem;">Configure →</a></td>
+          <td><a href="/opt-out#node-{{.ID}}" style="font-size:0.8rem;">Opt-out →</a></td>
         </tr>
         {{end}}
       </tbody>

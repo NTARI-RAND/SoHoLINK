@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -149,8 +150,9 @@ func seedNode(t *testing.T, db *store.DB, participantID, status, class, country 
 func authenticatedRequest(t *testing.T, sm *SessionManager, method, path, userID, email string) *http.Request {
 	t.Helper()
 	token, err := sm.CreateToken(SessionClaims{
-		UserID: userID,
-		Email:  email,
+		UserID:    userID,
+		Email:     email,
+		ExpiresAt: time.Now().Add(24 * time.Hour).Unix(),
 	})
 	if err != nil {
 		t.Fatalf("CreateToken: %v", err)

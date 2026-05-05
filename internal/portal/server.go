@@ -188,6 +188,57 @@ type JobStatusData struct {
 	IsAuthenticated bool
 }
 
+// OptOutPageData is the template data for opt_out.html.
+type OptOutPageData struct {
+	IsAuthenticated bool
+	Nodes           []OptOutNodeRow
+}
+
+// OptOutNodeRow is one node's opt-out state for the /opt-out page.
+type OptOutNodeRow struct {
+	ID             string
+	Hostname       string
+	OptOutCompute  bool
+	OptOutStorage  bool
+	OptOutPrinting bool
+	Version        int
+	SyncStatus     string
+	Printers       []PrinterRow
+}
+
+// PrinterRow is one printer attached to a node, with its current enabled state.
+type PrinterRow struct {
+	PrinterID   string
+	DisplayName string
+	Enabled     bool
+}
+
+// optOutAPIResponse is the JSON shape returned from GET /api/opt-out.
+type optOutAPIResponse struct {
+	NodeID        string             `json:"node_id"`
+	Compute       bool               `json:"compute"`
+	Storage       bool               `json:"storage"`
+	Printing      bool               `json:"printing"`
+	Version       int                `json:"version"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+	LastHeartbeat *time.Time         `json:"last_heartbeat,omitempty"`
+	Printers      []optOutPrinterDTO `json:"printers"`
+}
+
+type optOutPrinterDTO struct {
+	PrinterID string `json:"printer_id"`
+	Enabled   bool   `json:"enabled"`
+}
+
+// optOutPostRequest is the JSON body for POST /api/opt-out.
+type optOutPostRequest struct {
+	NodeID   string             `json:"node_id"`
+	Compute  bool               `json:"compute"`
+	Storage  bool               `json:"storage"`
+	Printing bool               `json:"printing"`
+	Printers []optOutPrinterDTO `json:"printers"`
+}
+
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server. metricsAddr is the address for the plain HTTP
@@ -270,6 +321,12 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleAddProfile)))
 	mux.Handle("POST /node/token",
 		RequireAuth(sm, http.HandlerFunc(ps.handleGenerateNodeToken)))
+	mux.Handle("GET /opt-out",
+		RequireAuth(sm, http.HandlerFunc(ps.handleOptOutPage)))
+	mux.Handle("GET /api/opt-out",
+		RequireAuth(sm, http.HandlerFunc(ps.handleGetOptOut)))
+	mux.Handle("POST /api/opt-out",
+		RequireAuth(sm, http.HandlerFunc(ps.handlePostOptOut)))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -1527,4 +1584,251 @@ func (ps *PortalServer) handleGenerateNodeToken(w http.ResponseWriter, r *http.R
 	}
 	data.RegToken = token
 	ps.renderTemplate(w, "dashboard.html", data)
+}
+
+// printerDisplayName converts a CUPS printer_id to a friendly display string.
+// Underscores become spaces; the raw ID is still shown as monospace subtext
+// in the UI so same-model printers (whose CUPS IDs are always unique per node)
+// remain distinguishable even when display names collide.
+func printerDisplayName(id string) string {
+	return strings.ReplaceAll(id, "_", " ")
+}
+
+// formatOptOutSyncStatus returns the per-node sync-status string for the UI.
+// Uses last_heartbeat_at vs opt_out_updated_at as a heuristic: if the node
+// has heartbeated since the version was bumped we treat that as confirmation.
+func formatOptOutSyncStatus(version int, optOutUpdatedAt time.Time, lastHeartbeat *time.Time, now time.Time) string {
+	if lastHeartbeat == nil || lastHeartbeat.Before(optOutUpdatedAt) {
+		return fmt.Sprintf("Version %d · pending node confirmation", version)
+	}
+	return fmt.Sprintf("Version %d · last confirmed %s ago", version, formatShortDuration(now.Sub(*lastHeartbeat)))
+}
+
+// formatShortDuration renders a duration in compact form: "12s", "3m", "2h", "5d".
+func formatShortDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// handleOptOutPage renders /opt-out, listing every node owned by the
+// authenticated participant with its current opt-out flags and printer toggles.
+func (ps *PortalServer) handleOptOutPage(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	rows, err := ps.db.Pool.Query(r.Context(), `
+		SELECT n.id, n.hostname,
+		       n.opt_out_compute, n.opt_out_storage, n.opt_out_printing,
+		       n.opt_out_version, n.opt_out_updated_at, n.last_heartbeat_at,
+		       COALESCE(
+		         jsonb_agg(
+		           jsonb_build_object('printer_id', np.printer_id, 'enabled', np.enabled)
+		           ORDER BY np.printer_id
+		         ) FILTER (WHERE np.printer_id IS NOT NULL),
+		         '[]'::jsonb
+		       ) AS printers
+		FROM nodes n
+		LEFT JOIN node_printers np ON np.node_id = n.id
+		WHERE n.participant_id = $1
+		GROUP BY n.id
+		ORDER BY n.hostname
+	`, claims.UserID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var nodeRows []OptOutNodeRow
+	for rows.Next() {
+		var (
+			row             OptOutNodeRow
+			optOutUpdatedAt time.Time
+			lastHeartbeat   *time.Time
+			printersJSON    []byte
+		)
+		if err := rows.Scan(
+			&row.ID, &row.Hostname,
+			&row.OptOutCompute, &row.OptOutStorage, &row.OptOutPrinting,
+			&row.Version, &optOutUpdatedAt, &lastHeartbeat,
+			&printersJSON,
+		); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		var raw []optOutPrinterDTO
+		if err := json.Unmarshal(printersJSON, &raw); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		for _, p := range raw {
+			row.Printers = append(row.Printers, PrinterRow{
+				PrinterID:   p.PrinterID,
+				DisplayName: printerDisplayName(p.PrinterID),
+				Enabled:     p.Enabled,
+			})
+		}
+
+		row.SyncStatus = formatOptOutSyncStatus(row.Version, optOutUpdatedAt, lastHeartbeat, now)
+		nodeRows = append(nodeRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ps.renderTemplate(w, "opt_out.html", OptOutPageData{
+		IsAuthenticated: true,
+		Nodes:           nodeRows,
+	})
+}
+
+// handleGetOptOut returns the current opt-out state for a single node owned by
+// the authenticated participant. Returns 404 if the node does not exist OR is
+// not owned by the caller — deliberately indistinguishable to avoid leaking
+// node existence across accounts.
+func (ps *PortalServer) handleGetOptOut(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	nodeID := strings.TrimSpace(r.URL.Query().Get("node_id"))
+	if nodeID == "" {
+		http.Error(w, "node_id required", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		resp          optOutAPIResponse
+		participantID string
+		lastHeartbeat *time.Time
+		printersJSON  []byte
+	)
+	err := ps.db.Pool.QueryRow(r.Context(), `
+		SELECT n.participant_id, n.id,
+		       n.opt_out_compute, n.opt_out_storage, n.opt_out_printing,
+		       n.opt_out_version, n.opt_out_updated_at, n.last_heartbeat_at,
+		       COALESCE(
+		         jsonb_agg(
+		           jsonb_build_object('printer_id', np.printer_id, 'enabled', np.enabled)
+		           ORDER BY np.printer_id
+		         ) FILTER (WHERE np.printer_id IS NOT NULL),
+		         '[]'::jsonb
+		       ) AS printers
+		FROM nodes n
+		LEFT JOIN node_printers np ON np.node_id = n.id
+		WHERE n.id = $1
+		GROUP BY n.id
+	`, nodeID).Scan(
+		&participantID, &resp.NodeID,
+		&resp.Compute, &resp.Storage, &resp.Printing,
+		&resp.Version, &resp.UpdatedAt, &lastHeartbeat,
+		&printersJSON,
+	)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if participantID != claims.UserID {
+		// Deliberate 404 (not 403): don't leak that this node exists under
+		// another account. Differs from handleAddProfile which uses 403.
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	if err := json.Unmarshal(printersJSON, &resp.Printers); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	resp.LastHeartbeat = lastHeartbeat
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		return
+	}
+}
+
+// handlePostOptOut writes new opt-out state for a single owned node. Bumps
+// opt_out_version by 1, refreshes opt_out_updated_at, and updates the enabled
+// flag on each printer in the request body. Printers absent from the body are
+// left untouched. Version bump and printer updates are atomic (transaction).
+func (ps *PortalServer) handlePostOptOut(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+
+	var body optOutPostRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	body.NodeID = strings.TrimSpace(body.NodeID)
+	if body.NodeID == "" {
+		http.Error(w, "node_id required", http.StatusBadRequest)
+		return
+	}
+
+	tx, err := ps.db.Pool.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Ownership check — 404 on any failure or mismatch (don't leak existence).
+	var participantID string
+	err = tx.QueryRow(r.Context(),
+		`SELECT participant_id FROM nodes WHERE id = $1`,
+		body.NodeID,
+	).Scan(&participantID)
+	if err != nil || participantID != claims.UserID {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Bump version + write opt-out flags. RETURNING gives new version for response.
+	var newVersion int
+	err = tx.QueryRow(r.Context(), `
+		UPDATE nodes
+		SET opt_out_compute = $1,
+		    opt_out_storage = $2,
+		    opt_out_printing = $3,
+		    opt_out_version = opt_out_version + 1,
+		    opt_out_updated_at = NOW()
+		WHERE id = $4
+		RETURNING opt_out_version
+	`, body.Compute, body.Storage, body.Printing, body.NodeID).Scan(&newVersion)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Apply printer enabled flags. Printers absent from the body are left as-is;
+	// unknown printer_ids no-op silently — agent re-report on hash mismatch
+	// reconciles any drift.
+	for _, p := range body.Printers {
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE node_printers SET enabled = $1 WHERE node_id = $2 AND printer_id = $3`,
+			p.Enabled, body.NodeID, p.PrinterID,
+		); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"version": newVersion,
+	})
 }
