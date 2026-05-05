@@ -128,6 +128,7 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 011 | `011_participants` | Unified `participants` table replacing `providers`+`consumers`; `participant_id` FKs on nodes/jobs/disputes |
 | 012 | `012_container_image` | `container_image TEXT` nullable column on `jobs` |
 | 013 | `013_node_registration_tokens` | `node_registration_tokens` table: single-use installer tokens tied to a participant |
+| 014 | `014_opt_out_and_printers` | `opt_out_compute`, `opt_out_storage`, `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`; `node_printers` table (composite PK `(node_id, printer_id)`, FK → `nodes(id)` ON DELETE CASCADE, `enabled` DEFAULT FALSE, `detected_at`); partial index `idx_node_printers_enabled WHERE enabled = TRUE` |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -280,6 +281,15 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     -Command ""<cmd>""" -Wait`. Any future automation that manages boot-path
     services on NTARIHQ must either run elevated or use a pre-authorized scheduled
     task. Host policy constraint — not a code issue, do not attempt to bypass.
+
+17. **soholink.org 502 — Cloudflare Zero Trust remote tunnel config**: Cloudflare
+    Zero Trust dashboard has a remote-managed tunnel config that overrides the local
+    `config.yml`, routing `soholink.org → https://portal:8080` (wrong scheme —
+    portal is plain HTTP). Fix: Cloudflare dashboard → Networks → Tunnels →
+    soholink-prod → Configure → Public Hostname; either delete the remote rules to
+    fall back to local `config.yml`, or correct the service URL to
+    `http://portal:8080` and re-add `api.soholink.org → http://orchestrator:8082`.
+    Not a code issue — requires Cloudflare dashboard access. Separate track from B6.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -545,11 +555,25 @@ Failure detection (filament runout, thermal runaway, print detachment) reported 
 `completed` for compute/storage. Orchestrator `/jobs/<id>/complete` consumes JSON body.
 Metering conditioned on exit code 0 (resolves TODOs 7 and 8).
 
-### Sub-phase B6 — Portal UI for Opt-Out Management
-`GET /api/opt-out` returns current opt-out state. `POST /api/opt-out` accepts updates
-and pushes to affected agents via heartbeat response. Dashboard page: detected
-resources per node, per-printer toggles, per-category toggles. Surfaces
-`TmpfsExhausted` alerts.
+### Sub-phase B6 — Portal UI for Opt-Out Management (in progress, 3/4 commits · `ff1e08d`, `101a6f3`, `5e6c8f5`)
+- **Commit `ff1e08d`** — migration 014: `opt_out_compute`, `opt_out_storage`,
+  `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`;
+  `node_printers` table with composite PK, ON DELETE CASCADE, `enabled` DEFAULT FALSE;
+  partial index `idx_node_printers_enabled WHERE enabled = TRUE`.
+- **Commit `101a6f3`** — bidirectional heartbeat protocol: `Printers` in register
+  payload; `OptOutVersion` + `PrinterHash` in heartbeat request;
+  `heartbeatResponse` with optional `OptOut` push (only when `agent < DB version`)
+  and `RequestPrinterReport` flag; new `POST /nodes/printers` endpoint.
+- **Commit `5e6c8f5`** — Portal `/opt-out` page lists owned nodes with three
+  category toggles (compute/storage/printing) + nested per-printer toggles;
+  `GET`/`POST /api/opt-out` endpoints; ownership failures return 404 (not 403)
+  to avoid leaking node existence; dashboard gains `Opt-out →` column. Also
+  fixes latent `ExpiresAt` bug in `authenticatedRequest` test helper.
+  Agent: `ResourceOptOut.Version`, `HeartbeatAgent.optOutStore`, `PrinterHash` helper,
+  `ReportPrinters` method. 12/12 API integration tests pass, 3/3 agent hash tests pass.
+- **Commit #3 (pending)** — portal `/opt-out` page + `GET /api/opt-out` +
+  `POST /api/opt-out` handlers; dashboard column with anchor-jump links.
+- **Commit #4 (pending)** — `FindMatch` opt-out filter in orchestrator (closes TODO 10).
 
 ### Sub-phase B7 — Allowlist Signing + Distribution + Defense 3 (complete, 2026-04-29)
 Five commits on master closing TODO 5 (orchestrator `/allowlist` endpoint) and
@@ -607,6 +631,18 @@ Orchestrator image builds cleanly and container is healthy in production followi
 TODO 12 Option A resolution (commits `303744b`, `6a6f3e3`, `0a28f88`): degraded
 mode with plain HTTP, 503 on SPIFFE-protected routes, 200 on `/health`.
 Full SPIRE wiring (Option B) still pending — see TODO 13.
+
+### Deployment checkpoint — `101a6f3` (2026-05-05)
+Migration 014 applied at portal startup (confirmed `migrations: at version 14`).
+B6 wire protocol complete (2/4 commits). Build clean; all tests green.
+Production: portal healthy, orchestrator healthy (degraded mode, TODO 13 unchanged).
+soholink.org returning 502 — Cloudflare tunnel remote config issue (see TODO 17);
+api.soholink.org healthy.
+
+### Deployment checkpoint — `5e6c8f5` (2026-05-05)
+B6 commit #3 of 4 shipped: Portal `/opt-out` page + `GET`/`POST /api/opt-out` endpoints.
+Build clean; 4 new portal tests green (23/23 portal tests pass overall).
+Production unchanged at `101a6f3` until next `deploy/redeploy.sh` cycle.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
