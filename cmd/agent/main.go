@@ -180,12 +180,6 @@ plugins {
 		"platform", hw.Platform,
 	)
 
-	heartbeatAgent, err := agent.NewHeartbeatAgent(ctx, cfg, hw)
-	if err != nil {
-		slog.Error("heartbeat agent init failed", "error", err)
-		os.Exit(1)
-	}
-
 	// TODO(B1): use mTLS client for allowlist fetch. The signed allowlist
 	// protects integrity, so plain HTTP is acceptable for now, but this
 	// should be tightened when mTLS is wired more broadly.
@@ -201,6 +195,12 @@ plugins {
 		oo = agent.DefaultOptOut()
 	}
 	optOutStore := agent.NewOptOutStore(oo)
+
+	heartbeatAgent, err := agent.NewHeartbeatAgent(ctx, cfg, hw, optOutStore)
+	if err != nil {
+		slog.Error("heartbeat agent init failed", "error", err)
+		os.Exit(1)
+	}
 
 	executor, err := agent.NewExecutor(allowlist, optOutStore)
 	if err != nil {

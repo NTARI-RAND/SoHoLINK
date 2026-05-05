@@ -1,8 +1,12 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // PrinterKind distinguishes printer categories for job routing.
@@ -74,6 +78,22 @@ var known3DPrinterVendorIDs = map[string]string{
 // whatever printers were successfully detected; the error wraps the
 // underlying detection failures for logging.
 var ErrPrinterDetectionPartial = errors.New("printer detection partially failed")
+
+// PrinterHash returns the SHA-256 hex digest of sorted printer IDs joined by
+// newline. Returns "" when the slice is empty. The server uses the same
+// algorithm (serverPrinterHash) so a matching hash means no re-report needed.
+func PrinterHash(printers []PrinterInfo) string {
+	if len(printers) == 0 {
+		return ""
+	}
+	ids := make([]string, len(printers))
+	for i, p := range printers {
+		ids[i] = p.ID
+	}
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return hex.EncodeToString(sum[:])
+}
 
 // DetectPrinters enumerates traditional and 3D printers attached to the
 // host. Failure in one category does not suppress results from the other;

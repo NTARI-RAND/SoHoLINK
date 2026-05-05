@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -35,10 +36,11 @@ type JobAssignment struct {
 // HeartbeatAgent manages registration, heartbeating, and job polling
 // against the SoHoLINK control plane API over mTLS.
 type HeartbeatAgent struct {
-	cfg      AgentConfig
-	hw       HardwareProfile
-	client   *http.Client
-	idSource *identity.Source
+	cfg         AgentConfig
+	hw          HardwareProfile
+	client      *http.Client
+	idSource    *identity.Source
+	optOutStore *OptOutStore
 }
 
 // NewHeartbeatAgent connects to the SPIRE agent socket, obtains an X.509 SVID,
@@ -47,7 +49,7 @@ type HeartbeatAgent struct {
 //
 // Note: the spec references spiffeid.RequireIDFromString — the actual function
 // in go-spiffe/v2 is spiffeid.RequireFromString.
-func NewHeartbeatAgent(ctx context.Context, cfg AgentConfig, hw HardwareProfile) (*HeartbeatAgent, error) {
+func NewHeartbeatAgent(ctx context.Context, cfg AgentConfig, hw HardwareProfile, optOutStore *OptOutStore) (*HeartbeatAgent, error) {
 	idSource, err := identity.NewSource(ctx, cfg.SPIFFESocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("new heartbeat agent: identity source: %w", err)
@@ -62,10 +64,11 @@ func NewHeartbeatAgent(ctx context.Context, cfg AgentConfig, hw HardwareProfile)
 	}
 
 	return &HeartbeatAgent{
-		cfg:      cfg,
-		hw:       hw,
-		client:   client,
-		idSource: idSource,
+		cfg:         cfg,
+		hw:          hw,
+		client:      client,
+		idSource:    idSource,
+		optOutStore: optOutStore,
 	}, nil
 }
 
@@ -93,17 +96,40 @@ type registerPayload struct {
 	HardwareProfile registerHWPayload `json:"hardware_profile"`
 }
 
+type printerPayload struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type registerHWPayload struct {
-	CPUCores      int  `json:"cpu_cores"`
-	RAMMB         int  `json:"ram_mb"`
-	GPUPresent    bool `json:"gpu_present"`
-	StorageGB     int  `json:"storage_gb"`
-	BandwidthMbps int  `json:"bandwidth_mbps"`
+	CPUCores      int              `json:"cpu_cores"`
+	RAMMB         int              `json:"ram_mb"`
+	GPUPresent    bool             `json:"gpu_present"`
+	StorageGB     int              `json:"storage_gb"`
+	BandwidthMbps int              `json:"bandwidth_mbps"`
+	Printers      []printerPayload `json:"printers,omitempty"`
+}
+
+// heartbeatResp is the decoded response from POST /nodes/heartbeat.
+type heartbeatResp struct {
+	OK     bool `json:"ok"`
+	OptOut *struct {
+		Version         int             `json:"version"`
+		ComputeEnabled  bool            `json:"compute_enabled"`
+		StorageEnabled  bool            `json:"storage_enabled"`
+		PrintingEnabled bool            `json:"printing_enabled"`
+		EnabledPrinters map[string]bool `json:"enabled_printers"`
+	} `json:"opt_out"`
+	RequestPrinterReport bool `json:"request_printer_report"`
 }
 
 // Register sends the node's identity and current hardware profile to the
 // control plane. Safe to call multiple times; the API upserts on conflict.
 func (a *HeartbeatAgent) Register(ctx context.Context) error {
+	printers := make([]printerPayload, 0, len(a.hw.Printers))
+	for _, p := range a.hw.Printers {
+		printers = append(printers, printerPayload{ID: p.ID, Name: p.Name})
+	}
 	payload := registerPayload{
 		NodeID:      a.cfg.NodeID,
 		ProviderID:  a.cfg.ProviderID,
@@ -112,19 +138,100 @@ func (a *HeartbeatAgent) Register(ctx context.Context) error {
 		Region:      a.cfg.Region,
 		HardwareProfile: registerHWPayload{
 			CPUCores:      a.hw.CPUCores,
-			RAMMB:         int(a.hw.RAMMB),     // HardwareProfile.RAMMB is int64
+			RAMMB:         int(a.hw.RAMMB),
 			GPUPresent:    a.hw.GPUPresent,
-			StorageGB:     int(a.hw.StorageGB), // HardwareProfile.StorageGB is int64
+			StorageGB:     int(a.hw.StorageGB),
 			BandwidthMbps: a.hw.BandwidthMbps,
+			Printers:      printers,
 		},
 	}
 	return a.postJSON(ctx, "/nodes/register", payload)
 }
 
 // Heartbeat notifies the control plane that this node is still alive.
+// It sends the current opt_out_version and printer_hash so the server can
+// push updated opt-out state when stale and request a full printer re-report
+// when the hash does not match. Returned opt-out updates are applied to
+// optOutStore and persisted to disk.
 func (a *HeartbeatAgent) Heartbeat(ctx context.Context) error {
-	return a.postJSON(ctx, "/nodes/heartbeat", map[string]string{
-		"node_id": a.cfg.NodeID,
+	var version int
+	if a.optOutStore != nil {
+		version = a.optOutStore.Get().Version
+	}
+
+	payload := map[string]any{
+		"node_id":         a.cfg.NodeID,
+		"opt_out_version": version,
+		"printer_hash":    PrinterHash(a.hw.Printers),
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("heartbeat: marshal: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		a.cfg.ControlPlaneAddr+"/nodes/heartbeat", bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("heartbeat: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("heartbeat: unexpected status %d", resp.StatusCode)
+	}
+
+	var hbResp heartbeatResp
+	if err := json.NewDecoder(resp.Body).Decode(&hbResp); err != nil {
+		return fmt.Errorf("heartbeat: decode response: %w", err)
+	}
+
+	if hbResp.OptOut != nil && a.optOutStore != nil {
+		newOO := ResourceOptOut{
+			Version:         hbResp.OptOut.Version,
+			ComputeEnabled:  hbResp.OptOut.ComputeEnabled,
+			StorageEnabled:  hbResp.OptOut.StorageEnabled,
+			PrintingEnabled: hbResp.OptOut.PrintingEnabled,
+			EnabledPrinters: hbResp.OptOut.EnabledPrinters,
+		}
+		if newOO.EnabledPrinters == nil {
+			newOO.EnabledPrinters = map[string]bool{}
+		}
+		a.optOutStore.Set(newOO)
+		if saveErr := SaveOptOutToFile(OptOutCachePath(), newOO); saveErr != nil {
+			log.Printf("heartbeat: save opt-out: %v", saveErr)
+		}
+	}
+
+	if hbResp.RequestPrinterReport {
+		if err := a.ReportPrinters(ctx); err != nil {
+			log.Printf("heartbeat: report printers: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// ReportPrinters sends the full current printer list to the control plane.
+// Called when the server signals a hash mismatch via RequestPrinterReport.
+func (a *HeartbeatAgent) ReportPrinters(ctx context.Context) error {
+	type entry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	printers := make([]entry, 0, len(a.hw.Printers))
+	for _, p := range a.hw.Printers {
+		printers = append(printers, entry{ID: p.ID, Name: p.Name})
+	}
+	return a.postJSON(ctx, "/nodes/printers", map[string]any{
+		"node_id":  a.cfg.NodeID,
+		"printers": printers,
 	})
 }
 

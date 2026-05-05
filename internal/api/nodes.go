@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
@@ -15,6 +18,11 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
+type nodePrinterInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type registerNodeRequest struct {
 	NodeID      string `json:"node_id"`
 	ProviderID  string `json:"provider_id"`
@@ -22,11 +30,12 @@ type registerNodeRequest struct {
 	CountryCode string `json:"country_code"`
 	Region      string `json:"region"`
 	HardwareProfile struct {
-		CPUCores      int  `json:"cpu_cores"`
-		RAMMB         int  `json:"ram_mb"`
-		GPUPresent    bool `json:"gpu_present"`
-		StorageGB     int  `json:"storage_gb"`
-		BandwidthMbps int  `json:"bandwidth_mbps"`
+		CPUCores      int               `json:"cpu_cores"`
+		RAMMB         int               `json:"ram_mb"`
+		GPUPresent    bool              `json:"gpu_present"`
+		StorageGB     int               `json:"storage_gb"`
+		BandwidthMbps int               `json:"bandwidth_mbps"`
+		Printers      []nodePrinterInfo `json:"printers"`
 	} `json:"hardware_profile"`
 }
 
@@ -45,7 +54,23 @@ type claimNodeRequest struct {
 }
 
 type heartbeatRequest struct {
-	NodeID string `json:"node_id"`
+	NodeID        string `json:"node_id"`
+	OptOutVersion int    `json:"opt_out_version"`
+	PrinterHash   string `json:"printer_hash"`
+}
+
+type heartbeatOptOut struct {
+	Version         int             `json:"version"`
+	ComputeEnabled  bool            `json:"compute_enabled"`
+	StorageEnabled  bool            `json:"storage_enabled"`
+	PrintingEnabled bool            `json:"printing_enabled"`
+	EnabledPrinters map[string]bool `json:"enabled_printers"`
+}
+
+type heartbeatResponse struct {
+	OK                   bool             `json:"ok"`
+	OptOut               *heartbeatOptOut `json:"opt_out,omitempty"`
+	RequestPrinterReport bool             `json:"request_printer_report,omitempty"`
 }
 
 type telemetryRequest struct {
@@ -66,6 +91,7 @@ func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator
 	mux.HandleFunc("POST /nodes/register", handleRegisterNode(db, registry))
 	mux.HandleFunc("POST /nodes/claim", handleClaimNode(db, registry))
 	mux.HandleFunc("POST /nodes/heartbeat", handleHeartbeat(db, registry))
+	mux.HandleFunc("POST /nodes/printers", handleReportPrinters(db))
 	mux.HandleFunc("GET /nodes/jobs", handleGetJobs(db))
 	mux.HandleFunc("POST /jobs/{id}/telemetry", handleTelemetry(db))
 	mux.HandleFunc("POST /jobs/{id}/complete", handleCompleteJob(db))
@@ -144,6 +170,22 @@ func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
+		}
+
+		// Upsert printer rows. ON CONFLICT preserves the enabled flag set by the portal.
+		for _, p := range req.HardwareProfile.Printers {
+			_, err = db.Pool.Exec(r.Context(), `
+				INSERT INTO node_printers (node_id, printer_id, printer_name)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (node_id, printer_id) DO UPDATE SET
+					printer_name = EXCLUDED.printer_name,
+					detected_at  = NOW()`,
+				req.NodeID, p.ID, p.Name,
+			)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -307,6 +349,127 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 
 		metrics.HeartbeatsTotal.WithLabelValues(req.NodeID).Inc()
 
+		// Read current opt-out state to determine whether to push an update.
+		var dbVersion int
+		var computeEnabled, storageEnabled, printingEnabled bool
+		err = db.Pool.QueryRow(r.Context(), `
+			SELECT opt_out_version, opt_out_compute, opt_out_storage, opt_out_printing
+			FROM nodes WHERE id = $1`, req.NodeID,
+		).Scan(&dbVersion, &computeEnabled, &storageEnabled, &printingEnabled)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		resp := heartbeatResponse{OK: true}
+
+		// Push opt-out payload when the agent's version is stale.
+		if req.OptOutVersion < dbVersion {
+			rows, err := db.Pool.Query(r.Context(),
+				`SELECT printer_id, enabled FROM node_printers WHERE node_id = $1`, req.NodeID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			enabledPrinters := map[string]bool{}
+			for rows.Next() {
+				var pid string
+				var enabled bool
+				if err := rows.Scan(&pid, &enabled); err != nil {
+					rows.Close()
+					writeError(w, http.StatusInternalServerError, "database error")
+					return
+				}
+				if enabled {
+					enabledPrinters[pid] = true
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+
+			resp.OptOut = &heartbeatOptOut{
+				Version:         dbVersion,
+				ComputeEnabled:  computeEnabled,
+				StorageEnabled:  storageEnabled,
+				PrintingEnabled: printingEnabled,
+				EnabledPrinters: enabledPrinters,
+			}
+		}
+
+		// Compare printer hash to detect hot-plug events.
+		dbHash, err := serverPrinterHash(r.Context(), db, req.NodeID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if req.PrinterHash != dbHash {
+			resp.RequestPrinterReport = true
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	}
+}
+
+// serverPrinterHash computes the SHA-256 of sorted printer IDs for a node,
+// matching the agent-side PrinterHash algorithm. Returns "" when the node has
+// no printers.
+func serverPrinterHash(ctx context.Context, db *store.DB, nodeID string) (string, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT printer_id FROM node_printers WHERE node_id = $1 ORDER BY printer_id`, nodeID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func handleReportPrinters(db *store.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			NodeID   string            `json:"node_id"`
+			Printers []nodePrinterInfo `json:"printers"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.NodeID == "" {
+			writeError(w, http.StatusBadRequest, "node_id is required")
+			return
+		}
+		for _, p := range req.Printers {
+			_, err := db.Pool.Exec(r.Context(), `
+				INSERT INTO node_printers (node_id, printer_id, printer_name)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (node_id, printer_id) DO UPDATE SET
+					printer_name = EXCLUDED.printer_name,
+					detected_at  = NOW()`,
+				req.NodeID, p.ID, p.Name,
+			)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"ok": true}) //nolint:errcheck
 	}
@@ -480,4 +643,8 @@ func (s *APIServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) handleCompleteJob(w http.ResponseWriter, r *http.Request) {
 	handleCompleteJob(s.db)(w, r)
+}
+
+func (s *APIServer) handleReportPrinters(w http.ResponseWriter, r *http.Request) {
+	handleReportPrinters(s.db)(w, r)
 }

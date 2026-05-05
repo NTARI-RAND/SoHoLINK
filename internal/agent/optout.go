@@ -23,10 +23,11 @@ import (
 // failed prints are the contributor's responsibility, so each printer
 // must be opted in individually.
 type ResourceOptOut struct {
-	ComputeEnabled   bool            `json:"compute_enabled"`
-	StorageEnabled   bool            `json:"storage_enabled"`
-	PrintingEnabled  bool            `json:"printing_enabled"`
-	EnabledPrinters  map[string]bool `json:"enabled_printers,omitempty"`
+	Version         int             `json:"version"`
+	ComputeEnabled  bool            `json:"compute_enabled"`
+	StorageEnabled  bool            `json:"storage_enabled"`
+	PrintingEnabled bool            `json:"printing_enabled"`
+	EnabledPrinters map[string]bool `json:"enabled_printers,omitempty"`
 }
 
 // DefaultOptOut returns a ResourceOptOut with every resource disabled.
