@@ -227,6 +227,7 @@ type optOutAPIResponse struct {
 
 type optOutPrinterDTO struct {
 	PrinterID string `json:"printer_id"`
+	Name      string `json:"printer_name"`
 	Enabled   bool   `json:"enabled"`
 }
 
@@ -1586,13 +1587,6 @@ func (ps *PortalServer) handleGenerateNodeToken(w http.ResponseWriter, r *http.R
 	ps.renderTemplate(w, "dashboard.html", data)
 }
 
-// printerDisplayName converts a CUPS printer_id to a friendly display string.
-// Underscores become spaces; the raw ID is still shown as monospace subtext
-// in the UI so same-model printers (whose CUPS IDs are always unique per node)
-// remain distinguishable even when display names collide.
-func printerDisplayName(id string) string {
-	return strings.ReplaceAll(id, "_", " ")
-}
 
 // formatOptOutSyncStatus returns the per-node sync-status string for the UI.
 // Uses last_heartbeat_at vs opt_out_updated_at as a heuristic: if the node
@@ -1629,7 +1623,11 @@ func (ps *PortalServer) handleOptOutPage(w http.ResponseWriter, r *http.Request)
 		       n.opt_out_version, n.opt_out_updated_at, n.last_heartbeat_at,
 		       COALESCE(
 		         jsonb_agg(
-		           jsonb_build_object('printer_id', np.printer_id, 'enabled', np.enabled)
+		           jsonb_build_object(
+		             'printer_id', np.printer_id,
+		             'printer_name', np.printer_name,
+		             'enabled', np.enabled
+		           )
 		           ORDER BY np.printer_id
 		         ) FILTER (WHERE np.printer_id IS NOT NULL),
 		         '[]'::jsonb
@@ -1673,7 +1671,7 @@ func (ps *PortalServer) handleOptOutPage(w http.ResponseWriter, r *http.Request)
 		for _, p := range raw {
 			row.Printers = append(row.Printers, PrinterRow{
 				PrinterID:   p.PrinterID,
-				DisplayName: printerDisplayName(p.PrinterID),
+				DisplayName: p.Name,
 				Enabled:     p.Enabled,
 			})
 		}
@@ -1717,7 +1715,11 @@ func (ps *PortalServer) handleGetOptOut(w http.ResponseWriter, r *http.Request) 
 		       n.opt_out_version, n.opt_out_updated_at, n.last_heartbeat_at,
 		       COALESCE(
 		         jsonb_agg(
-		           jsonb_build_object('printer_id', np.printer_id, 'enabled', np.enabled)
+		           jsonb_build_object(
+		             'printer_id', np.printer_id,
+		             'printer_name', np.printer_name,
+		             'enabled', np.enabled
+		           )
 		           ORDER BY np.printer_id
 		         ) FILTER (WHERE np.printer_id IS NOT NULL),
 		         '[]'::jsonb

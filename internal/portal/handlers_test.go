@@ -435,6 +435,7 @@ func TestHandleGetOptOut_returnsCurrentState(t *testing.T) {
 		Version  int    `json:"version"`
 		Printers []struct {
 			PrinterID string `json:"printer_id"`
+			Name      string `json:"printer_name"`
 			Enabled   bool   `json:"enabled"`
 		} `json:"printers"`
 	}
@@ -459,6 +460,10 @@ func TestHandleGetOptOut_returnsCurrentState(t *testing.T) {
 	}
 	if resp.Printers[1].PrinterID != "HP_LaserJet_2" || resp.Printers[1].Enabled {
 		t.Errorf("printer[1] wrong: %+v", resp.Printers[1])
+	}
+	if resp.Printers[0].Name != "HP LaserJet 1" || resp.Printers[1].Name != "HP LaserJet 2" {
+		t.Errorf("printer names wrong: [0]=%q [1]=%q",
+			resp.Printers[0].Name, resp.Printers[1].Name)
 	}
 }
 
