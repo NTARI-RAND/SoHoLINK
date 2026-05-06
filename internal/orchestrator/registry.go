@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
@@ -28,13 +29,35 @@ type NodeEntry struct {
 	HardwareProfile HardwareProfile
 	LastHeartbeat   time.Time
 	Status          string
+
+	// Opt-out fields, refreshed by handleHeartbeat after each heartbeat.
+	// FindMatch uses these to skip nodes that have opted out of a workload
+	// category. Agent-side enforcement remains the canonical gate; this is
+	// defense-in-depth at dispatch time. Default zero values mean "not opted
+	// out, no enabled printers" — safe for fresh nodes that haven't yet
+	// reported via heartbeat.
+	OptOutCompute     bool
+	OptOutStorage     bool
+	OptOutPrinting    bool
+	HasEnabledPrinter bool
+}
+
+// NodeOptOutState carries opt-out flags from the DB into the in-memory
+// registry via UpdateOptOut.
+type NodeOptOutState struct {
+	OptOutCompute     bool
+	OptOutStorage     bool
+	OptOutPrinting    bool
+	HasEnabledPrinter bool
 }
 
 // MatchRequest describes the resource requirements for a workload placement.
 type MatchRequest struct {
-	// WorkloadType is recorded for dispatch but not used to filter candidates.
-	// Node selection is hardware-capability only; the agent's opt-out store is
-	// the enforcement gate for workload type consent.
+	// WorkloadType drives both dispatch and opt-out filtering: candidate nodes
+	// that have opted out of the corresponding agent category (compute / storage
+	// / printing) are excluded from the result. The agent-side opt-out store
+	// remains the canonical enforcement gate; this filter is defense-in-depth.
+	// WorkloadType="" disables opt-out filtering (legacy callers / tests).
 	WorkloadType      types.MarketplaceWorkloadType
 	CountryConstraint string // empty = any country
 	CPUCores          int
@@ -74,6 +97,25 @@ func (r *NodeRegistry) Heartbeat(nodeID string) error {
 	return nil
 }
 
+// UpdateOptOut overwrites a node's opt-out fields. Returns an error if the
+// node is not registered. Callers (typically handleHeartbeat) read current
+// opt-out state from the DB and forward it here so FindMatch can filter
+// without DB access.
+func (r *NodeRegistry) UpdateOptOut(nodeID string, state NodeOptOutState) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.nodes[nodeID]
+	if !ok {
+		return fmt.Errorf("update opt-out: node %s not found", nodeID)
+	}
+	entry.OptOutCompute = state.OptOutCompute
+	entry.OptOutStorage = state.OptOutStorage
+	entry.OptOutPrinting = state.OptOutPrinting
+	entry.HasEnabledPrinter = state.HasEnabledPrinter
+	r.nodes[nodeID] = entry
+	return nil
+}
+
 // Evict removes a node from the registry.
 func (r *NodeRegistry) Evict(nodeID string) {
 	r.mu.Lock()
@@ -107,6 +149,27 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 		}
 		if node.HardwareProfile.StorageGB < req.StorageGB {
 			continue
+		}
+		// Opt-out filter. If WorkloadType is set and maps to a known agent
+		// category, skip nodes that have opted out of that category. Printing
+		// additionally requires at least one enabled printer.
+		if req.WorkloadType != "" {
+			if cat, err := MarketplaceToAgent(req.WorkloadType); err == nil {
+				switch cat {
+				case agent.WorkloadCompute:
+					if node.OptOutCompute {
+						continue
+					}
+				case agent.WorkloadStorage:
+					if node.OptOutStorage {
+						continue
+					}
+				case agent.WorkloadPrintTraditional, agent.WorkloadPrint3D:
+					if node.OptOutPrinting || !node.HasEnabledPrinter {
+						continue
+					}
+				}
+			}
 		}
 		candidates = append(candidates, node)
 	}

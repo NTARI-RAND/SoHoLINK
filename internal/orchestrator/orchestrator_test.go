@@ -303,3 +303,130 @@ func TestSubmitJob_RejectsMappingInconsistency(t *testing.T) {
 		t.Errorf("expected 'workload type mismatch' in error, got: %v", err)
 	}
 }
+
+// ── UpdateOptOut + opt-out filter (B6) ───────────────────────────────────────
+
+func TestNodeRegistry_UpdateOptOut_ErrorOnUnknownNode(t *testing.T) {
+	r := NewNodeRegistry()
+	err := r.UpdateOptOut("ghost-node", NodeOptOutState{OptOutCompute: true})
+	if err == nil {
+		t.Fatal("expected error for unknown node, got nil")
+	}
+}
+
+func TestNodeRegistry_UpdateOptOut_PersistsState(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+
+	if err := r.UpdateOptOut("node-1", NodeOptOutState{
+		OptOutCompute:     true,
+		HasEnabledPrinter: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptOut: %v", err)
+	}
+
+	// Read back via FindMatch with WorkloadType="" so opt-out filter is bypassed.
+	candidates, err := r.FindMatch(MatchRequest{CPUCores: 1, RAMMB: 1024})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if !candidates[0].OptOutCompute {
+		t.Errorf("OptOutCompute = false, want true")
+	}
+	if !candidates[0].HasEnabledPrinter {
+		t.Errorf("HasEnabledPrinter = false, want true")
+	}
+}
+
+func TestNodeRegistry_FindMatch_ExcludesOptOutCompute(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+	if err := r.UpdateOptOut("node-1", NodeOptOutState{OptOutCompute: true}); err != nil {
+		t.Fatalf("UpdateOptOut: %v", err)
+	}
+
+	_, err := r.FindMatch(MatchRequest{
+		WorkloadType: types.MarketplaceBatchCompute,
+		CPUCores:     1,
+		RAMMB:        1024,
+	})
+	if err == nil {
+		t.Fatal("expected no candidates: node opted out of compute")
+	}
+}
+
+func TestNodeRegistry_FindMatch_OptOutDoesNotAffectOtherCategory(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+	if err := r.UpdateOptOut("node-1", NodeOptOutState{OptOutCompute: true}); err != nil {
+		t.Fatalf("UpdateOptOut: %v", err)
+	}
+
+	// Storage workload — node opted out of compute, not storage. Should match.
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType: types.MarketplaceObjectStorage,
+		CPUCores:     1,
+		RAMMB:        1024,
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].NodeID != "node-1" {
+		t.Errorf("expected node-1 to match storage workload, got %v", candidates)
+	}
+}
+
+func TestNodeRegistry_FindMatch_PrintingRequiresEnabledPrinter(t *testing.T) {
+	// No marketplace workload type currently routes to printing. Temporarily
+	// re-route MarketplaceAppHosting → WorkloadPrintTraditional to exercise the branch.
+	original := marketplaceToAgent[types.MarketplaceAppHosting]
+	marketplaceToAgent[types.MarketplaceAppHosting] = agent.WorkloadPrintTraditional
+	defer func() { marketplaceToAgent[types.MarketplaceAppHosting] = original }()
+
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+	// Default: HasEnabledPrinter = false; OptOutPrinting = false.
+
+	// First call: should fail because no enabled printer.
+	if _, err := r.FindMatch(MatchRequest{
+		WorkloadType: types.MarketplaceAppHosting,
+		CPUCores:     1,
+		RAMMB:        1024,
+	}); err == nil {
+		t.Fatal("expected no candidates: node has no enabled printers")
+	}
+
+	// Enable a printer; should now match.
+	if err := r.UpdateOptOut("node-1", NodeOptOutState{HasEnabledPrinter: true}); err != nil {
+		t.Fatalf("UpdateOptOut: %v", err)
+	}
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType: types.MarketplaceAppHosting,
+		CPUCores:     1,
+		RAMMB:        1024,
+	})
+	if err != nil {
+		t.Fatalf("FindMatch after enable: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Errorf("expected 1 candidate after enabling printer, got %d", len(candidates))
+	}
+
+	// Now opt out of printing; should fail again even with enabled printer.
+	if err := r.UpdateOptOut("node-1", NodeOptOutState{
+		OptOutPrinting:    true,
+		HasEnabledPrinter: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptOut: %v", err)
+	}
+	if _, err := r.FindMatch(MatchRequest{
+		WorkloadType: types.MarketplaceAppHosting,
+		CPUCores:     1,
+		RAMMB:        1024,
+	}); err == nil {
+		t.Fatal("expected no candidates: node opted out of printing")
+	}
+}

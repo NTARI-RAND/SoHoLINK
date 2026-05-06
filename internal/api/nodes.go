@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -349,16 +350,33 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 
 		metrics.HeartbeatsTotal.WithLabelValues(req.NodeID).Inc()
 
-		// Read current opt-out state to determine whether to push an update.
+		// Read current opt-out state to determine whether to push an update,
+		// and to refresh the in-memory registry's opt-out fields for FindMatch.
 		var dbVersion int
 		var computeEnabled, storageEnabled, printingEnabled bool
+		var hasEnabledPrinter bool
 		err = db.Pool.QueryRow(r.Context(), `
-			SELECT opt_out_version, opt_out_compute, opt_out_storage, opt_out_printing
+			SELECT opt_out_version, opt_out_compute, opt_out_storage, opt_out_printing,
+			       EXISTS(SELECT 1 FROM node_printers WHERE node_id = $1 AND enabled = TRUE)
 			FROM nodes WHERE id = $1`, req.NodeID,
-		).Scan(&dbVersion, &computeEnabled, &storageEnabled, &printingEnabled)
+		).Scan(&dbVersion, &computeEnabled, &storageEnabled, &printingEnabled, &hasEnabledPrinter)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
+		}
+
+		// Refresh the in-memory registry's opt-out fields so FindMatch can filter
+		// without DB access. The agent-side gate remains the canonical enforcement
+		// layer; this is defense-in-depth at dispatch time.
+		if err := registry.UpdateOptOut(req.NodeID, orchestrator.NodeOptOutState{
+			OptOutCompute:     computeEnabled,
+			OptOutStorage:     storageEnabled,
+			OptOutPrinting:    printingEnabled,
+			HasEnabledPrinter: hasEnabledPrinter,
+		}); err != nil {
+			// Race: node was evicted between Heartbeat() above and this call.
+			// Heartbeat itself succeeded; log and continue.
+			slog.Warn("registry update opt-out failed", "node_id", req.NodeID, "err", err)
 		}
 
 		resp := heartbeatResponse{OK: true}
