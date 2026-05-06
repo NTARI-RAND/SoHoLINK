@@ -221,12 +221,12 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `deviceMountsFor` recognizes the constant but produces no mapping.
    `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
 
-10. **`FindMatch` does not filter on `WorkloadType` (B3 carry-forward)**: Documented
-    inline on `MatchRequest.WorkloadType`. Jobs may be dispatched to nodes whose
-    contributors have opted out of that workload type — the agent rejects them (B2
-    gate is the security boundary), but the round-trip is wasted effort. Fix
-    requires orchestrator visibility into agent opt-out state, which isn't plumbed
-    today (heartbeat is fire-and-forget). Likely B6 or later.
+10. **`FindMatch` opt-out filter** — RESOLVED `fe83d19` (B6 commit #4): `NodeEntry`
+    now carries opt-out state refreshed by `handleHeartbeat`; FindMatch maps
+    `WorkloadType` → agent category and skips opted-out nodes. Agent-side gate (B2)
+    remains canonical; this is defense-in-depth at dispatch time. Staleness window
+    bounded by heartbeat interval. Printing branch covers `WorkloadPrintTraditional`
+    + `WorkloadPrint3D` and additionally requires an enabled printer.
 
 11. **Orchestrator unit tests don't hit a real database (B3 carry-forward)**: B3
     fixed the dead `"inference"` / `"batch"` test fixture values. The underlying
@@ -335,7 +335,11 @@ These have caused bugs before — read before touching related code:
     `object_storage`, `cdn_edge`. Constants prefixed `Marketplace*`. Values match the
     PostgreSQL `workload_type` enum from migration 001 exactly.
   - `agent.WorkloadType` (in `internal/agent/`) is the hardware-affinity / opt-out
-    enum: `compute`, `storage`, `print_traditional`, `print_3d`.
+    enum: `compute`, `storage`, `print_traditional`, `print_3d`. Note: there is
+    NO `agent.WorkloadPrinting` constant — both print constants share the single
+    `opt_out_printing` DB flag and the single `node_printers.enabled` check.
+    Agent's `optout.go` groups them via `case WorkloadPrintTraditional,
+    WorkloadPrint3D:`; orchestrator's `FindMatch` mirrors this exactly.
 - Translation lives in `internal/orchestrator/workload.go` as the
   `marketplaceToAgent` map. Multiple marketplace values may map to the same agent
   value (`app_hosting`, `batch_compute`, `ai_inference`, `cdn_edge` → `compute`).
@@ -555,7 +559,7 @@ Failure detection (filament runout, thermal runaway, print detachment) reported 
 `completed` for compute/storage. Orchestrator `/jobs/<id>/complete` consumes JSON body.
 Metering conditioned on exit code 0 (resolves TODOs 7 and 8).
 
-### Sub-phase B6 — Portal UI for Opt-Out Management (in progress, 3/4 commits · `ff1e08d`, `101a6f3`, `5e6c8f5`)
+### Sub-phase B6 — Portal UI for Opt-Out Management (complete, 2026-05-05 · `ff1e08d`, `101a6f3`, `5e6c8f5`, `fe83d19`)
 - **Commit `ff1e08d`** — migration 014: `opt_out_compute`, `opt_out_storage`,
   `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`;
   `node_printers` table with composite PK, ON DELETE CASCADE, `enabled` DEFAULT FALSE;
@@ -564,16 +568,22 @@ Metering conditioned on exit code 0 (resolves TODOs 7 and 8).
   payload; `OptOutVersion` + `PrinterHash` in heartbeat request;
   `heartbeatResponse` with optional `OptOut` push (only when `agent < DB version`)
   and `RequestPrinterReport` flag; new `POST /nodes/printers` endpoint.
+  Agent: `ResourceOptOut.Version`, `HeartbeatAgent.optOutStore`, `PrinterHash`
+  helper, `ReportPrinters` method. 12/12 API integration tests pass, 3/3 agent
+  hash tests pass.
 - **Commit `5e6c8f5`** — Portal `/opt-out` page lists owned nodes with three
   category toggles (compute/storage/printing) + nested per-printer toggles;
   `GET`/`POST /api/opt-out` endpoints; ownership failures return 404 (not 403)
   to avoid leaking node existence; dashboard gains `Opt-out →` column. Also
   fixes latent `ExpiresAt` bug in `authenticatedRequest` test helper.
-  Agent: `ResourceOptOut.Version`, `HeartbeatAgent.optOutStore`, `PrinterHash` helper,
-  `ReportPrinters` method. 12/12 API integration tests pass, 3/3 agent hash tests pass.
-- **Commit #3 (pending)** — portal `/opt-out` page + `GET /api/opt-out` +
-  `POST /api/opt-out` handlers; dashboard column with anchor-jump links.
-- **Commit #4 (pending)** — `FindMatch` opt-out filter in orchestrator (closes TODO 10).
+- **Commit `fe83d19`** — Orchestrator `FindMatch` filters by opt-out: `NodeEntry`
+  gains `OptOutCompute`/`Storage`/`Printing` and `HasEnabledPrinter` fields;
+  new `UpdateOptOut` method; `handleHeartbeat` extends opt-out SELECT with
+  `EXISTS(node_printers.enabled)` and refreshes registry on every beat.
+  FindMatch maps `WorkloadType` → agent category via `MarketplaceToAgent` and
+  skips opted-out nodes. `WorkloadPrintTraditional` + `WorkloadPrint3D` share
+  one case label (matching agent `optout.go`) and require an enabled printer.
+  Closes TODO 10. 5 new orchestrator tests + full-repo sweep green.
 
 ### Sub-phase B7 — Allowlist Signing + Distribution + Defense 3 (complete, 2026-04-29)
 Five commits on master closing TODO 5 (orchestrator `/allowlist` endpoint) and
@@ -643,6 +653,12 @@ api.soholink.org healthy.
 B6 commit #3 of 4 shipped: Portal `/opt-out` page + `GET`/`POST /api/opt-out` endpoints.
 Build clean; 4 new portal tests green (23/23 portal tests pass overall).
 Production unchanged at `101a6f3` until next `deploy/redeploy.sh` cycle.
+
+### Deployment checkpoint — `fe83d19` (2026-05-05)
+B6 commit #4 of 4 shipped — **B6 fully complete**. Orchestrator `FindMatch`
+now filters opted-out nodes at dispatch time (TODO 10 closed). 5 new
+orchestrator tests green; full repo sweep passes. Production unchanged
+at `101a6f3` until next `deploy/redeploy.sh` cycle.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
