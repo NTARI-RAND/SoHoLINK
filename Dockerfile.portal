@@ -14,6 +14,7 @@ FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /src/portal ./portal
 COPY --from=builder /src/web/ ./web/
+COPY --from=ghcr.io/spiffe/spire-server:1.9.6 /opt/spire/bin/spire-server /opt/spire/bin/spire-server
 
 EXPOSE 8080
 CMD ["./portal"]

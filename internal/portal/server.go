@@ -1555,7 +1555,7 @@ func (ps *PortalServer) handleGenerateNodeToken(w http.ResponseWriter, r *http.R
 	spireJoinToken := ""
 	spireExpires := time.Time{}
 	spireOut, spireErr := exec.CommandContext(r.Context(),
-		"spire-server", "token", "generate",
+		"/opt/spire/bin/spire-server", "token", "generate",
 		"-socketPath", "/run/spire-server/private/api.sock",
 		"-ttl", "604800", // 7 days in seconds
 	).Output()
