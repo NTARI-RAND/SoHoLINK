@@ -28,6 +28,30 @@ services:
       retries: 5
       start_period: 10s
 
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    restart: unless-stopped
+    pid: "host"
+    command:
+      - "-config"
+      - "/etc/spire/agent.conf"
+      - "-joinToken"
+      - "${SPIRE_AGENT_JOIN_TOKEN}"
+    volumes:
+      - ./deploy/spire/agent.conf:/etc/spire/agent.conf:ro
+      - spire_agent_socket:/run/spire/sockets
+      - spire_agent_data:/opt/spire/data/agent
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck",
+             "-socketPath", "/run/spire/sockets/agent.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   portal:
     build:
       context: .
@@ -59,15 +83,15 @@ services:
     expose:
       - "8082"
     volumes:
-      - spire_socket:/run/spire-server/private:ro
+      - spire_agent_socket:/run/spire/sockets:ro
       - ./deploy/allowlist:/etc/soholink:ro
     depends_on:
       postgres:
         condition: service_started
-      spire-server:
+      spire-agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8082/health > /dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -95,3 +119,5 @@ volumes:
   postgres_data:
   spire_data:
   spire_socket:
+  spire_agent_socket:
+  spire_agent_data:
