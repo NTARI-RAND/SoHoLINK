@@ -242,29 +242,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     200 with `"identity":"unavailable"`. Production container is healthy.
     Option B (full SPIRE wiring) remains the correct long-term path — see TODO 13.
 
-13. **No SPIRE agent in Compose stack**: `deploy/spire/server.conf` configures
-    the SPIRE server only — `NodeAttestor "join_token"`, no `WorkloadAttestor`.
-    The Compose stack has no `spire-agent` service. Full SPIRE wiring requires:
-    adding a `spire-agent` service with Docker workload attestor
-    (`unix_workload_attestor`), registering workload entries for each container
-    (orchestrator, portal), and providing agent config and join token. Until this
-    is done, no container can obtain a SVID from the local socket.
-    **Note (Option B healthcheck reconciliation):** When Option B is implemented,
-    the Compose `healthcheck` for the orchestrator (currently probing plain HTTP
-    `/health`) must be updated — once `Start()` switches to `ListenAndServeTLS`,
-    the probe needs mTLS or a sidecar. The `/health` route was intentionally placed
-    on the plain outer mux so it stays reachable in degraded mode; verify this
-    placement still works after full SPIRE wiring.
-    **Status (2026-05-06): BLOCKER for participant testing.** With production now
-    publicly reachable at `api.soholink.org` (TODO 17 RESOLVED), the orchestrator's
-    SPIFFE-protected routes are exposed to the open internet but currently fail-closed
-    in degraded mode. Probe-confirmed: `POST https://api.soholink.org/nodes/register`
-    with empty body returns `HTTP 503` with body
-    `{"error":"identity unavailable","detail":"SPIRE workload API socket not reachable; SPIFFE-protected routes are disabled"}`.
-    This is the safest possible degraded state — no public-exposure risk, no fake-node
-    registration possible — but agents cannot register, heartbeat, or do anything
-    useful until SPIRE is wired. Participants cannot be invited to download or test
-    the agent until Option B lands.
+13. **RESOLVED (2026-05-07, Dev XV).** Full SPIRE agent wired into Compose stack. Option B implemented across four commits (`a3cce4b`, `095db23`, `f1f84be`, plus the `pid: "host"` fix). Key design decisions locked:
+    - `spire-agent` service uses `pid: "host"` — required for the `unix` WorkloadAttestor to resolve caller PIDs across container namespaces. Gives the agent container read access to all host process metadata; cannot control processes. Accepted trade-off for single-host deployment; documented in SPIRE's own Docker guidance.
+    - `deploy/spire/agent.conf` uses `insecure_bootstrap = true` — acceptable on Docker internal bridge network.
+    - `TLSServerConfigOptional` added to `internal/identity/spiffe.go`: uses one-way TLS (`tlsconfig.TLSServerConfig`) + `tls.RequestClientCert`. Server presents SVID; client cert is requested but not required at TLS layer. `/health` and `/allowlist` reachable without client cert; `RequireSPIFFE` enforces SPIFFE identity at HTTP layer for protected routes.
+    - Workload entry registered (one-time, in SPIRE server datastore): entry ID `9197354b-0ef7-4fec-a151-7cb7a7f9f4a0`, SPIFFE ID `spiffe://soholink.org/orchestrator`, selector `unix:uid:0`, parent `spiffe://soholink.org/spire/agent/join_token/dcd15ddf-68f8-4975-b854-0af818412fd2`.
+    - Probe confirmed: `POST https://api.soholink.org/nodes/register` returns `mTLS required` (not 503). SPIFFE middleware is live.
+    - **Re-attestation (if `spire_agent_data` volume is wiped):** generate new token, update `SPIRE_AGENT_JOIN_TOKEN` in `.env`, delete old workload entry (`entry delete -id 9197354b-...`), `docker compose up -d`, re-run `deploy/register-entries.sh`.
+    - New env vars in `.env`: `SPIFFE_ENDPOINT_SOCKET=unix:///run/spire/sockets/agent.sock`, `SPIRE_AGENT_JOIN_TOKEN=<token>`.
 
 14. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
     tooling, the `/allowlist` endpoint, the build-time public-key injection,
@@ -697,6 +682,9 @@ hostname, orphan `api` DNS record deleted and recreated as part of the new publi
 hostname rule. All public routes green; SPIFFE-protected routes correctly fail-closed
 pending TODO 13. No agent traffic yet — agents not deployed; participant testing
 blocked on TODO 13.
+
+### Deployment checkpoint — `f1f84be` (2026-05-07, Dev XV)
+TODO 13 Option B complete. SPIRE agent service added to Compose stack (`pid: "host"`, `insecure_bootstrap = true`, `unix` WorkloadAttestor). Orchestrator obtains SVID on startup — no degraded mode. TLS listener uses `TLSServerConfigOptional` (optional client cert). Cloudflare `api.soholink.org` backend updated to HTTPS with no-verify. All routes healthy: `soholink.org` 200, `api.soholink.org/health` 200, `api.soholink.org/nodes/register` returns `mTLS required` (expected). Participant testing remains blocked on end-to-end self-test (next priority).
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
