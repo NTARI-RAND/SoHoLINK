@@ -255,6 +255,16 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     the probe needs mTLS or a sidecar. The `/health` route was intentionally placed
     on the plain outer mux so it stays reachable in degraded mode; verify this
     placement still works after full SPIRE wiring.
+    **Status (2026-05-06): BLOCKER for participant testing.** With production now
+    publicly reachable at `api.soholink.org` (TODO 17 RESOLVED), the orchestrator's
+    SPIFFE-protected routes are exposed to the open internet but currently fail-closed
+    in degraded mode. Probe-confirmed: `POST https://api.soholink.org/nodes/register`
+    with empty body returns `HTTP 503` with body
+    `{"error":"identity unavailable","detail":"SPIRE workload API socket not reachable; SPIFFE-protected routes are disabled"}`.
+    This is the safest possible degraded state — no public-exposure risk, no fake-node
+    registration possible — but agents cannot register, heartbeat, or do anything
+    useful until SPIRE is wired. Participants cannot be invited to download or test
+    the agent until Option B lands.
 
 14. **B7 commit 4b deferred until worker images exist**: B7 shipped the keypair
     tooling, the `/allowlist` endpoint, the build-time public-key injection,
@@ -282,14 +292,29 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     services on NTARIHQ must either run elevated or use a pre-authorized scheduled
     task. Host policy constraint — not a code issue, do not attempt to bypass.
 
-17. **soholink.org 502 — Cloudflare Zero Trust remote tunnel config**: Cloudflare
-    Zero Trust dashboard has a remote-managed tunnel config that overrides the local
-    `config.yml`, routing `soholink.org → https://portal:8080` (wrong scheme —
-    portal is plain HTTP). Fix: Cloudflare dashboard → Networks → Tunnels →
-    soholink-prod → Configure → Public Hostname; either delete the remote rules to
-    fall back to local `config.yml`, or correct the service URL to
-    `http://portal:8080` and re-add `api.soholink.org → http://orchestrator:8082`.
-    Not a code issue — requires Cloudflare dashboard access. Separate track from B6.
+17. **soholink.org 502 — Cloudflare Zero Trust remote tunnel config**: **RESOLVED 2026-05-06**
+    (Cloudflare dashboard manual fix; no code commit). Two issues found and fixed:
+    (a) `soholink.org` routed to `https://portal:8080` (wrong scheme — portal is plain HTTP),
+    causing 502; (b) `api.soholink.org` was missing from the dashboard's public hostname list
+    entirely (orphan DNS record only), causing 404 at the edge via the catch-all
+    `http_status:404` ingress rule. Fixed by editing the `soholink.org` rule HTTPS→HTTP,
+    deleting the orphan `api` Tunnel-type DNS record, and adding a new public hostname
+    `api.soholink.org → http://orchestrator:8082`. Verified externally:
+    `soholink.org` 200, `api.soholink.org/health` 200, `api.soholink.org/nodes/register` 503
+    (fail-closed via TODO 13 — see below). Follow-up: see TODO 18 for canonical sync tooling
+    so this category of dashboard-vs-local drift cannot happen silently again.
+
+18. **`deploy/sync-tunnel-config.sh` — canonical local→Cloudflare-dashboard tunnel config sync**:
+    Today's outage (TODO 17) was caused by silent drift between local `~/.cloudflared/config.yml`
+    and the Cloudflare Zero Trust dashboard's remote-managed tunnel config. Local file is the
+    intended source of truth. A script should `PUT /accounts/{account}/cfd_tunnel/{tunnel}/configurations`
+    with the local ingress translated to the API's JSON shape, on demand or as part of every
+    deploy. Account UUID `52f1117eaaa85f885309416a052b0687`, tunnel UUID
+    `bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`, cert at `~/.cloudflared/cert.pem`. Auth format
+    requires research before implementation — Cloudflare's modern API typically uses
+    `Authorization: Bearer <api-token>` with a token scoped to "Cloudflare Tunnel:Edit",
+    not raw cert.pem contents. Defer to a focused follow-up session. Not blocking
+    participant testing.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -659,6 +684,19 @@ B6 commit #4 of 4 shipped — **B6 fully complete**. Orchestrator `FindMatch`
 now filters opted-out nodes at dispatch time (TODO 10 closed). 5 new
 orchestrator tests green; full repo sweep passes. Production unchanged
 at `101a6f3` until next `deploy/redeploy.sh` cycle.
+
+### Deployment checkpoint — `6eccf64` (2026-05-06)
+Production rolled forward from `101a6f3` to `6eccf64` — B6 fully live, new opt-out
+participant UI publicly accessible, orchestrator's `FindMatch` opt-out filter active
+under real dispatch. Includes script fix `0a8b3e8` (`deploy/redeploy.sh` now rebuilds
+orchestrator alongside portal — previous omission would have silently dropped
+`fe83d19`'s orchestrator changes from production on any prior `redeploy.sh` invocation).
+Cloudflare Zero Trust dashboard reconciled to local `config.yml` ingress (TODO 17 RESOLVED):
+`soholink.org` rule HTTPS→HTTP, new `api.soholink.org → http://orchestrator:8082` public
+hostname, orphan `api` DNS record deleted and recreated as part of the new public
+hostname rule. All public routes green; SPIFFE-protected routes correctly fail-closed
+pending TODO 13. No agent traffic yet — agents not deployed; participant testing
+blocked on TODO 13.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
