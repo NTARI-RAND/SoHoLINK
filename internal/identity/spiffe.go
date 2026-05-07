@@ -44,6 +44,20 @@ func TLSServerConfig(source *Source) *tls.Config {
 	return tlsconfig.MTLSServerConfig(source.x509Source, source.x509Source, tlsconfig.AuthorizeAny())
 }
 
+// TLSServerConfigOptional returns a *tls.Config that presents our SVID as
+// the server certificate and requests (but does not require) a client
+// certificate. Routes that need SPIFFE authentication check
+// r.TLS.PeerCertificates at the HTTP layer via RequireSPIFFE. This allows
+// plain-HTTPS clients (Compose healthcheck, Cloudflare tunnel proxy,
+// external monitors) to reach /health and /allowlist without a SPIFFE
+// identity, while SPIFFE agents presenting their SVID in the TLS handshake
+// are still authenticated by RequireSPIFFE.
+func TLSServerConfigOptional(source *Source) *tls.Config {
+	cfg := tlsconfig.TLSServerConfig(source.x509Source)
+	cfg.ClientAuth = tls.RequestClientCert
+	return cfg
+}
+
 // Close shuts down the X.509 source and releases its SPIRE connection.
 func Close(source *Source) error {
 	return source.x509Source.Close()

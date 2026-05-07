@@ -63,7 +63,7 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 		IdleTimeout:  60 * time.Second,
 	}
 	if idSource != nil {
-		s.srv.TLSConfig = identity.TLSServerConfig(idSource)
+		s.srv.TLSConfig = identity.TLSServerConfigOptional(idSource)
 	}
 
 	metricsMux := http.NewServeMux()
