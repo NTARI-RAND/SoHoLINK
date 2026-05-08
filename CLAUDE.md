@@ -93,11 +93,12 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–013
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–014
   network/        ← WireGuard bootstrapper (stub)
 web/
-  templates/      ← layout.html, index.html, login.html, dashboard.html,
-                     provider_onboarding.html, provider_provision.html,
+  templates/      ← layout.html, index.html, login.html, register.html,
+                     join.html, dashboard.html, opt_out.html, download.html,
+                     privacy.html, provider_onboarding.html, provider_provision.html,
                      consumer_marketplace.html, consumer_job_status.html,
                      dispute_queue.html
   static/css/     ← portal.css (complete design system)
@@ -301,6 +302,30 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     not raw cert.pem contents. Defer to a focused follow-up session. Not blocking
     participant testing.
 
+19. **SignPath GitHub Actions code-signing integration** (NEW, Dev XVI):
+    Application submitted to SignPath Foundation 2026-05-08. Forward-looking
+    attribution language live on `/download` and `/privacy` pages. Once approved
+    (typical 1–2 week lead time per OSS project anecdotes), implement: (a)
+    `.github/workflows/sign-msi.yml` workflow that uploads MSI artifact to
+    SignPath and retrieves signed version; (b) update `installer/windows/build.ps1`
+    to integrate signing or add as separate step; (c) replace
+    `web/static/SoHoLINK-Setup.msi` with signed build; (d) flip Code Signing
+    card text on `download.html` and `privacy.html` from forward-looking
+    ("once verification is complete") to present-tense ("is digitally signed").
+    Removes the SmartScreen "Unknown publisher" warning that currently blocks
+    non-technical participants.
+
+20. **Sign-verify roundtrip check on `mustEd25519Key` startup** (NEW, Dev XVI):
+    Defensive measure catching malformed ed25519 keys at boot rather than at
+    first signature verify. Login broke during Dev XVI because
+    `SESSION_PRIVATE_KEY` had been generated as 64 raw random bytes rather
+    than via `ed25519.GenerateKey` — bytes 32–63 didn't match the seed-derived
+    public key, so every signature failed verification despite the key passing
+    length checks. Fix is a few lines in `cmd/portal/main.go`: after
+    hex-decoding to 64 bytes, sign a known message and verify with
+    `priv.Public()`. Refuse to start on failure with clear error. Apply the
+    same check to any other `mustEd25519Key` callers.
+
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
 
@@ -468,16 +493,20 @@ requires `X-Register-Secret` header matching `CONTROL_PLANE_REGISTER_SECRET` env
 
 ## Production Deployment
 soholink.org live on NTARIHQ via Cloudflare Tunnel (`soholink-prod bb7b7f0d`).
-Docker Compose stack: portal + NGINX + cloudflared + orchestrator. Orchestrator
-added in `6f8d9a2` — currently **unhealthy** (crash-looping): `identity.NewSource`
-blocks at startup because no SPIRE agent is present in the Compose stack — see TODO 12.
-- **`docker-compose.yml`** — portal + NGINX + cloudflared + orchestrator services
-- **`Dockerfile.portal`** — multi-stage Go build; final image copies binary + `web/`
+Docker Compose stack: postgres + spire-server + spire-agent + portal + NGINX +
+cloudflared + orchestrator. Orchestrator obtains SPIRE SVID on startup via the
+unix Workload API; full SPIFFE/SPIRE wiring complete (see TODO 13 RESOLVED, Dev XV).
+- **`docker-compose.yml`** — postgres + spire-server + spire-agent + portal + NGINX + cloudflared + orchestrator services
+- **`Dockerfile.portal`** — multi-stage Go build; final image copies binary + `web/` + `spire-server` binary (for portal-side token generation)
 - **`Dockerfile.orchestrator`** — multi-stage Go build; final image copies orchestrator binary
+- **`deploy/spire/agent.conf`** — SPIRE agent config: `unix` WorkloadAttestor, `join_token` NodeAttestor, `insecure_bootstrap = true` (acceptable on internal Docker bridge network)
+- **`deploy/register-entries.sh`** — one-time SPIRE workload entry registration; re-run if `spire_agent_data` volume is wiped (see TODO 13 RESOLVED for procedure)
 - **`nginx.conf`** — reverse proxy to `portal:8080` for `soholink.org`
-- **`.env`** — `DATABASE_URL`, `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`; gitignored
+- **`.env`** — `DATABASE_URL`, `SESSION_PRIVATE_KEY`, `ORCHESTRATOR_TOKEN_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SPIFFE_ENDPOINT_SOCKET`, `SPIRE_AGENT_JOIN_TOKEN`; gitignored
 - **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`)
 - **DNS** — CNAME `soholink.org` → tunnel (proxied); CNAME `api.soholink.org` → tunnel (proxied), live
+- **Public pages** — `/`, `/login`, `/register`, `/join`, `/download`, `/privacy`, `/static/*` (auth-free)
+- **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; currently unsigned dev build, SignPath Foundation application pending — see TODO 19)
 
 ## First Live Pilot
 **Shenandoah Condominiums, 1 Dupont Way, Louisville KY 40207** — dense residential
@@ -685,6 +714,22 @@ blocked on TODO 13.
 
 ### Deployment checkpoint — `f1f84be` (2026-05-07, Dev XV)
 TODO 13 Option B complete. SPIRE agent service added to Compose stack (`pid: "host"`, `insecure_bootstrap = true`, `unix` WorkloadAttestor). Orchestrator obtains SVID on startup — no degraded mode. TLS listener uses `TLSServerConfigOptional` (optional client cert). Cloudflare `api.soholink.org` backend updated to HTTPS with no-verify. All routes healthy: `soholink.org` 200, `api.soholink.org/health` 200, `api.soholink.org/nodes/register` returns `mTLS required` (expected). Participant testing remains blocked on end-to-end self-test (next priority).
+
+### Deployment checkpoint — `2675402` (2026-05-08, Dev XVI)
+First-run participant onboarding overhaul. Dashboard empty state replaced with
+inline 3-step panel (token → MSI download → install steps); reordered so agent
+install precedes Stripe Connect setup. `HasStripe` field added to `DashboardData`;
+Stripe nudge card visible only when `HasNodes && !HasStripe`. Token persistence:
+`buildDashboardData` surfaces unused unexpired tokens across page reloads.
+Max-1-unused cap enforced in `handleGenerateNodeToken`. New public pages:
+`GET /download` (with SignPath Foundation forward-looking attribution) and
+`GET /privacy` (full data practices, dated 2026-05-08). Tagline "Clouds Are
+Everywhere" added to homepage hero. SignPath Foundation application submitted
+same day; awaiting verification (see TODO 19). Login broke and was resolved
+separately this session — `SESSION_PRIVATE_KEY` was malformed (bytes 32–63
+didn't match seed-derived public key); rotated via `scripts/genkey/main.go`,
+`.env` only, no code commit needed. See TODO 20 for proposed defensive
+sign-verify roundtrip check at portal startup.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
