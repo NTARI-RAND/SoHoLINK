@@ -73,3 +73,8 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 web/static/*.msi
+installer/windows/*.msi
+installer/windows/*.wixpdb
+installer/windows/*.bmp
+installer/windows/soholink-agent.exe
+installer/windows/spire-agent.exe
