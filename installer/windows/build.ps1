@@ -110,7 +110,7 @@ Write-Host "==> Running wix build..."
 
 Push-Location $PSScriptRoot
 try {
-    & wix build SoHoLINK.wxs -o $msiOut
+    & wix build SoHoLINK.wxs -o $msiOut -ext WixToolset.UI.wixext
     if ($LASTEXITCODE -ne 0) { throw "wix build failed with exit code $LASTEXITCODE" }
 } finally {
     Pop-Location

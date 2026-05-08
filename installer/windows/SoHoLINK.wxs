@@ -175,10 +175,10 @@
     <UI>
       <!-- Override the first "Next" from WelcomeDlg to go to RegTokenDlg -->
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog"
-               Value="RegTokenDlg" Order="2">1</Publish>
+               Value="RegTokenDlg" Order="2" Condition="1" />
       <!-- Override LicenseAgreementDlg "Back" to return to RegTokenDlg -->
       <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog"
-               Value="RegTokenDlg">1</Publish>
+               Value="RegTokenDlg" Condition="1" />
 
       <!-- RegTokenDlg: custom dialog to collect the registration token -->
       <Dialog Id="RegTokenDlg" Width="370" Height="270" Title="Node Registration Token">
@@ -198,17 +198,15 @@
         <Control Id="Line" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
                  Text="&amp;Back">
-          <Publish Event="NewDialog" Value="WelcomeDlg">1</Publish>
+          <Publish Event="NewDialog" Value="WelcomeDlg" Condition="1" />
         </Control>
         <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
                  Default="yes" Text="&amp;Next">
-          <Condition Action="disable">AGENT_REGISTER_TOKEN = ""</Condition>
-          <Condition Action="enable">AGENT_REGISTER_TOKEN &lt;&gt; ""</Condition>
-          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" Condition="1" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
                  Cancel="yes" Text="Cancel">
-          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+          <Publish Event="SpawnDialog" Value="CancelDlg" Condition="1" />
         </Control>
       </Dialog>
     </UI>
