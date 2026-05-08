@@ -77,6 +77,18 @@
     </div>
   </div>
 
+  {{if not .HasStripe}}
+  <div class="card" style="margin-bottom:2rem;border-color:var(--accent);">
+    <div class="card-eyebrow">Payouts</div>
+    <h4 style="margin:0 0 0.5rem;">Connect Stripe to receive your earnings</h4>
+    <p style="margin:0 0 1rem;font-size:0.85rem;color:var(--muted);">
+      Earnings accrue to your account regardless. Connect Stripe Connect when
+      you're ready to transfer them to your bank.
+    </p>
+    <a href="/provider/onboarding" class="btn btn-primary" style="font-size:0.8rem;">Set up payouts &rarr;</a>
+  </div>
+  {{end}}
+
   <div class="section-label">Active Workloads</div>
   <div class="table-wrap">
     <table>
@@ -129,15 +141,58 @@
   {{end}}
 
   {{else}}
-  <!-- ── No nodes yet ────────────────────────────────────────────── -->
+  <!-- ── First-run onboarding ────────────────────────────────────── -->
   <div class="card" style="margin-bottom:2.5rem;">
     <div class="card-eyebrow">Contributor Setup</div>
     <h3>Start earning from your hardware</h3>
-    <p style="margin:0.75rem 0 1.25rem;">
-      Register a node to contribute compute capacity and earn from every job
-      that runs on your hardware. Setup takes about five minutes.
+    <p style="margin:0.75rem 0 1.5rem;">
+      Run the SoHoLINK agent on a Windows device to contribute compute capacity
+      and earn on every job that runs on your hardware. Setup takes about five
+      minutes &mdash; no payment information required to install.
     </p>
-    <a href="/provider/onboarding" class="btn btn-primary" style="font-size:0.85rem;">Set Up a Node &rarr;</a>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1.25rem;">
+      <div style="background:var(--surface);padding:1.25rem;">
+        <div class="section-label" style="margin-top:0;font-size:0.7rem;">Step 1 &middot; Token</div>
+        <h4 style="margin:0 0 0.5rem;">Generate registration token</h4>
+        <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.75rem;">
+          Identifies your device when it first connects.
+        </p>
+        {{if .RegToken}}
+        <code style="display:block;font-size:0.78rem;word-break:break-all;color:var(--accent);">{{.RegToken}}</code>
+        <p style="font-size:0.7rem;color:var(--muted);margin:0.5rem 0 0;">
+          Single-use, expires in 7 days.
+        </p>
+        {{else}}
+        <form method="POST" action="/node/token" style="margin:0;">
+          <button type="submit" class="btn btn-outline" style="font-size:0.8rem;">Generate Token</button>
+        </form>
+        {{end}}
+      </div>
+
+      <div style="background:var(--surface);padding:1.25rem;">
+        <div class="section-label" style="margin-top:0;font-size:0.7rem;">Step 2 &middot; Installer</div>
+        <h4 style="margin:0 0 0.5rem;">Download the installer</h4>
+        <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.75rem;">
+          Windows &middot; ~16 MB &middot; MSI
+        </p>
+        <a href="/static/SoHoLINK-Setup.msi" class="btn btn-primary" style="font-size:0.8rem;">Download for Windows &rarr;</a>
+      </div>
+    </div>
+
+    <p style="font-size:0.85rem;margin:0 0 0.5rem;">
+      <strong style="color:var(--text);">Step 3 &middot; Install and wait</strong>
+    </p>
+    <p style="font-size:0.85rem;color:var(--muted);margin:0 0 1.25rem;">
+      Run the installer on your device. When prompted, paste the token from
+      Step 1. Your node will appear here within about a minute of starting.
+    </p>
+
+    {{if not .HasStripe}}
+    <p style="font-size:0.75rem;color:var(--muted);margin:0;padding-top:1rem;border-top:1px solid var(--border);">
+      Ready to receive payouts? <a href="/provider/onboarding" style="color:var(--muted);">Set up Stripe Connect &rarr;</a>
+    </p>
+    {{end}}
   </div>
   {{end}}
 

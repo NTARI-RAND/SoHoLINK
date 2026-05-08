@@ -173,6 +173,9 @@ type DashboardData struct {
 	ActiveJobs           []ActiveJobRow
 	SubmittedJobs        []SubmittedJobRow
 	Nodes                []NodeRow
+	// HasStripe is true when the participant has connected a Stripe account
+	// for payouts. Drives the "Connect Stripe" CTA on the dashboard.
+	HasStripe bool
 	// RegToken is set after the participant clicks "Get Node Token".
 	// Empty on normal dashboard loads.
 	RegToken string
@@ -278,6 +281,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	// Public routes.
 	mux.HandleFunc("GET /", ps.handleIndex)
 	mux.HandleFunc("GET /join", ps.handleJoinPage)
+	mux.HandleFunc("GET /download", ps.handleDownloadPage)
+	mux.HandleFunc("GET /privacy", ps.handlePrivacyPage)
 	mux.HandleFunc("GET /login", ps.handleLoginPage)
 	mux.HandleFunc("POST /login", ps.handleLogin)
 	mux.HandleFunc("POST /stripe/webhook", ps.handleStripeWebhook)
@@ -438,6 +443,14 @@ func (ps *PortalServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (ps *PortalServer) handleJoinPage(w http.ResponseWriter, r *http.Request) {
 	ps.renderTemplate(w, "join.html", struct{ IsAuthenticated bool }{})
+}
+
+func (ps *PortalServer) handleDownloadPage(w http.ResponseWriter, r *http.Request) {
+	ps.renderTemplate(w, "download.html", struct{ IsAuthenticated bool }{})
+}
+
+func (ps *PortalServer) handlePrivacyPage(w http.ResponseWriter, r *http.Request) {
+	ps.renderTemplate(w, "privacy.html", struct{ IsAuthenticated bool }{})
 }
 
 func (ps *PortalServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
@@ -621,6 +634,28 @@ func (ps *PortalServer) handleDashboard(w http.ResponseWriter, r *http.Request) 
 // buildDashboardData runs the four dashboard queries and returns a populated
 // DashboardData. RegToken is always empty — callers set it when needed.
 func (ps *PortalServer) buildDashboardData(ctx context.Context, claims SessionClaims) (DashboardData, error) {
+	// Participant payout state — drives the "Connect Stripe" CTA.
+	var stripeAccountID string
+	if err := ps.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(stripe_account_id, '') FROM participants WHERE id = $1`,
+		claims.UserID,
+	).Scan(&stripeAccountID); err != nil {
+		return DashboardData{}, err
+	}
+	hasStripe := stripeAccountID != ""
+
+	// Look up the most recent unused, unexpired registration token. Surfaces
+	// the token across page reloads so a participant can leave and come back
+	// without losing it. If no token exists, existingToken stays "". DB errors
+	// here are deliberately ignored — subsequent queries surface them loudly.
+	var existingToken string
+	_ = ps.db.Pool.QueryRow(ctx,
+		`SELECT token FROM node_registration_tokens
+		 WHERE participant_id = $1 AND used_at IS NULL AND expires_at > NOW()
+		 ORDER BY created_at DESC LIMIT 1`,
+		claims.UserID,
+	).Scan(&existingToken)
+
 	var nodeCount int64
 	var uptimePct float64
 	if err := ps.db.Pool.QueryRow(ctx,
@@ -764,6 +799,8 @@ func (ps *PortalServer) buildDashboardData(ctx context.Context, claims SessionCl
 		ActiveJobs:           activeJobs,
 		SubmittedJobs:        submittedJobs,
 		Nodes:                nodes,
+		HasStripe:            hasStripe,
+		RegToken:             existingToken,
 	}, nil
 }
 
@@ -1533,6 +1570,29 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 // the installer wizard can copy it during first-run node claim.
 func (ps *PortalServer) handleGenerateNodeToken(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
+
+	// Cap unused tokens at 1 per participant. If they already have an unused
+	// unexpired token, just re-render the dashboard — buildDashboardData will
+	// surface the existing token. This stops both accidental double-clicks and
+	// abusive direct API hits to /node/token.
+	var unusedCount int
+	if err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM node_registration_tokens
+		 WHERE participant_id = $1 AND used_at IS NULL AND expires_at > NOW()`,
+		claims.UserID,
+	).Scan(&unusedCount); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if unusedCount >= 1 {
+		data, err := ps.buildDashboardData(r.Context(), claims)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		ps.renderTemplate(w, "dashboard.html", data)
+		return
+	}
 
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

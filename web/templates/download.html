@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Software</div>
+      <h2>Download SoHoLINK</h2>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="card-eyebrow">SoHoLINK Agent</div>
+    <p style="margin:0.5rem 0 1.25rem;">
+      Run the SoHoLINK agent on a Windows device to contribute compute capacity
+      to the network. The agent runs in the background as a Windows service
+      and registers your device after first launch.
+    </p>
+    <a href="/static/SoHoLINK-Setup.msi" class="btn btn-primary">Download for Windows &rarr;</a>
+    <p style="font-size:0.75rem;color:var(--muted);margin:0.75rem 0 0;">
+      Windows 10 or later &middot; ~16 MB &middot; MSI installer
+    </p>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="card-eyebrow">After installation</div>
+    <ol style="margin:0.5rem 0 0;padding-left:1.25rem;font-size:0.9rem;">
+      <li style="margin-bottom:0.4rem;">Run the downloaded MSI installer.</li>
+      <li style="margin-bottom:0.4rem;">When prompted, paste your registration token. Sign in to your <a href="/dashboard">dashboard</a> to generate one.</li>
+      <li>The agent registers automatically and begins looking for jobs.</li>
+    </ol>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="card-eyebrow">Code Signing</div>
+    <p style="font-size:0.85rem;margin:0.5rem 0 0.75rem;color:var(--muted);">
+      SoHoLINK participates in the
+      <a href="https://signpath.org" target="_blank" rel="noopener">SignPath Foundation</a>
+      open-source code-signing program. Once verification is complete, Windows
+      installers will be digitally signed by SignPath Foundation, with signing
+      services provided by
+      <a href="https://signpath.io" target="_blank" rel="noopener">SignPath.io</a>.
+    </p>
+    <p style="font-size:0.85rem;margin:0;color:var(--muted);">
+      See our <a href="/privacy">privacy policy</a> for details on what data the agent transmits.
+    </p>
+  </div>
+
+  <div style="text-align:center;margin-top:2rem;display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;">
+    <a href="/login" class="btn btn-outline" style="font-size:0.85rem;">Sign In</a>
+    <a href="/register" class="btn btn-outline" style="font-size:0.85rem;">Create Account</a>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}

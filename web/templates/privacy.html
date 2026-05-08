@@ -1,0 +1,119 @@
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Legal</div>
+      <h2>Privacy Policy</h2>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <p style="font-size:0.78rem;color:var(--muted);margin:0 0 1rem;">
+      Last updated: May 8, 2026
+    </p>
+
+    <h3 style="margin:0 0 0.5rem;">Who we are</h3>
+    <p style="font-size:0.9rem;">
+      SoHoLINK is a participatory distributed compute platform operated by the
+      Network Theory Applied Research Institute (NTARI), a 501(c)(3) nonprofit.
+      Our website is <a href="https://soholink.org">soholink.org</a>.
+      Contact: <a href="mailto:info@ntari.org">info@ntari.org</a>.
+    </p>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">What we collect</h3>
+    <p style="font-size:0.9rem;margin:0 0 0.5rem;"><strong>From participants:</strong></p>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Email address &mdash; for account login and platform communication.</li>
+      <li>Password &mdash; stored only as a bcrypt hash; we cannot read it.</li>
+      <li>Display name and SOHO network name.</li>
+      <li>Stripe Connect account ID &mdash; only if you opt to set up payouts.</li>
+    </ul>
+    <p style="font-size:0.9rem;margin:0.75rem 0 0.5rem;"><strong>From your device when running the SoHoLINK agent:</strong></p>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Hostname, country code, and hardware profile (CPU cores, RAM, bandwidth).</li>
+      <li>Heartbeat timestamps and uptime statistics.</li>
+      <li>Status of jobs running on your node and earnings ledger entries.</li>
+    </ul>
+    <p style="font-size:0.9rem;margin:0.75rem 0 0.5rem;"><strong>Automatic:</strong></p>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>IP addresses &mdash; used for login rate limiting; not retained long-term.</li>
+      <li>Session tokens &mdash; signed cookies that expire after 15 minutes.</li>
+    </ul>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">What we do not collect</h3>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Web tracking cookies or analytics beacons.</li>
+      <li>Browser fingerprints.</li>
+      <li>Files or content on your device outside the SoHoLINK agent's working directory.</li>
+      <li>Personal communications, browser history, or documents.</li>
+    </ul>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Why we collect it</h3>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Email + password: account access.</li>
+      <li>Stripe account ID: routing payouts to your bank.</li>
+      <li>Hardware profile: matching your device to compatible jobs.</li>
+      <li>Heartbeats and metering: calculating earnings accurately.</li>
+      <li>IP address: preventing brute-force login attempts.</li>
+    </ul>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Who we share it with</h3>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li><strong>Stripe (Stripe Connect)</strong> &mdash; payment processing. Stripe receives your account ID, email, and earnings amounts. See <a href="https://stripe.com/privacy" target="_blank" rel="noopener">stripe.com/privacy</a>.</li>
+      <li><strong>Cloudflare</strong> &mdash; serves our website and routes encrypted traffic. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener">cloudflare.com/privacypolicy</a>.</li>
+    </ul>
+    <p style="font-size:0.9rem;">We do not sell, rent, or trade participant data.</p>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">How long we keep it</h3>
+    <p style="font-size:0.9rem;margin:0 0 0.5rem;">
+      Data is retained for the period required to operate the platform and to
+      comply with applicable law. Specifically:
+    </p>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Account data: while your account is active.</li>
+      <li>Job metering, earnings records, and heartbeat data: retained as needed for platform operation and tax / accounting compliance.</li>
+      <li>Session tokens: 15 minutes, then expire.</li>
+      <li>Rate-limit data: 15 minutes, then cleared.</li>
+    </ul>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Your rights</h3>
+    <ul style="font-size:0.9rem;padding-left:1.25rem;">
+      <li>Update your account info via the dashboard at any time.</li>
+      <li>Request a data export by emailing <a href="mailto:info@ntari.org">info@ntari.org</a>.</li>
+      <li>Delete your account by emailing <a href="mailto:info@ntari.org">info@ntari.org</a>. Identifying data is removed; aggregate platform records may be retained as required by law.</li>
+      <li>Opt out of specific workload types (compute, storage, printing) per node via dashboard controls.</li>
+    </ul>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">The SoHoLINK agent</h3>
+    <p style="font-size:0.9rem;">
+      The agent runs on devices you own. By default it does not enable printing,
+      file storage, or any operation that touches files outside its working
+      directory. You opt in to each capability explicitly via your dashboard.
+      The agent transmits only the metadata listed above to our orchestration
+      servers &mdash; never the contents of files on your device, never browser
+      history, never personal documents.
+    </p>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Code signing</h3>
+    <p style="font-size:0.9rem;">
+      SoHoLINK participates in the
+      <a href="https://signpath.org" target="_blank" rel="noopener">SignPath Foundation</a>
+      open-source code-signing program. Once verification is complete, Windows
+      installers will be digitally signed by SignPath Foundation, with signing
+      services provided by <a href="https://signpath.io" target="_blank" rel="noopener">SignPath.io</a>.
+    </p>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Changes</h3>
+    <p style="font-size:0.9rem;">
+      Material changes will be posted here and announced to active participants
+      by email.
+    </p>
+
+    <h3 style="margin:1.5rem 0 0.5rem;">Contact</h3>
+    <p style="font-size:0.9rem;">
+      <a href="mailto:info@ntari.org">info@ntari.org</a> &middot; NTARI &middot; soholink.org
+    </p>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}
