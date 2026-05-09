@@ -42,6 +42,7 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 	top := http.NewServeMux()
 	top.HandleFunc("GET /health", healthHandler(idSource))
 	top.HandleFunc("GET /allowlist", handleGetAllowlist(allowlistPath))
+	top.HandleFunc("POST /nodes/claim", handleClaimNode(db, registry))
 	if idSource != nil {
 		top.Handle("/", identity.RequireSPIFFE(authMux))
 	} else {

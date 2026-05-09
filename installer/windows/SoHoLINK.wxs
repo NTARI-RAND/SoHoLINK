@@ -38,7 +38,7 @@
     <Property Id="AGENT_REGISTER_TOKEN" Secure="yes" />
     <Property Id="AGENT_COUNTRY_CODE" Value="US" Secure="yes" />
     <Property Id="AGENT_CONTROL_PLANE_ADDR" Value="https://api.soholink.org" Secure="yes" />
-    <Property Id="SPIFFE_ENDPOINT_SOCKET" Value="unix:///run/spire/sockets/agent.sock" Secure="yes" />
+    <Property Id="SPIFFE_ENDPOINT_SOCKET" Value="npipe:spire-agent" Secure="yes" />
     <Property Id="AGENT_PROVIDER_ID" Secure="yes" />
     <Property Id="AGENT_NODE_CLASS" Value="C" Secure="yes" />
 

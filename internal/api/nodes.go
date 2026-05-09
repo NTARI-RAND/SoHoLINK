@@ -90,7 +90,6 @@ type jobEntry struct {
 
 func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator.NodeRegistry) {
 	mux.HandleFunc("POST /nodes/register", handleRegisterNode(db, registry))
-	mux.HandleFunc("POST /nodes/claim", handleClaimNode(db, registry))
 	mux.HandleFunc("POST /nodes/heartbeat", handleHeartbeat(db, registry))
 	mux.HandleFunc("POST /nodes/printers", handleReportPrinters(db))
 	mux.HandleFunc("GET /nodes/jobs", handleGetJobs(db))

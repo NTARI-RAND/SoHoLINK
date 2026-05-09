@@ -15,9 +15,12 @@ import (
 	"syscall"
 	"time"
 
+	"os/exec"
+	"runtime"
+	"strings"
+
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
-	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 func mustEnv(key string) string {
@@ -75,16 +78,9 @@ func runMain(ctx context.Context) {
 
 		hostname, _ := os.Hostname()
 
-		// Need a temporary mTLS client to reach the control plane for claiming.
-		idSrc, idErr := identity.NewSource(ctx, spiffeSocket)
-		if idErr != nil {
-			log.Fatalf("claim: identity source: %v", idErr)
-		}
-		serverID := spiffeid.RequireFromString("spiffe://soholink.org/orchestrator")
-		claimClient := &http.Client{
-			Transport: &http.Transport{TLSClientConfig: identity.TLSClientConfig(idSrc, serverID)},
-			Timeout:   30 * time.Second,
-		}
+		// First-run: plain HTTPS client. /nodes/claim is token-authenticated
+		// and plain-accessible — SPIRE is not running yet on a fresh device.
+		claimClient := &http.Client{Timeout: 30 * time.Second}
 
 		hw0, hwErr := agent.Detect(ctx)
 		if hwErr != nil {
@@ -105,6 +101,11 @@ func runMain(ctx context.Context) {
 		if nodeCfg.SpireJoinToken != "" {
 			spireDataDir := filepath.Join(filepath.Dir(confPath), "spire", "data")
 			spireKeysDir := filepath.Join(filepath.Dir(confPath), "spire", "keys")
+			// SPIRE agent config uses the Win32 named pipe path; go-spiffe uses the npipe: URI.
+			spireSocketPath := spiffeSocket
+			if strings.HasPrefix(spiffeSocket, "npipe:") {
+				spireSocketPath = `\\.\pipe\` + strings.TrimPrefix(spiffeSocket, "npipe:")
+			}
 			spireConf := fmt.Sprintf(`agent {
     data_dir = %q
     log_level = "INFO"
@@ -130,7 +131,7 @@ plugins {
         plugin_data {}
     }
 }
-`, spireDataDir, spiffeSocket, nodeCfg.SpireJoinToken, spireKeysDir)
+`, spireDataDir, spireSocketPath, nodeCfg.SpireJoinToken, spireKeysDir)
 
 			spireConfPath := filepath.Join(filepath.Dir(confPath), "spire-agent.conf")
 			if mkErr := os.MkdirAll(filepath.Dir(spireConfPath), 0o700); mkErr == nil {
@@ -141,6 +142,24 @@ plugins {
 				}
 			}
 		}
+
+		// The SoHoLINKSPIREAgent service may have failed at install time because
+		// spire-agent.conf did not exist yet. Now that we have written it, start
+		// the service. Ignore errors — on reinstall it may already be running.
+		if runtime.GOOS == "windows" {
+			out, startErr := exec.CommandContext(ctx, "sc", "start", "SoHoLINKSPIREAgent").CombinedOutput()
+			slog.Info("starting SPIRE agent service",
+				"output", strings.TrimSpace(string(out)),
+				"error", startErr,
+			)
+		}
+	}
+
+	// Wait for the SPIRE Workload API socket before constructing HeartbeatAgent.
+	// On first run the SPIRE agent needs time to attest to the server.
+	slog.Info("waiting for SPIRE agent socket", "path", spiffeSocket)
+	if err := waitForSPIRE(ctx, spiffeSocket, 90*time.Second); err != nil {
+		log.Fatalf("SPIRE socket: %v", err)
 	}
 
 	var tokenSecret []byte
@@ -233,6 +252,30 @@ plugins {
 			for _, job := range jobs {
 				go runJob(ctx, executor, telemetryClient, cfg.ControlPlaneAddr, cfg.NodeID, tokenSecret, hw, job)
 			}
+		}
+	}
+}
+
+// waitForSPIRE polls the SPIRE Workload API socket until it accepts connections
+// or the timeout elapses. Returns nil when ready.
+func waitForSPIRE(ctx context.Context, socketPath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for SPIRE socket at %s", timeout, socketPath)
+		}
+		tryCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		src, err := identity.NewSource(tryCtx, socketPath)
+		cancel()
+		if err == nil {
+			identity.Close(src)
+			return nil
+		}
+		slog.Debug("SPIRE socket not yet ready", "path", socketPath, "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
 		}
 	}
 }
