@@ -82,10 +82,7 @@ func runMain(ctx context.Context) {
 		// and plain-accessible — SPIRE is not running yet on a fresh device.
 		claimClient := &http.Client{Timeout: 30 * time.Second}
 
-		hw0, hwErr := agent.Detect(ctx)
-		if hwErr != nil {
-			log.Fatalf("claim: hardware detection: %v", hwErr)
-		}
+		hw0 := detectHW(ctx)
 
 		nodeCfg, err = agent.ClaimNode(ctx, claimClient, controlPlaneAddr, regToken,
 			hw0, hostname, countryCode, os.Getenv("AGENT_REGION"))
@@ -188,11 +185,7 @@ plugins {
 		TokenSecret:      tokenSecret,
 	}
 
-	hw, err := agent.Detect(ctx)
-	if err != nil {
-		slog.Error("hardware detection failed", "error", err)
-		os.Exit(1)
-	}
+	hw := detectHW(ctx)
 	slog.Info("hardware detected",
 		"cpu_cores", hw.CPUCores,
 		"ram_mb", hw.RAMMB,
@@ -276,6 +269,39 @@ func waitForSPIRE(ctx context.Context, socketPath string, timeout time.Duration)
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// detectHW runs agent.Detect with a hard 15-second timeout. On timeout or
+// error a minimal HardwareProfile is returned so the agent can still claim
+// and heartbeat. Hung WMI or gopsutil goroutines complete in the background.
+func detectHW(ctx context.Context) agent.HardwareProfile {
+	type result struct {
+		hw  agent.HardwareProfile
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		hw, err := agent.Detect(ctx)
+		ch <- result{hw, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			slog.Warn("hardware detection error", "error", r.err)
+		}
+		return r.hw
+	case <-time.After(15 * time.Second):
+		slog.Warn("hardware detection timed out; using minimal profile")
+		return agent.HardwareProfile{
+			Platform: runtime.GOOS,
+			Arch:     runtime.GOARCH,
+		}
+	case <-ctx.Done():
+		return agent.HardwareProfile{
+			Platform: runtime.GOOS,
+			Arch:     runtime.GOARCH,
 		}
 	}
 }
