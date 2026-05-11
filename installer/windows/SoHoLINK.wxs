@@ -86,10 +86,8 @@
         <ServiceControl
           Id="StartSoHoLINKAgent"
           Name="SoHoLINKAgent"
-          Start="install"
           Stop="both"
-          Remove="uninstall"
-          Wait="no" />
+          Remove="uninstall" />
       </Component>
 
       <Component Id="SpireAgentBinary">
@@ -110,10 +108,8 @@
         <ServiceControl
           Id="StartSPIRESvc"
           Name="SoHoLINKSPIREAgent"
-          Start="install"
           Stop="both"
-          Remove="uninstall"
-          Wait="no" />
+          Remove="uninstall" />
       </Component>
 
       <!-- Write environment variables to the service registry key so the
