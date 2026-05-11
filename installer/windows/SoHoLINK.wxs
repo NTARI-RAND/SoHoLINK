@@ -80,7 +80,7 @@
           Description="Contributes compute capacity to the SoHoLINK network."
           Type="ownProcess"
           Start="auto"
-          ErrorControl="normal"
+          ErrorControl="ignore"
           Arguments="--service" />
 
         <ServiceControl
@@ -102,7 +102,7 @@
           Description="Manages workload identity certificates for the SoHoLINK node agent."
           Type="ownProcess"
           Start="auto"
-          ErrorControl="normal"
+          ErrorControl="ignore"
           Arguments="-config &quot;[SOHOLINKDATAFOLDER]spire-agent.conf&quot;" />
 
         <ServiceControl
