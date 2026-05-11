@@ -89,7 +89,7 @@
           Start="install"
           Stop="both"
           Remove="uninstall"
-          Wait="yes" />
+          Wait="no" />
       </Component>
 
       <Component Id="SpireAgentBinary">
@@ -113,7 +113,7 @@
           Start="install"
           Stop="both"
           Remove="uninstall"
-          Wait="yes" />
+          Wait="no" />
       </Component>
 
       <!-- Write environment variables to the service registry key so the
