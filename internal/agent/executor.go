@@ -34,6 +34,13 @@ type ContainerSpec struct {
 	JobToken string
 	Caps     CapProfile
 	EnvVars  map[string]string
+
+	// ConnectionPath is the host device path for a USB-attached printer
+	// (e.g. /dev/ttyUSB0, /dev/usb/lp0). Populated by the agent at
+	// job-poll time from local PrinterInfo when the job targets a
+	// specific printer. Empty for compute/storage workloads and for
+	// print workloads that route via CUPS rather than direct USB.
+	ConnectionPath string
 }
 
 // ExecutionResult carries the outcome of a completed container run.
@@ -301,7 +308,7 @@ func buildHostConfig(spec ContainerSpec, entry *AllowlistEntry) *container.HostC
 		},
 	}
 
-	devices := deviceMountsFor(entry.DeviceAccess)
+	devices := deviceMountsFor(entry.DeviceAccess, spec.ConnectionPath)
 	mounts = append(mounts, devices.mounts...)
 
 	return &container.HostConfig{

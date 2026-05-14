@@ -13,6 +13,6 @@ package agent
 // agents cannot accept print workloads — enforced upstream by the opt-out
 // gate, not here. This stub returns empty without error so the executor's
 // shape stays uniform across platforms.
-func deviceMountsFor(_ []DeviceAccess) deviceMountSet {
+func deviceMountsFor(_ []DeviceAccess, _ string) deviceMountSet {
 	return deviceMountSet{}
 }

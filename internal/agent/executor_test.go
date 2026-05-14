@@ -345,3 +345,48 @@ func TestRun_OptOutGateAfterAllowlist(t *testing.T) {
 		t.Errorf("expected ErrImageNotAllowed (allowlist fires first), got %v", err)
 	}
 }
+
+func TestBuildHostConfig_USBPrinterDeviceMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("USB printer device mapping not applicable on Windows")
+	}
+
+	cases := []struct {
+		name           string
+		connectionPath string
+		wantMapping    bool
+	}{
+		{"populated path produces mapping", "/dev/ttyUSB0", true},
+		{"empty path produces no mapping", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := ContainerSpec{Image: allowedImage, ConnectionPath: tc.connectionPath}
+			hc := buildHostConfig(spec, entryWith(DeviceUSBPrinter))
+
+			if tc.wantMapping {
+				var found bool
+				for _, d := range hc.Resources.Devices {
+					if d.PathOnHost != tc.connectionPath {
+						continue
+					}
+					found = true
+					if d.PathInContainer != tc.connectionPath {
+						t.Errorf("PathInContainer = %q, want %q", d.PathInContainer, tc.connectionPath)
+					}
+					if d.CgroupPermissions != "rwm" {
+						t.Errorf("CgroupPermissions = %q, want %q", d.CgroupPermissions, "rwm")
+					}
+				}
+				if !found {
+					t.Errorf("expected device mapping for %s, got: %v", tc.connectionPath, hc.Resources.Devices)
+				}
+			} else {
+				if len(hc.Resources.Devices) > 0 {
+					t.Errorf("expected no device mappings for empty ConnectionPath, got: %v", hc.Resources.Devices)
+				}
+			}
+		})
+	}
+}
