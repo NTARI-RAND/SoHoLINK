@@ -47,7 +47,17 @@ func mustEd25519Key(key string) ed25519.PrivateKey {
 		log.Fatalf("%s: must be exactly %d bytes (%d hex chars), got %d bytes",
 			key, ed25519.PrivateKeySize, ed25519.PrivateKeySize*2, len(b))
 	}
-	return ed25519.PrivateKey(b)
+	priv := ed25519.PrivateKey(b)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		log.Fatalf("%s: could not derive public key from private key", key)
+	}
+	const probe = "soholink-key-self-test-v1"
+	sig := ed25519.Sign(priv, []byte(probe))
+	if !ed25519.Verify(pub, []byte(probe), sig) {
+		log.Fatalf("%s: sign/verify roundtrip failed; key bytes are internally inconsistent", key)
+	}
+	return priv
 }
 
 func main() {
