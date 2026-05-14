@@ -46,8 +46,10 @@ function New-SoHoLINKBmp {
     Write-Host "    Created   : $Path"
 }
 
-New-SoHoLINKBmp -Path "$PSScriptRoot\banner.bmp" -Width 493 -Height 58  -R 10 -G 13 -B 18
-New-SoHoLINKBmp -Path "$PSScriptRoot\dialog.bmp" -Width 493 -Height 312 -R 17 -G 24 -B 32
+# Interim near-white background (#F8F9FA) so wizard text (rendered black
+# by Windows Installer) is legible. TODO 4 replaces these with branded artwork.
+New-SoHoLINKBmp -Path "$PSScriptRoot\banner.bmp" -Width 493 -Height 58  -R 248 -G 249 -B 250
+New-SoHoLINKBmp -Path "$PSScriptRoot\dialog.bmp" -Width 493 -Height 312 -R 248 -G 249 -B 250
 
 # ── Step 0b: download SPIRE agent for Windows ──────────────────────────────
 $spireAgentOut = Join-Path $PSScriptRoot "spire-agent.exe"
