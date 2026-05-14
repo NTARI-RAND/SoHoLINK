@@ -93,7 +93,7 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–014
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–015
   network/        ← WireGuard bootstrapper (stub)
 web/
   templates/      ← layout.html, index.html, login.html, register.html,
@@ -108,6 +108,7 @@ scripts/
   allowlist-genkey/  ← Operator tool: generate Ed25519 signing keypair (one-time)
   allowlist-sign/    ← Operator tool: sign allowlist JSON with private key
 docs/
+  handoffs/       ← Session handoff records (one per session, Dev XVII forward)
   operations/     ← Operator runbooks (allowlist-signing.md)
 examples/         ← Templates (allowlist.example.json + README)
 test/integration/ ← Phase 1 end-to-end integration test (build tag: integration)
@@ -130,6 +131,7 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 012 | `012_container_image` | `container_image TEXT` nullable column on `jobs` |
 | 013 | `013_node_registration_tokens` | `node_registration_tokens` table: single-use installer tokens tied to a participant |
 | 014 | `014_opt_out_and_printers` | `opt_out_compute`, `opt_out_storage`, `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`; `node_printers` table (composite PK `(node_id, printer_id)`, FK → `nodes(id)` ON DELETE CASCADE, `enabled` DEFAULT FALSE, `detected_at`); partial index `idx_node_printers_enabled WHERE enabled = TRUE` |
+| 015 | `015_print_job_confirmation` | `awaiting_confirmation` and `declined` `job_status` values; `printer_id`, `spec_hash`, `confirmed_at`, `declined_at`, `confirmation_deadline` columns on `jobs`; partial index `idx_jobs_confirmation_deadline WHERE confirmation_deadline IS NOT NULL` for the auto-decline sweeper. `(node_id, printer_id)` pairing enforced at application layer — composite FK avoided due to cascade-semantics conflict with the existing `node_id` FK. See "Migration writing rules" below. |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -138,10 +140,23 @@ DATABASE_URL="postgres://postgres:changeme@localhost:5432/postgres?sslmode=disab
 ```
 golang-migrate is idempotent — safe to run repeatedly.
 
+### Migration writing rules
+- `ALTER TYPE … ADD VALUE` works inside a transaction on PG 12+, but the new
+  value cannot be USED in the same transaction. This includes references in
+  `CREATE INDEX … WHERE` predicates, `INSERT` rows, `UPDATE … SET … = 'newvalue'`,
+  or any other place the literal is parsed as an enum. PG raises "unsafe use of
+  new value". Either split into two migrations (one adds the value, the next
+  uses it), or write the migration to not reference the new value (a looser
+  WHERE clause, no enum-typed defaults). This bit migration 015 — see commits
+  `de2c091` → `9fa58ba`.
+- Signed artifacts placed under `deploy/` must be paired with a `-text` rule
+  in `.gitattributes` so Git never converts line endings (signatures are
+  computed over raw file bytes).
+
 ## Test Coverage (current state — all green in CI)
 | Package | File | Tests |
 |---|---|---|
-| `internal/agent` | `*_test.go` (8 files) | 90 tests: allowlist verification, executor hardening (allowlist + root rejection, HostConfig baseline, tmpfs presence, CUPS device mount, opt-out gate ordering and fail-closed), hardware detection, opt-out store concurrency, printer detection (Unix + Windows), profile scheduling, telemetry signing |
+| `internal/agent` | `*_test.go` (8 files) | 91 tests: allowlist verification, executor hardening (allowlist + root rejection, HostConfig baseline, tmpfs presence, CUPS device mount, USB printer device mapping, opt-out gate ordering and fail-closed), hardware detection, opt-out store concurrency, printer detection (Unix + Windows), profile scheduling, telemetry signing |
 | `internal/types` | `workload_test.go` | 3 tests: IsValid coverage, ParseMarketplaceWorkloadType round-trip and unknown-rejection |
 | `internal/portal` | `middleware_test.go` | Ed25519 token create/verify, tampered sig, expiry, RequireAuth redirect |
 | `internal/portal` | `handlers_test.go` | 19 handler tests: login, register, job submission, dispute resolution |
@@ -218,9 +233,13 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
    from the allowlist but not consumed in the executor.
 
-9. **`DeviceUSBPrinter` not yet wired (carry-forward, resolve in B4)**:
-   `deviceMountsFor` recognizes the constant but produces no mapping.
-   `PrinterInfo.ConnectionPath` needs threading through `ContainerSpec`.
+9. **`DeviceUSBPrinter` device-mapping half resolved (B4 commit 1 · `b1500f6`)**:
+   `ContainerSpec.ConnectionPath` field added; `deviceMountsFor` on Unix now
+   produces a `DeviceMapping` with rwm cgroup permissions when the path is
+   non-empty. Empty path produces no mapping (defensive). Windows stub takes
+   the new parameter and ignores it (Windows print is B8 territory). Wiring
+   upstream `PrinterInfo.ConnectionPath` to `ContainerSpec.ConnectionPath` at
+   job-poll time remains for B4 commits 3+.
 
 10. **`FindMatch` opt-out filter** — RESOLVED `fe83d19` (B6 commit #4): `NodeEntry`
     now carries opt-out state refreshed by `handleHeartbeat`; FindMatch maps
@@ -315,16 +334,21 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     Removes the SmartScreen "Unknown publisher" warning that currently blocks
     non-technical participants.
 
-20. **Sign-verify roundtrip check on `mustEd25519Key` startup** (NEW, Dev XVI):
-    Defensive measure catching malformed ed25519 keys at boot rather than at
-    first signature verify. Login broke during Dev XVI because
-    `SESSION_PRIVATE_KEY` had been generated as 64 raw random bytes rather
-    than via `ed25519.GenerateKey` — bytes 32–63 didn't match the seed-derived
-    public key, so every signature failed verification despite the key passing
-    length checks. Fix is a few lines in `cmd/portal/main.go`: after
-    hex-decoding to 64 bytes, sign a known message and verify with
-    `priv.Public()`. Refuse to start on failure with clear error. Apply the
-    same check to any other `mustEd25519Key` callers.
+20. **Sign-verify roundtrip check on `mustEd25519Key` startup** — RESOLVED Dev XVIII (`547374d`).
+    `mustEd25519Key` performs a sign-then-verify probe ("soholink-key-self-test-v1")
+    against the derived public key after the length check. Catches the
+    64-bytes-pass-length-but-public-half-doesn't-match-seed failure mode that
+    motivated this TODO. Codified as a coding convention so any future
+    asymmetric-key loader picks up the same check.
+
+21. **GitHub Actions Node.js 20 deprecation deadline 2026-06-02**: `actions/setup-go@v5`
+    and `actions/checkout@v4` both run on Node.js 20, which GitHub will force to
+    Node.js 24 starting 2026-06-02. After that date these actions either auto-upgrade
+    their runtime or fail. Plan: before 2026-06-02, check each action in
+    `.github/workflows/ci.yml` for a Node 24-compatible version (typically a major
+    bump or a patch release) and update the pins. Workaround if anything breaks
+    before the upgrade: set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` env var on
+    the runner. Target the upgrade by 2026-05-29 (one-week buffer).
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -447,6 +471,8 @@ These have caused bugs before — read before touching related code:
 - JSON struct tags always snake_case
 - `RequireAuth(sm, handler)` — auth wraps all protected routes; staff-only routes additionally check `is_staff` from DB
 - `context.Background()` in deferred cleanups that must outlive the request context
+- Signed artifacts (allowlists, signed JSON, etc.) must be marked `-text` in `.gitattributes` so Git never converts line endings — signatures are computed over raw file bytes and any LF↔CRLF translation breaks verification (see `deploy/allowlist/*.json` in `.gitattributes`).
+- Any function that loads an asymmetric private key from env (e.g. `mustEd25519Key`) must perform a sign-then-verify roundtrip on a constant probe message before returning. Catches the failure mode where the byte length is valid but the embedded public-key half doesn't correspond to the seed.
 
 ## Key Design Decisions
 **Identity:** Single `participants` table — every account can contribute nodes, submit
@@ -584,12 +610,30 @@ explicit field comment documenting that `FindMatch` does not yet filter on it
 8 new unit tests across `internal/types` (3) and `internal/orchestrator` (5).
 Defense 3 deferred to B7 (see TODO 13).
 
-### Sub-phase B4 — Print Job Confirmation Flow
+### Sub-phase B4 — Print Job Confirmation Flow (in progress, Dev XVIII)
 Pending-confirmation state for print workloads. Tray notification + portal page surface
 job spec to contributor with explicit acknowledgment text. Acceptance logged with
 timestamp + spec hash. Decline → orchestrator routes to next printer node. Auto-decline
 timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec` so
-`DeviceUSBPrinter` finally produces a device mapping (resolves TODO 11).
+`DeviceUSBPrinter` finally produces a device mapping (resolves TODO 9).
+
+- **Commit 1 (`b1500f6`)** — `ContainerSpec.ConnectionPath` field added; `deviceMountsFor`
+  on Unix consumes it and produces a `DeviceMapping` with rwm cgroup permissions when
+  non-empty. Windows stub takes the new parameter and ignores it. New table-driven
+  test `TestBuildHostConfig_USBPrinterDeviceMapping` (populated + empty cases,
+  skips on Windows like the existing CUPS test).
+- **Commit 2 (`de2c091` corrected by `9fa58ba`)** — Migration 015: `awaiting_confirmation`
+  and `declined` `job_status` values; `printer_id`, `spec_hash`, `confirmed_at`,
+  `declined_at`, `confirmation_deadline` columns on `jobs`; partial index for the
+  auto-decline sweeper. `(node_id, printer_id)` pairing enforced at application
+  layer, not by composite FK (cascade semantics conflict with the existing
+  `node_id` FK from migration 001). Initial commit had a same-transaction enum
+  reference in the index predicate (PG "unsafe use of new value" error); the
+  follow-up corrected to `WHERE confirmation_deadline IS NOT NULL`. Schema-only:
+  no code reads or writes the new columns yet — behavior unchanged until commit 3.
+- **Remaining**: dispatcher writes pending state with spec hash + assigned printer;
+  agent fills `ConnectionPath` from local `PrinterInfo` at job-poll; portal
+  `/jobs/<id>/confirm` page; orchestrator decline reroute; auto-decline sweeper.
 
 ### Sub-phase B5 — Long-Running Job Lifecycle
 Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
@@ -730,6 +774,24 @@ separately this session — `SESSION_PRIVATE_KEY` was malformed (bytes 32–63
 didn't match seed-derived public key); rotated via `scripts/genkey/main.go`,
 `.env` only, no code commit needed. See TODO 20 for proposed defensive
 sign-verify roundtrip check at portal startup.
+
+### Deployment checkpoint — `4c76919` (2026-05-14, Dev XVIII)
+Eight commits, no production deploy. **B small wins**: gitignored dev allowlist
+keys with `.gitattributes -text` rule for signed-artifact integrity (`a2a8e3a`),
+Ed25519 sign-verify roundtrip on portal key load (`547374d`, closes TODO 20),
+near-white installer bitmap backgrounds for wizard text legibility (`ff35b8b`).
+**B4 commits 1–2**: `ContainerSpec.ConnectionPath` threading through
+`deviceMountsFor` to produce USB printer `DeviceMapping` on Unix (`b1500f6`,
+resolves device-mapping half of TODO 9); migration 015 for the print job
+confirmation lifecycle (`de2c091`, corrected by `9fa58ba`). **CI fix**: workflow
+Go version drift resolved via `go-version-file: go.mod` (`4c76919`) — green CI
+restored. **Process record**: Dev XVII handoff doc landed at
+`docs/handoffs/dev-xvii.md` (`97b3cef`); `docs/handoffs/` is now the canonical
+location.
+
+Production state unchanged from Dev XVII. Migration 015 will apply at next
+orchestrator restart but behavior is unchanged until B4 commits 3+ ship the
+lifecycle code. Service-start blocker remains open on TODO 19 (SignPath).
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
