@@ -52,6 +52,16 @@ ALTER TABLE jobs
 --   SELECT id FROM jobs
 --   WHERE status = 'awaiting_confirmation'
 --     AND confirmation_deadline < NOW()
+--
+-- We deliberately use `WHERE confirmation_deadline IS NOT NULL` rather
+-- than `WHERE status = 'awaiting_confirmation'` to avoid referencing
+-- a newly-added enum value in the same transaction that adds it —
+-- PostgreSQL rejects that with "unsafe use of new value" even on PG
+-- 12+ (the restriction applies to USING the value, regardless of
+-- whether it was added in the same transaction). The looser
+-- predicate is functionally equivalent for the sweeper: the candidate
+-- set after the deadline lookup is small, and the in-memory status
+-- filter is cheap.
 CREATE INDEX idx_jobs_confirmation_deadline
   ON jobs (confirmation_deadline)
-  WHERE status = 'awaiting_confirmation';
+  WHERE confirmation_deadline IS NOT NULL;
