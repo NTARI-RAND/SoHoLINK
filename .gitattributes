@@ -1,0 +1,4 @@
+# Signed artifacts — never convert line endings; signatures are
+# computed over raw file bytes and any LF↔CRLF translation breaks
+# signature verification.
+deploy/allowlist/*.json -text

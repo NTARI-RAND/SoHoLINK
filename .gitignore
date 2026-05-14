@@ -64,6 +64,10 @@ mobile/flutter-app/android/local.properties
 
 # Private keys
 *.pem
+*.priv
+
+# Dev-only allowlist artifacts (regenerated via scripts/allowlist-genkey)
+/allowlist-dev*
 
 # Environment files
 .env*
