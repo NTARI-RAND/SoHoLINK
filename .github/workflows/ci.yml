@@ -29,7 +29,13 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          # Read the Go version from go.mod so the workflow tracks the
+          # project's source-of-truth. Avoids the setup-go cache-key
+          # collision that fires when go-version drifts below what
+          # go.mod requires (Go auto-downloads the newer toolchain at
+          # build time; cache restoration then collides on toolchain
+          # files already present on disk).
+          go-version-file: go.mod
 
       - name: Verify build
         env:
