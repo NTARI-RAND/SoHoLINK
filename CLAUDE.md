@@ -93,7 +93,7 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–016
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–017
   network/        ← WireGuard bootstrapper (stub)
 web/
   templates/      ← layout.html, index.html, login.html, register.html,
@@ -130,9 +130,10 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 011 | `011_participants` | Unified `participants` table replacing `providers`+`consumers`; `participant_id` FKs on nodes/jobs/disputes |
 | 012 | `012_container_image` | `container_image TEXT` nullable column on `jobs` |
 | 013 | `013_node_registration_tokens` | `node_registration_tokens` table: single-use installer tokens tied to a participant |
-| 014 | `014_opt_out_and_printers` | `opt_out_compute`, `opt_out_storage`, `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`; `node_printers` table (composite PK `(node_id, printer_id)`, FK → `nodes(id)` ON DELETE CASCADE, `enabled` DEFAULT FALSE, `detected_at`); partial index `idx_node_printers_enabled WHERE enabled = TRUE` |
+| 014 | `014_opt_out_and_printers` | `opt_out_compute`, `opt_out_storage`, `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`; `node_printers` table (columns: `printer_id TEXT`, `printer_name TEXT NOT NULL`, `enabled BOOLEAN DEFAULT FALSE`, `detected_at`; composite PK `(node_id, printer_id)`, FK → `nodes(id)` ON DELETE CASCADE); partial index `idx_node_printers_enabled WHERE enabled = TRUE` |
 | 015 | `015_print_job_confirmation` | `awaiting_confirmation` and `declined` `job_status` values; `printer_id`, `spec_hash`, `confirmed_at`, `declined_at`, `confirmation_deadline` columns on `jobs`; partial index `idx_jobs_confirmation_deadline WHERE confirmation_deadline IS NOT NULL` for the auto-decline sweeper. `(node_id, printer_id)` pairing enforced at application layer — composite FK avoided due to cascade-semantics conflict with the existing `node_id` FK. See "Migration writing rules" below. |
 | 016 | `016_print_workload_types` | `print_traditional` and `print_3d` added to `workload_type` enum. Values consumed by B4 commit 3 dispatcher and existing `FindMatch` opt-out filter. Enum values cannot be removed by rollback — snapshot restore required (see down migration). |
+| 017 | `017_job_node_declines` | `job_node_declines` table: tracks which nodes have declined each job; composite PK `(job_id, node_id)`, both FKs `ON DELETE CASCADE`. Used by `RerouteDeclinedJob` to populate `ExcludedNodeIDs` in `FindMatch`, preventing re-dispatch to a node that already declined. |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -173,6 +174,7 @@ golang-migrate is idempotent — safe to run repeatedly.
 | `internal/agent` | `allowlist_test.go` (Sign) | 2 additional tests: TestAllowlist_SignVerifyRoundTrip, TestAllowlist_SignRejectsBadKey |
 | `internal/scheduler` | `scheduler_test.go` | 8 scheduler tests: classScore, freshnessScore, ordering, tier size, insufficient candidates |
 | `test/integration` | `phase1_test.go` | End-to-end: migrations, SubmitJob, token round-trip, Stripe (skipped without key) |
+| `internal/orchestrator` | `orchestrator_integration_test.go` | 6 integration tests (build tag: integration): `awaiting_confirmation` write path with printer resolve, registry/DB drift error, compute scheduled path, flag-off print path, `RerouteDeclinedJob` success + no-candidates → failed |
 
 ## Local Dev Services
 All running in Docker on localhost:
@@ -234,15 +236,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    `EgressOutbound` allows arbitrary outbound. `AllowedDestinations` field is fetched
    from the allowlist but not consumed in the executor.
 
-9. **`DeviceUSBPrinter` device-mapping half resolved (B4 commit 1 · `b1500f6`)**:
-   `ContainerSpec.ConnectionPath` field added; `deviceMountsFor` on Unix now
-   produces a `DeviceMapping` with rwm cgroup permissions when the path is
-   non-empty. Empty path produces no mapping (defensive). Windows stub takes
-   the new parameter and ignores it (Windows print is B8 territory). Wiring
-   upstream `PrinterInfo.ConnectionPath` to `ContainerSpec.ConnectionPath` at
-   job-poll time remains for a future B4 follow-up — the agent's poll handler must
-   surface `printer_id` and the agent must look up the corresponding
-   `PrinterInfo.ConnectionPath`. Not addressed by commit 3 (dispatcher-only).
+9. **`DeviceUSBPrinter` device-mapping RESOLVED (B4 commits 1 + agent wiring · `b1500f6`, `0431188`)**:
+   `ContainerSpec.ConnectionPath` field + `deviceMountsFor` wired in commit 1. Agent-side wiring
+   completed in `0431188`: `handleGetJobs` in `internal/api/nodes.go` surfaces `printer_id` from
+   the DB (with `omitempty` for backward compat); `internal/agent/printers.go` gains
+   `ResolveConnectionPath` (pure function, 3 unit tests); `cmd/agent/main.go`'s `runJob` calls
+   `ResolveConnectionPath` before starting the telemetry goroutine and passes the result as
+   `ContainerSpec.ConnectionPath`. Also fixes a pre-existing goroutine leak where image-empty
+   and printer-not-found early returns came after the goroutine start. TODO 9 fully closed.
 
 10. **`FindMatch` opt-out filter** — RESOLVED `fe83d19` (B6 commit #4): `NodeEntry`
     now carries opt-out state refreshed by `handleHeartbeat`; FindMatch maps
@@ -359,15 +360,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     agent will need this anyway since print spooler discrimination is
     platform-specific.
 
-23. **`SubmitJob` DB-path integration test gap**: B4 commit 3's `canonicalJobSpecHash`
-    and flag-off gate are covered by unit tests, but the `awaiting_confirmation` write
-    path requires a real Postgres connection and is not exercised. The orchestrator
-    package has no test-DB helper; existing tests in
-    `internal/orchestrator/orchestrator_test.go` are all in-memory. Needs an
-    `_integration_test.go` build-tagged file with a Postgres fixture (matching the
-    `test/integration/` Phase 1 pattern) covering: flag-on + print + printer resolves,
-    flag-on + print + no enabled printer (registry-DB drift error), flag-on + compute
-    (scheduled path), flag-off + print (scheduled path). Carry-forward from TODO 11.
+23. **`SubmitJob` DB-path integration test gap** — RESOLVED `dc1de1d` (Dev XXI): Six integration
+    tests in `internal/orchestrator/orchestrator_integration_test.go` (build tag: integration).
+    Covers: `awaiting_confirmation` write path with printer resolve (verifies `printer_id`,
+    32-byte `spec_hash`, future `confirmation_deadline`), registry/DB drift error, compute
+    scheduled path, flag-off print scheduled path, `RerouteDeclinedJob` success path, and
+    `RerouteDeclinedJob` no-candidates → failed. All six tests green against local Postgres.
+    Also surfaced that `printer_name TEXT NOT NULL` was missing from the migration 014
+    description in CLAUDE.md (now corrected). Carry-forward from TODO 11 closed.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -636,7 +636,7 @@ explicit field comment documenting that `FindMatch` does not yet filter on it
 8 new unit tests across `internal/types` (3) and `internal/orchestrator` (5).
 Defense 3 deferred to B7 (see TODO 13).
 
-### Sub-phase B4 — Print Job Confirmation Flow (in progress, Dev XX)
+### Sub-phase B4 — Print Job Confirmation Flow (commits 1–5 + test coverage complete, Dev XXI)
 Pending-confirmation state for print workloads. Tray notification + portal page surface
 job spec to contributor with explicit acknowledgment text. Acceptance logged with
 timestamp + spec hash. Decline → orchestrator routes to next printer node. Auto-decline
@@ -665,12 +665,29 @@ timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec`
   and `confirmation_deadline` (now + 4h, hardcoded). With the flag off, identical to
   scheduled-path; production default keeps the flag off. Migration 016 adds
   `print_traditional`/`print_3d` to the `workload_type` enum. Six modified files +
-  two new migrations; 4 new unit tests (3 hash determinism, 1 flag-off gate
-  behavior). Integration coverage of the `awaiting_confirmation` write path deferred
-  (TODO 23).
-- **Remaining**: agent-side `printer_id` → `ConnectionPath` wiring at job-poll;
-  portal `/jobs/<id>/confirm` page (commit 4); orchestrator decline reroute
-  (commit 5); auto-decline sweeper (commit 6).
+  two new migrations; 4 new unit tests (3 hash determinism, 1 flag-off gate behavior).
+- **Commit 4 (`93d5381`)** — Portal `/provider/job/{id}/confirm` page (GET + POST).
+  Contributor sees job spec, spec fingerprint, deadline; accepts (→ `scheduled`) or
+  declines (→ `declined` + `job_node_declines` row, transaction-guarded). Race
+  detection via `RowsAffected() == 0`. `JobConfirmData` struct; two new routes;
+  `contributor_job_confirm.html` template. Imports `"errors"` and `"github.com/jackc/pgx/v5"`.
+- **Agent wiring (`0431188`)** — `printer_id` surfaced in `handleGetJobs` poll response
+  (`omitempty` for backward compat); `ResolveConnectionPath` pure function in
+  `internal/agent/printers.go` maps printer ID → `ConnectionPath`; `runJob` in
+  `cmd/agent/main.go` calls it before the telemetry goroutine start (also fixes
+  pre-existing goroutine leak). 3 new agent unit tests. Closes TODO 9.
+- **Commit 5 (`ad2dda2`)** — Decline reroute + worker loop. Migration 017 adds
+  `job_node_declines` table (composite PK, both FKs ON DELETE CASCADE).
+  `MatchRequest.ExcludedNodeIDs` + exclusion map in `FindMatch`. `RerouteDeclinedJob`
+  reads declines, calls FindMatch with exclusions, re-dispatches or fails job.
+  `StartDeclineRerouteLoop` 30s ticker goroutine. Also wires `StartEvictionLoop`
+  (defined Dev XV, never called from `main.go`). 1 new unit test.
+- **Integration coverage (`dc1de1d`)** — `orchestrator_integration_test.go` (build tag:
+  integration): 6 tests against real Postgres covering all SubmitJob print-gate paths
+  and both RerouteDeclinedJob outcomes. Closes TODO 23.
+- **Remaining**: auto-decline sweeper (commit 6) — background goroutine finding
+  `awaiting_confirmation` rows past `confirmation_deadline`, flipping to `declined`;
+  `idx_jobs_confirmation_deadline` partial index already in place (migration 015).
 
 ### Sub-phase B5 — Long-Running Job Lifecycle
 Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
@@ -857,6 +874,19 @@ hash). Eight files (six modified + two new migrations); 4 new unit tests. Flag s
 off in production until at least commit 5 lands. Migration 016 will apply at the next
 orchestrator restart and is a no-op until application code references the new enum
 values (which it does, gated on the flag).
+
+### Deployment checkpoint — `dc1de1d` (2026-05-16, Dev XXI)
+Four commits, no production deploy (production still at `0115d41`; flag remains off).
+**B4 commit 4 (`93d5381`)**: portal confirm page for print jobs (`GET`/`POST /provider/job/{id}/confirm`).
+**Agent wiring (`0431188`)**: `printer_id` threaded through job-poll → `ResolveConnectionPath` →
+`ContainerSpec.ConnectionPath`; goroutine leak in `runJob` fixed; 3 agent unit tests. Closes TODO 9.
+**B4 commit 5 (`ad2dda2`)**: decline reroute — migration 017 (`job_node_declines`), `ExcludedNodeIDs`
+on `FindMatch`, `RerouteDeclinedJob`, `StartDeclineRerouteLoop`, `StartEvictionLoop` wired. 1 new unit test.
+**TODO 23 (`dc1de1d`)**: 6 integration tests in `internal/orchestrator/orchestrator_integration_test.go`
+against real Postgres; all green. `printer_name TEXT NOT NULL` missing from migration 014 CLAUDE.md
+description corrected. Do not deploy until B4 commit 6 (auto-decline sweeper) is ready and reviewed — the
+portal decline action without the sweeper leaves jobs in `awaiting_confirmation` indefinitely if the 4-hour
+window expires without a sweeper running.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
