@@ -93,7 +93,7 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–015
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–016
   network/        ← WireGuard bootstrapper (stub)
 web/
   templates/      ← layout.html, index.html, login.html, register.html,
@@ -132,6 +132,7 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 013 | `013_node_registration_tokens` | `node_registration_tokens` table: single-use installer tokens tied to a participant |
 | 014 | `014_opt_out_and_printers` | `opt_out_compute`, `opt_out_storage`, `opt_out_printing`, `opt_out_version`, `opt_out_updated_at` on `nodes`; `node_printers` table (composite PK `(node_id, printer_id)`, FK → `nodes(id)` ON DELETE CASCADE, `enabled` DEFAULT FALSE, `detected_at`); partial index `idx_node_printers_enabled WHERE enabled = TRUE` |
 | 015 | `015_print_job_confirmation` | `awaiting_confirmation` and `declined` `job_status` values; `printer_id`, `spec_hash`, `confirmed_at`, `declined_at`, `confirmation_deadline` columns on `jobs`; partial index `idx_jobs_confirmation_deadline WHERE confirmation_deadline IS NOT NULL` for the auto-decline sweeper. `(node_id, printer_id)` pairing enforced at application layer — composite FK avoided due to cascade-semantics conflict with the existing `node_id` FK. See "Migration writing rules" below. |
+| 016 | `016_print_workload_types` | `print_traditional` and `print_3d` added to `workload_type` enum. Values consumed by B4 commit 3 dispatcher and existing `FindMatch` opt-out filter. Enum values cannot be removed by rollback — snapshot restore required (see down migration). |
 
 To apply all migrations: run the Phase 1 integration test with DATABASE_URL set:
 ```
@@ -239,7 +240,9 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    non-empty. Empty path produces no mapping (defensive). Windows stub takes
    the new parameter and ignores it (Windows print is B8 territory). Wiring
    upstream `PrinterInfo.ConnectionPath` to `ContainerSpec.ConnectionPath` at
-   job-poll time remains for B4 commits 3+.
+   job-poll time remains for a future B4 follow-up — the agent's poll handler must
+   surface `printer_id` and the agent must look up the corresponding
+   `PrinterInfo.ConnectionPath`. Not addressed by commit 3 (dispatcher-only).
 
 10. **`FindMatch` opt-out filter** — RESOLVED `fe83d19` (B6 commit #4): `NodeEntry`
     now carries opt-out state refreshed by `handleHeartbeat`; FindMatch maps
@@ -341,14 +344,30 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     motivated this TODO. Codified as a coding convention so any future
     asymmetric-key loader picks up the same check.
 
-21. **GitHub Actions Node.js 20 deprecation deadline 2026-06-02**: `actions/setup-go@v5`
-    and `actions/checkout@v4` both run on Node.js 20, which GitHub will force to
-    Node.js 24 starting 2026-06-02. After that date these actions either auto-upgrade
-    their runtime or fail. Plan: before 2026-06-02, check each action in
-    `.github/workflows/ci.yml` for a Node 24-compatible version (typically a major
-    bump or a patch release) and update the pins. Workaround if anything breaks
-    before the upgrade: set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` env var on
-    the runner. Target the upgrade by 2026-05-29 (one-week buffer).
+21. **GitHub Actions Node.js 20 deprecation deadline 2026-06-02** — RESOLVED (Dev XIX,
+    `0dd2d77`). `actions/checkout` and `actions/setup-go` bumped to v6 ahead of
+    GitHub's 2026-06-02 Node 20 end-of-life. CI green.
+
+22. **Printer-type discrimination missing in `node_printers`**: Migration 014's
+    `node_printers` table has no `printer_type` column. The B4 commit 3 dispatcher
+    picks the lowest `printer_id` lexicographically among enabled printers regardless
+    of whether the workload is `print_traditional` or `print_3d`. A node enabled for
+    one will match jobs for the other. Acceptable for the single-printer-per-node
+    pilot; correct fix is a migration adding `printer_type` (enum: `traditional` /
+    `threed`) populated from the agent's `PrinterInfo` detection, and a `WHERE`
+    clause filter in the printer-resolve query. Tracked for B8 — Windows-native print
+    agent will need this anyway since print spooler discrimination is
+    platform-specific.
+
+23. **`SubmitJob` DB-path integration test gap**: B4 commit 3's `canonicalJobSpecHash`
+    and flag-off gate are covered by unit tests, but the `awaiting_confirmation` write
+    path requires a real Postgres connection and is not exercised. The orchestrator
+    package has no test-DB helper; existing tests in
+    `internal/orchestrator/orchestrator_test.go` are all in-memory. Needs an
+    `_integration_test.go` build-tagged file with a Postgres fixture (matching the
+    `test/integration/` Phase 1 pattern) covering: flag-on + print + printer resolves,
+    flag-on + print + no enabled printer (registry-DB drift error), flag-on + compute
+    (scheduled path), flag-off + print (scheduled path). Carry-forward from TODO 11.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -390,9 +409,9 @@ These have caused bugs before — read before touching related code:
 **Workload type vocabulary (post-B3):**
 - Two enums, by design — they evolve independently:
   - `types.MarketplaceWorkloadType` (in `internal/types/workload.go`) is the
-    customer-facing enum. Five values: `app_hosting`, `batch_compute`, `ai_inference`,
-    `object_storage`, `cdn_edge`. Constants prefixed `Marketplace*`. Values match the
-    PostgreSQL `workload_type` enum from migration 001 exactly.
+    customer-facing enum. Seven values: `app_hosting`, `batch_compute`, `ai_inference`,
+    `object_storage`, `cdn_edge`, `print_traditional`, `print_3d`. Constants prefixed
+    `Marketplace*`. Values match the PostgreSQL `workload_type` enum (migrations 001 + 016).
   - `agent.WorkloadType` (in `internal/agent/`) is the hardware-affinity / opt-out
     enum: `compute`, `storage`, `print_traditional`, `print_3d`. Note: there is
     NO `agent.WorkloadPrinting` constant — both print constants share the single
@@ -411,9 +430,16 @@ These have caused bugs before — read before touching related code:
   misbehaving or compromised orchestrator that mislabels a job's workload type
   cannot route past a contributor's opt-out — the agent ignores the wire claim
   entirely. Mirror this on any future similar gate.
-- **Print is deliberately out of the marketplace enum.** Print's submission flow
-  is consent-per-job, not anonymous-matching. Decision deferred to whichever phase
-  first needs to submit print jobs through the marketplace API (likely B4 or B6).
+- **Print jobs require contributor consent per job, not anonymous matching.**
+  `print_traditional` and `print_3d` are in the marketplace enum (migration 016)
+  and dispatched by the same `SubmitJob` path as compute/storage, but routed through
+  a confirmation lifecycle when `PRINT_CONFIRMATION_ENABLED` is set. With the flag
+  off (production default), print jobs write `status='scheduled'` and behave
+  identically to compute/storage. With the flag on, `SubmitJob` writes
+  `awaiting_confirmation` with `printer_id`, `spec_hash`, and `confirmation_deadline`
+  populated; the agent's `scheduled`-filtered poll never sees these jobs until later
+  B4 commits move them forward. Do not flip the flag in production until at least
+  B4 commit 5 (decline reroute) is deployed.
 - **Validation lives on a method, not inline.** `SubmitJobRequest.Validate()`
   exists so tests can exercise validation logic without constructing an
   `Orchestrator`. Tests that require "this constructor must never be hardened"
@@ -610,7 +636,7 @@ explicit field comment documenting that `FindMatch` does not yet filter on it
 8 new unit tests across `internal/types` (3) and `internal/orchestrator` (5).
 Defense 3 deferred to B7 (see TODO 13).
 
-### Sub-phase B4 — Print Job Confirmation Flow (in progress, Dev XVIII)
+### Sub-phase B4 — Print Job Confirmation Flow (in progress, Dev XX)
 Pending-confirmation state for print workloads. Tray notification + portal page surface
 job spec to contributor with explicit acknowledgment text. Acceptance logged with
 timestamp + spec hash. Decline → orchestrator routes to next printer node. Auto-decline
@@ -631,9 +657,20 @@ timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec`
   reference in the index predicate (PG "unsafe use of new value" error); the
   follow-up corrected to `WHERE confirmation_deadline IS NOT NULL`. Schema-only:
   no code reads or writes the new columns yet — behavior unchanged until commit 3.
-- **Remaining**: dispatcher writes pending state with spec hash + assigned printer;
-  agent fills `ConnectionPath` from local `PrinterInfo` at job-poll; portal
-  `/jobs/<id>/confirm` page; orchestrator decline reroute; auto-decline sweeper.
+- **Commit 3 (`0115d41`)** — Print confirmation dispatcher gate. When
+  `PRINT_CONFIRMATION_ENABLED` is set and the workload is `print_traditional` or
+  `print_3d`, `SubmitJob` writes `status='awaiting_confirmation'` with `printer_id`
+  (resolved from `node_printers`), `spec_hash` (SHA-256 over contributor-visible spec
+  fields including container image; `ConsumerID` excluded as orchestrator-internal),
+  and `confirmation_deadline` (now + 4h, hardcoded). With the flag off, identical to
+  scheduled-path; production default keeps the flag off. Migration 016 adds
+  `print_traditional`/`print_3d` to the `workload_type` enum. Six modified files +
+  two new migrations; 4 new unit tests (3 hash determinism, 1 flag-off gate
+  behavior). Integration coverage of the `awaiting_confirmation` write path deferred
+  (TODO 23).
+- **Remaining**: agent-side `printer_id` → `ConnectionPath` wiring at job-poll;
+  portal `/jobs/<id>/confirm` page (commit 4); orchestrator decline reroute
+  (commit 5); auto-decline sweeper (commit 6).
 
 ### Sub-phase B5 — Long-Running Job Lifecycle
 Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
@@ -789,9 +826,37 @@ restored. **Process record**: Dev XVII handoff doc landed at
 `docs/handoffs/dev-xvii.md` (`97b3cef`); `docs/handoffs/` is now the canonical
 location.
 
-Production state unchanged from Dev XVII. Migration 015 will apply at next
-orchestrator restart but behavior is unchanged until B4 commits 3+ ship the
-lifecycle code. Service-start blocker remains open on TODO 19 (SignPath).
+Production state unchanged from Dev XVII. Migration 015 applied at the Dev XIX
+orchestrator rebuild. Dispatcher gate (B4 commit 3) shipped in Dev XX (see checkpoint
+below); production behavior remains unchanged until `PRINT_CONFIRMATION_ENABLED` is
+flipped. Service-start blocker remains open on TODO 19 (SignPath).
+
+### Deployment checkpoint — `9af4c16` (2026-05-15, Dev XIX)
+Two commits, no new features; recovery + hardening session. **SPIRE recovery**: a
+56-hour host outage (router and machine shared a circuit, brought down by a
+router-off sleep test) left the agent's cached trust bundle stale; production was
+silently in SPIFFE-degraded mode for ~34 hours before symptoms surfaced. Recovery
+sequence — evict attested node, generate new join token, redirect workload entry,
+rotate `.env`, wipe `spire_agent_data` volume contents, restart — restored stack to
+healthy. Detailed runbook in `docs/handoffs/dev-xix.md`. **`ca_ttl` 24h → 720h
+(`9af4c16`)**: widens manual-recovery window to 30 days; does not eliminate the
+recurrence vector (re-attestable node attestor is the proper fix, on the TODO list).
+**CI Node 24 bump (`0dd2d77`)**: `actions/checkout` and `actions/setup-go` bumped
+to v6 ahead of GitHub's 2026-06-02 deadline (closes TODO 21). **Orchestrator
+rebuild**: live image was a 2026-05-09 snapshot missing migration 015 and commit
+`b1500f6`; rebuilt to current master, applied migration 015. Tagged prior image
+`:pre-rebuild` for rollback. Production: `api.soholink.org/health` 200 (genuine,
+no longer degraded-mode masked); all seven containers healthy.
+
+### Deployment checkpoint — `0115d41` (2026-05-16, Dev XX)
+One commit, no production behavior change (flag-gated). **B4 commit 3 (`0115d41`)**:
+print confirmation dispatcher gate behind `PRINT_CONFIRMATION_ENABLED`; migration 016
+adds `print_traditional`/`print_3d` to the `workload_type` enum; `canonicalJobSpecHash`
+helper added for spec-drift detection (portal confirm page, commit 4, will use this
+hash). Eight files (six modified + two new migrations); 4 new unit tests. Flag stays
+off in production until at least commit 5 lands. Migration 016 will apply at the next
+orchestrator restart and is a no-op until application code references the new enum
+values (which it does, gated on the flag).
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
