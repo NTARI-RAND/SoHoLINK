@@ -1,0 +1,112 @@
+{{define "content"}}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Provider</div>
+      <h2>Print Job Confirmation</h2>
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem;">{{.Email}}</span>
+  </div>
+
+  {{if ne .Status "awaiting_confirmation"}}
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Status</div>
+    <p style="margin:0;">
+      This job has already been
+      {{if eq .Status "scheduled"}}<strong>accepted</strong>{{else}}<strong>{{.Status}}</strong>{{end}}.
+      No further action is required.
+    </p>
+  </div>
+  {{else}}
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Deadline</div>
+    <p style="margin:0;">
+      Respond by <strong>{{.ConfirmationDeadline.Format "2006-01-02 15:04 UTC"}}</strong>.
+      Jobs not confirmed by this time will be automatically declined and rerouted.
+    </p>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Job Specification</div>
+    <div class="stat-grid" style="margin-top:0.75rem;">
+      <div class="stat-cell">
+        <div class="stat-value"><code>{{slice .JobID 0 8}}&hellip;</code></div>
+        <div class="stat-label">Job ID</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{.WorkloadType}}</div>
+        <div class="stat-label">Workload Type</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{.CPUCores}}</div>
+        <div class="stat-label">CPU Cores</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{.RAMMB}} MB</div>
+        <div class="stat-label">RAM</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{.StorageGB}} GB</div>
+        <div class="stat-label">Storage</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-value">{{if .GPURequired}}Yes{{else}}No{{end}}</div>
+        <div class="stat-label">GPU Required</div>
+      </div>
+      {{if .CountryConstraint}}
+      <div class="stat-cell">
+        <div class="stat-value">{{.CountryConstraint}}</div>
+        <div class="stat-label">Country</div>
+      </div>
+      {{end}}
+      <div class="stat-cell">
+        <div class="stat-value"><code style="font-size:0.8rem;">{{.PrinterID}}</code></div>
+        <div class="stat-label">Assigned Printer</div>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;">
+      <div class="section-label" style="margin-bottom:0.4rem;">Container Image</div>
+      <code style="word-break:break-all;font-size:0.85rem;">{{.ContainerImage}}</code>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Specification Fingerprint (SHA-256)</div>
+    <code style="word-break:break-all;font-size:0.78rem;color:var(--muted);display:block;margin-top:0.4rem;">{{.SpecHashHex}}</code>
+    <p style="font-size:0.78rem;color:var(--muted);margin:0.5rem 0 0;">
+      This fingerprint covers the fields above. It will not change after this page is presented.
+    </p>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Your Decision</div>
+    <p style="font-size:0.9rem;margin-bottom:1rem;">
+      By accepting, you confirm that your printer is ready and you agree to run this job
+      as specified above. Declining returns the job to the pool for rerouting.
+    </p>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+      <form method="POST" action="/provider/job/{{.JobID}}/confirm" style="display:inline;">
+        <input type="hidden" name="action" value="confirm">
+        <button type="submit" class="btn" style="background:var(--accent);color:#fff;border:none;padding:0.5rem 1.5rem;border-radius:4px;cursor:pointer;font-size:0.95rem;">
+          Accept Job
+        </button>
+      </form>
+      <form method="POST" action="/provider/job/{{.JobID}}/confirm" style="display:inline;">
+        <input type="hidden" name="action" value="decline">
+        <button type="submit" class="btn" style="background:transparent;color:var(--muted);border:1px solid var(--muted);padding:0.5rem 1.5rem;border-radius:4px;cursor:pointer;font-size:0.95rem;">
+          Decline
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {{end}}
+
+  <a href="/provider/provision" style="color:var(--accent);font-size:0.9rem;">
+    &larr; Back to Dashboard
+  </a>
+</div>
+{{end}}
+{{template "layout" .}}

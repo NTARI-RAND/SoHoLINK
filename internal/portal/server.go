@@ -191,6 +191,24 @@ type JobStatusData struct {
 	IsAuthenticated bool
 }
 
+// JobConfirmData is the template data for contributor_job_confirm.html.
+type JobConfirmData struct {
+	Email                string
+	IsAuthenticated      bool
+	JobID                string
+	WorkloadType         string
+	ContainerImage       string
+	CPUCores             int
+	RAMMB                int
+	StorageGB            int
+	GPURequired          bool
+	CountryConstraint    string
+	PrinterID            string
+	SpecHashHex          string
+	ConfirmationDeadline time.Time
+	Status               string
+}
+
 // OptOutPageData is the template data for opt_out.html.
 type OptOutPageData struct {
 	IsAuthenticated bool
@@ -333,6 +351,10 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleGetOptOut)))
 	mux.Handle("POST /api/opt-out",
 		RequireAuth(sm, http.HandlerFunc(ps.handlePostOptOut)))
+	mux.Handle("GET /provider/job/{id}/confirm",
+		RequireAuth(sm, http.HandlerFunc(ps.handleJobConfirm)))
+	mux.Handle("POST /provider/job/{id}/confirm",
+		RequireAuth(sm, http.HandlerFunc(ps.handleJobConfirmAction)))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -1105,6 +1127,96 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	ps.renderTemplate(w, "consumer_job_status.html", data)
+}
+
+func (ps *PortalServer) handleJobConfirm(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var data JobConfirmData
+	data.Email = claims.Email
+	data.IsAuthenticated = true
+	data.JobID = jobID
+
+	var specHash []byte
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT j.workload_type, COALESCE(j.container_image, ''),
+		        COALESCE(j.cpu_cores, 0), COALESCE(j.ram_mb, 0), COALESCE(j.storage_gb, 0),
+		        j.gpu_required, COALESCE(j.country_constraint, ''),
+		        COALESCE(j.printer_id, ''), j.spec_hash,
+		        j.confirmation_deadline, j.status
+		 FROM jobs j
+		 JOIN nodes n ON n.id = j.node_id
+		 WHERE j.id = $1 AND n.participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(
+		&data.WorkloadType, &data.ContainerImage,
+		&data.CPUCores, &data.RAMMB, &data.StorageGB,
+		&data.GPURequired, &data.CountryConstraint,
+		&data.PrinterID, &specHash,
+		&data.ConfirmationDeadline, &data.Status,
+	)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	data.SpecHashHex = hex.EncodeToString(specHash)
+	ps.renderTemplate(w, "contributor_job_confirm.html", data)
+}
+
+func (ps *PortalServer) handleJobConfirmAction(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	// Re-verify ownership before any mutation.
+	var status string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT j.status
+		 FROM jobs j
+		 JOIN nodes n ON n.id = j.node_id
+		 WHERE j.id = $1 AND n.participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&status)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	// Already processed — show the current state.
+	if status != "awaiting_confirmation" {
+		http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
+		return
+	}
+
+	action := r.FormValue("action")
+	if action != "confirm" && action != "decline" {
+		http.Error(w, "invalid action", http.StatusBadRequest)
+		return
+	}
+
+	var query string
+	if action == "confirm" {
+		query = `UPDATE jobs SET status = 'scheduled'::job_status, confirmed_at = NOW()
+			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status`
+	} else {
+		query = `UPDATE jobs SET status = 'declined'::job_status, declined_at = NOW()
+			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status`
+	}
+	tag, execErr := ps.db.Pool.Exec(r.Context(), query, jobID)
+	if execErr != nil {
+		slog.Error("job confirm action failed", "job_id", jobID, "action", action, "error", execErr)
+		http.Error(w, "failed to update job", http.StatusInternalServerError)
+		return
+	}
+
+	// Zero rows means another request raced us — redirect to show current state.
+	if tag.RowsAffected() == 0 {
+		http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
 }
 
 func (ps *PortalServer) handleJobStatusStream(w http.ResponseWriter, r *http.Request) {
