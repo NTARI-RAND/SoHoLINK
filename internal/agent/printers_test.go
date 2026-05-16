@@ -91,3 +91,38 @@ func TestDetectPrinters_BothFail(t *testing.T) {
 		t.Fatalf("expected nil slice, got %v", printers)
 	}
 }
+
+func TestResolveConnectionPath_Empty(t *testing.T) {
+	printers := []PrinterInfo{{ID: "cups:laser", ConnectionPath: "/dev/usb/lp0"}}
+	path, err := ResolveConnectionPath("", printers)
+	if err != nil {
+		t.Fatalf("expected nil error for empty printerID, got %v", err)
+	}
+	if path != "" {
+		t.Fatalf("expected empty path for non-print job, got %q", path)
+	}
+}
+
+func TestResolveConnectionPath_Found(t *testing.T) {
+	printers := []PrinterInfo{
+		{ID: "usb:2C99", ConnectionPath: "/dev/ttyACM0"},
+		{ID: "cups:laser", ConnectionPath: "/dev/usb/lp0"},
+	}
+	path, err := ResolveConnectionPath("cups:laser", printers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if path != "/dev/usb/lp0" {
+		t.Fatalf("expected /dev/usb/lp0, got %q", path)
+	}
+}
+
+func TestResolveConnectionPath_NotFound(t *testing.T) {
+	printers := []PrinterInfo{
+		{ID: "cups:laser", ConnectionPath: "/dev/usb/lp0"},
+	}
+	_, err := ResolveConnectionPath("usb:2C99", printers)
+	if err == nil {
+		t.Fatal("expected error for unknown printer ID, got nil")
+	}
+}

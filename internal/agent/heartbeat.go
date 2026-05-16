@@ -28,9 +28,10 @@ type AgentConfig struct {
 
 // JobAssignment is a single entry returned by PollJobs.
 type JobAssignment struct {
-	JobID    string `json:"job_id"`
-	JobToken string `json:"job_token"`
-	Image    string `json:"container_image"`
+	JobID     string `json:"job_id"`
+	JobToken  string `json:"job_token"`
+	Image     string `json:"container_image"`
+	PrinterID string `json:"printer_id,omitempty"`
 }
 
 // HeartbeatAgent manages registration, heartbeating, and job polling

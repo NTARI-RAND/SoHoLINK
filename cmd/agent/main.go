@@ -317,6 +317,20 @@ func runJob(
 	hw agent.HardwareProfile,
 	job agent.JobAssignment,
 ) {
+	// Validate inputs before starting the telemetry goroutine so early returns
+	// cannot leak it.
+	if job.Image == "" {
+		slog.Warn("job has no container image — skipping execution", "job_id", job.JobID)
+		return
+	}
+
+	connectionPath, err := agent.ResolveConnectionPath(job.PrinterID, hw.Printers)
+	if err != nil {
+		slog.Warn("assigned printer not found locally — skipping print job",
+			"job_id", job.JobID, "printer_id", job.PrinterID, "error", err)
+		return
+	}
+
 	slog.Info("starting job", "job_id", job.JobID)
 
 	done := make(chan struct{})
@@ -340,15 +354,11 @@ func runJob(
 		}
 	}()
 
-	if job.Image == "" {
-		slog.Warn("job has no container image — skipping execution", "job_id", job.JobID)
-		return
-	}
-
 	spec := agent.ContainerSpec{
-		Image:    job.Image,
-		JobID:    job.JobID,
-		JobToken: job.JobToken,
+		Image:          job.Image,
+		JobID:          job.JobID,
+		JobToken:       job.JobToken,
+		ConnectionPath: connectionPath,
 		Caps: agent.CapProfile{
 			CPUEnabled: true,
 			CPUCores:   hw.CPUCores,

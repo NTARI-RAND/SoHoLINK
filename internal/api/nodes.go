@@ -83,9 +83,10 @@ type telemetryRequest struct {
 }
 
 type jobEntry struct {
-	JobID    string `json:"job_id"`
-	JobToken string `json:"job_token"`
-	Image    string `json:"container_image"`
+	JobID     string `json:"job_id"`
+	JobToken  string `json:"job_token"`
+	Image     string `json:"container_image"`
+	PrinterID string `json:"printer_id,omitempty"`
 }
 
 func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator.NodeRegistry) {
@@ -501,7 +502,8 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		}
 
 		rows, err := db.Pool.Query(r.Context(),
-			`SELECT id, COALESCE(job_token, ''), COALESCE(container_image, '') FROM jobs
+			`SELECT id, COALESCE(job_token, ''), COALESCE(container_image, ''), COALESCE(printer_id, '')
+			 FROM jobs
 			 WHERE node_id = $1 AND status = 'scheduled'::job_status`,
 			nodeID,
 		)
@@ -515,7 +517,7 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		var jobIDs []string
 		for rows.Next() {
 			var j jobEntry
-			if err := rows.Scan(&j.JobID, &j.JobToken, &j.Image); err != nil {
+			if err := rows.Scan(&j.JobID, &j.JobToken, &j.Image, &j.PrinterID); err != nil {
 				writeError(w, http.StatusInternalServerError, "scan error")
 				return
 			}

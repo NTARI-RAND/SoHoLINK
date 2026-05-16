@@ -133,3 +133,22 @@ func DetectPrinters() ([]PrinterInfo, error) {
 	}
 	return printers, nil
 }
+
+// ResolveConnectionPath returns the host device path for the printer identified
+// by printerID. Empty printerID means a non-print workload; "" is returned with
+// no error so the caller's ContainerSpec.ConnectionPath stays empty and no device
+// mapping is produced. A non-empty printerID that matches no known printer is a
+// registry/DB drift case (printer unplugged between heartbeat and job pickup) and
+// returns an error — the caller should skip execution rather than run without
+// device access.
+func ResolveConnectionPath(printerID string, printers []PrinterInfo) (string, error) {
+	if printerID == "" {
+		return "", nil
+	}
+	for _, p := range printers {
+		if p.ID == printerID {
+			return p.ConnectionPath, nil
+		}
+	}
+	return "", fmt.Errorf("printer %q not found among %d known printers", printerID, len(printers))
+}
