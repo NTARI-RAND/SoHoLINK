@@ -435,6 +435,44 @@ func TestNodeRegistry_FindMatch_PrintingRequiresEnabledPrinter(t *testing.T) {
 	}
 }
 
+// ── B4 commit 5: ExcludedNodeIDs filter ──────────────────────────────────────
+
+func TestFindMatch_ExcludedNodeIDs(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-A", "US", 8, 16384, 100, false))
+	r.Register(newOnlineNode("node-B", "US", 8, 16384, 100, false))
+
+	req := MatchRequest{CPUCores: 1, RAMMB: 1024}
+
+	// Both nodes visible without exclusion.
+	all, err := r.FindMatch(req)
+	if err != nil {
+		t.Fatalf("FindMatch without exclusion: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(all))
+	}
+
+	// Exclude node-A — only node-B should remain.
+	req.ExcludedNodeIDs = []string{"node-A"}
+	one, err := r.FindMatch(req)
+	if err != nil {
+		t.Fatalf("FindMatch with one excluded: %v", err)
+	}
+	if len(one) != 1 {
+		t.Fatalf("expected 1 candidate after excluding node-A, got %d", len(one))
+	}
+	if one[0].NodeID != "node-B" {
+		t.Errorf("expected node-B, got %s", one[0].NodeID)
+	}
+
+	// Exclude both — expect no candidates.
+	req.ExcludedNodeIDs = []string{"node-A", "node-B"}
+	if _, err := r.FindMatch(req); err == nil {
+		t.Fatal("expected error when all nodes excluded, got nil")
+	}
+}
+
 // ── B4: print confirmation gate (canonical hash + flag routing) ───────────────
 
 func TestCanonicalJobSpecHash_Deterministic(t *testing.T) {

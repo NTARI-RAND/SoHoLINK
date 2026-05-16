@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -313,4 +314,168 @@ func canonicalJobSpecHash(req SubmitJobRequest) ([]byte, error) {
 	}
 	h := sha256.Sum256(b)
 	return h[:], nil
+}
+
+// RerouteDeclinedJob attempts to find a new node for a job in 'declined' status.
+// It reads the job's stored spec, queries job_node_declines for all nodes that
+// have already declined, then calls FindMatch with those nodes excluded.
+//
+// No single transaction wraps the whole operation: the final UPDATE guards with
+// AND status = 'declined'::job_status so concurrent reroute workers (or a future
+// multi-instance deployment) see a no-op on a row another worker already moved
+// forward. The two read queries (job row + decline records) running outside a
+// transaction means we may read slightly stale data in a race, but the UPDATE
+// guard makes the outcome safe regardless — at worst, we do redundant work that
+// produces no row update.
+func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) error {
+	var (
+		workloadType      string
+		cpuCores          int
+		ramMB             int
+		storageGB         int
+		gpuRequired       bool
+		countryConstraint string
+		specHash          []byte
+	)
+	err := o.db.Pool.QueryRow(ctx,
+		`SELECT workload_type, COALESCE(cpu_cores, 0), COALESCE(ram_mb, 0),
+		        COALESCE(storage_gb, 0), gpu_required, COALESCE(country_constraint, ''),
+		        spec_hash
+		 FROM jobs WHERE id = $1`,
+		jobID,
+	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &specHash)
+	if err != nil {
+		return fmt.Errorf("reroute: read job %s: %w", jobID, err)
+	}
+
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT node_id FROM job_node_declines WHERE job_id = $1`, jobID)
+	if err != nil {
+		return fmt.Errorf("reroute: read declines for %s: %w", jobID, err)
+	}
+	var excludedIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("reroute: scan decline: %w", err)
+		}
+		excludedIDs = append(excludedIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reroute: declines rows: %w", err)
+	}
+
+	candidates, findErr := o.registry.FindMatch(MatchRequest{
+		WorkloadType:      types.MarketplaceWorkloadType(workloadType),
+		CountryConstraint: countryConstraint,
+		CPUCores:          cpuCores,
+		RAMMB:             ramMB,
+		StorageGB:         storageGB,
+		GPURequired:       gpuRequired,
+		ExcludedNodeIDs:   excludedIDs,
+	})
+	if findErr != nil {
+		// No eligible nodes remain — fail the job.
+		if _, err := o.db.Pool.Exec(ctx,
+			`UPDATE jobs SET status = 'failed'::job_status, updated_at = NOW()
+			 WHERE id = $1 AND status = 'declined'::job_status`,
+			jobID,
+		); err != nil {
+			return fmt.Errorf("reroute: fail job %s: %w", jobID, err)
+		}
+		return nil
+	}
+
+	scheduled, err := o.schedule(candidates, SLAStandard)
+	if err != nil {
+		return fmt.Errorf("reroute: schedule %s: %w", jobID, err)
+	}
+	node := scheduled[0]
+
+	token, err := GenerateJobToken(jobID, node.NodeID, jobTokenTTL, o.tokenSecret)
+	if err != nil {
+		return fmt.Errorf("reroute: generate token: %w", err)
+	}
+
+	var printerID string
+	if err := o.db.Pool.QueryRow(ctx,
+		`SELECT printer_id FROM node_printers
+		 WHERE node_id = $1 AND enabled = TRUE
+		 ORDER BY printer_id LIMIT 1`,
+		node.NodeID,
+	).Scan(&printerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("reroute: node %s passed FindMatch but has no enabled printer (registry/DB drift)", node.NodeID)
+		}
+		return fmt.Errorf("reroute: resolve printer: %w", err)
+	}
+
+	deadline := time.Now().Add(o.confirmationWindow)
+	if _, err := o.db.Pool.Exec(ctx,
+		`UPDATE jobs
+		 SET node_id              = $1,
+		     job_token            = $2,
+		     printer_id           = $3,
+		     confirmation_deadline = $4,
+		     status               = 'awaiting_confirmation'::job_status,
+		     updated_at           = NOW()
+		 WHERE id = $5 AND status = 'declined'::job_status`,
+		node.NodeID, token, printerID, deadline, jobID,
+	); err != nil {
+		return fmt.Errorf("reroute: update job %s: %w", jobID, err)
+	}
+	return nil
+}
+
+// rerouteDeclined finds all declined jobs and attempts to reroute each one.
+// Called on every tick of StartDeclineRerouteLoop.
+func (o *Orchestrator) rerouteDeclined(ctx context.Context) {
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT id FROM jobs WHERE status = 'declined'::job_status LIMIT 100`)
+	if err != nil {
+		slog.Error("reroute: query declined jobs", "error", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.Error("reroute: scan job id", "error", err)
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("reroute: declined rows", "error", err)
+		return
+	}
+
+	for _, id := range ids {
+		if err := o.RerouteDeclinedJob(ctx, id); err != nil {
+			slog.Error("reroute declined job", "job_id", id, "error", err)
+		}
+	}
+}
+
+// StartDeclineRerouteLoop runs a background goroutine that periodically finds
+// declined jobs and attempts to re-dispatch them to a different node. Stops
+// when ctx is cancelled. Run only from cmd/orchestrator — not from cmd/portal,
+// which has a separate registry instance that never receives agent heartbeats.
+func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				o.rerouteDeclined(ctx)
+			}
+		}
+	}()
 }

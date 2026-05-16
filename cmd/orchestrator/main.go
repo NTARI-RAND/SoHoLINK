@@ -87,7 +87,9 @@ func main() {
 
 	registry := orchestrator.NewNodeRegistry()
 	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
-	_ = orch  // orchestrator used by api.New via registry; available for future direct use
+
+	orchestrator.StartEvictionLoop(ctx, registry, 5*time.Minute)
+	orch.StartDeclineRerouteLoop(ctx)
 
 	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
 

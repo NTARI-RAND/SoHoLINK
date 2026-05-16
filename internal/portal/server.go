@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
@@ -1195,25 +1197,61 @@ func (ps *PortalServer) handleJobConfirmAction(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var query string
 	if action == "confirm" {
-		query = `UPDATE jobs SET status = 'scheduled'::job_status, confirmed_at = NOW()
-			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status`
+		tag, execErr := ps.db.Pool.Exec(r.Context(),
+			`UPDATE jobs SET status = 'scheduled'::job_status, confirmed_at = NOW()
+			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status`,
+			jobID)
+		if execErr != nil {
+			slog.Error("job confirm failed", "job_id", jobID, "error", execErr)
+			http.Error(w, "failed to update job", http.StatusInternalServerError)
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
+			return
+		}
 	} else {
-		query = `UPDATE jobs SET status = 'declined'::job_status, declined_at = NOW()
-			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status`
-	}
-	tag, execErr := ps.db.Pool.Exec(r.Context(), query, jobID)
-	if execErr != nil {
-		slog.Error("job confirm action failed", "job_id", jobID, "action", action, "error", execErr)
-		http.Error(w, "failed to update job", http.StatusInternalServerError)
-		return
-	}
+		// Decline: wrap in a transaction so the decline record is written
+		// atomically with the status change. If the INSERT fails after the UPDATE
+		// succeeds, the reroute worker would re-dispatch to the same node.
+		tx, txErr := ps.db.Pool.Begin(r.Context())
+		if txErr != nil {
+			slog.Error("job decline begin tx", "job_id", jobID, "error", txErr)
+			http.Error(w, "failed to update job", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback(r.Context()) //nolint:errcheck
 
-	// Zero rows means another request raced us — redirect to show current state.
-	if tag.RowsAffected() == 0 {
-		http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
-		return
+		var nodeID string
+		scanErr := tx.QueryRow(r.Context(),
+			`UPDATE jobs SET status = 'declined'::job_status, declined_at = NOW()
+			 WHERE id = $1 AND status = 'awaiting_confirmation'::job_status
+			 RETURNING node_id`,
+			jobID).Scan(&nodeID)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)
+			return
+		}
+		if scanErr != nil {
+			slog.Error("job decline update", "job_id", jobID, "error", scanErr)
+			http.Error(w, "failed to update job", http.StatusInternalServerError)
+			return
+		}
+
+		if _, execErr := tx.Exec(r.Context(),
+			`INSERT INTO job_node_declines (job_id, node_id) VALUES ($1, $2)`,
+			jobID, nodeID); execErr != nil {
+			slog.Error("job decline insert record", "job_id", jobID, "error", execErr)
+			http.Error(w, "failed to record decline", http.StatusInternalServerError)
+			return
+		}
+
+		if commitErr := tx.Commit(r.Context()); commitErr != nil {
+			slog.Error("job decline commit", "job_id", jobID, "error", commitErr)
+			http.Error(w, "failed to update job", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	http.Redirect(w, r, "/provider/job/"+jobID+"/confirm", http.StatusSeeOther)

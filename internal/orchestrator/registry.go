@@ -59,11 +59,12 @@ type MatchRequest struct {
 	// remains the canonical enforcement gate; this filter is defense-in-depth.
 	// WorkloadType="" disables opt-out filtering (legacy callers / tests).
 	WorkloadType      types.MarketplaceWorkloadType
-	CountryConstraint string // empty = any country
+	CountryConstraint string   // empty = any country
 	CPUCores          int
 	RAMMB             int
 	GPURequired       bool
 	StorageGB         int
+	ExcludedNodeIDs   []string // nodes that have already declined this job
 }
 
 // NodeRegistry is a concurrency-safe in-memory store of active nodes.
@@ -130,8 +131,17 @@ func (r *NodeRegistry) Evict(nodeID string) {
 func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	excluded := make(map[string]bool, len(req.ExcludedNodeIDs))
+	for _, id := range req.ExcludedNodeIDs {
+		excluded[id] = true
+	}
+
 	var candidates []NodeEntry
 	for _, node := range r.nodes {
+		if excluded[node.NodeID] {
+			continue
+		}
 		if node.Status != "online" {
 			continue
 		}
