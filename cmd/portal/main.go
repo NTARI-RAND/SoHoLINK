@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -95,8 +96,10 @@ func main() {
 
 	paymentClient := payment.New(stripeKey)
 
+	printConfirmEnabled, _ := strconv.ParseBool(os.Getenv("PRINT_CONFIRMATION_ENABLED"))
+
 	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
+	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
 
 	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr, webhookSecret)
 	if err != nil {

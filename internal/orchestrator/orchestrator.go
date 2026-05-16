@@ -2,12 +2,15 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
@@ -66,22 +69,36 @@ type SubmitJobResponse struct {
 
 // Orchestrator coordinates job placement across the node registry and database.
 type Orchestrator struct {
-	db            *store.DB
-	registry      *NodeRegistry
-	tokenSecret   []byte
-	schedule      ScheduleFunc
-	allowlistPath string
+	db                  *store.DB
+	registry            *NodeRegistry
+	tokenSecret         []byte
+	schedule            ScheduleFunc
+	allowlistPath       string
+	printConfirmEnabled bool
+	confirmationWindow  time.Duration
 }
 
 // New constructs an Orchestrator. schedule is called during SubmitJob to rank
 // candidates; pass scheduler.Schedule from internal/scheduler.
-func New(db *store.DB, registry *NodeRegistry, tokenSecret []byte, schedule ScheduleFunc, allowlistPath string) *Orchestrator {
+// printConfirmEnabled gates the awaiting_confirmation path for print jobs.
+// confirmationWindow sets the auto-decline deadline (e.g. 4*time.Hour).
+func New(
+	db *store.DB,
+	registry *NodeRegistry,
+	tokenSecret []byte,
+	schedule ScheduleFunc,
+	allowlistPath string,
+	printConfirmEnabled bool,
+	confirmationWindow time.Duration,
+) *Orchestrator {
 	return &Orchestrator{
-		db:            db,
-		registry:      registry,
-		tokenSecret:   tokenSecret,
-		schedule:      schedule,
-		allowlistPath: allowlistPath,
+		db:                  db,
+		registry:            registry,
+		tokenSecret:         tokenSecret,
+		schedule:            schedule,
+		allowlistPath:       allowlistPath,
+		printConfirmEnabled: printConfirmEnabled,
+		confirmationWindow:  confirmationWindow,
 	}
 }
 
@@ -155,6 +172,9 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 	}
 	node := scheduled[0]
 
+	isPrintJob := req.WorkloadType == types.MarketplacePrintTraditional ||
+		req.WorkloadType == types.MarketplacePrint3D
+
 	jobID := uuid.New().String()
 
 	tx, err := o.db.Pool.Begin(ctx)
@@ -190,12 +210,55 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		return SubmitJobResponse{}, fmt.Errorf("generate job token: %w", err)
 	}
 
-	_, err = tx.Exec(ctx,
-		`UPDATE jobs SET job_token = $1, status = 'scheduled'::job_status WHERE id = $2`,
-		token, jobID,
-	)
-	if err != nil {
-		return SubmitJobResponse{}, fmt.Errorf("update job to scheduled: %w", err)
+	if isPrintJob && o.printConfirmEnabled {
+		// Resolve a specific enabled printer for this node. The HasEnabledPrinter
+		// flag in FindMatch is set from heartbeat data; a brief registry/DB skew
+		// is possible, so ErrNoRows here is a detectable synchronization gap.
+		//
+		// Picks the lowest printer_id lexicographically for determinism. Does not
+		// yet discriminate by printer type — node_printers (migration 014) has no
+		// type column, so a node enabled for any printing matches both
+		// print_traditional and print_3d. Printer-type discrimination is a B8
+		// concern; tracked in CLAUDE.md TODOs.
+		var printerID string
+		if err := tx.QueryRow(ctx,
+			`SELECT printer_id FROM node_printers
+			 WHERE node_id = $1 AND enabled = TRUE
+			 ORDER BY printer_id LIMIT 1`,
+			node.NodeID,
+		).Scan(&printerID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return SubmitJobResponse{}, fmt.Errorf("resolve printer: node %s passed FindMatch but has no enabled printer (registry/DB drift)", node.NodeID)
+			}
+			return SubmitJobResponse{}, fmt.Errorf("resolve printer: %w", err)
+		}
+
+		specHash, err := canonicalJobSpecHash(req)
+		if err != nil {
+			return SubmitJobResponse{}, fmt.Errorf("spec hash: %w", err)
+		}
+
+		deadline := time.Now().Add(o.confirmationWindow)
+		if _, err := tx.Exec(ctx, `
+			UPDATE jobs
+			SET job_token             = $1,
+			    status                = 'awaiting_confirmation'::job_status,
+			    printer_id            = $2,
+			    spec_hash             = $3,
+			    confirmation_deadline = $4,
+			    updated_at            = NOW()
+			WHERE id = $5`,
+			token, printerID, specHash, deadline, jobID,
+		); err != nil {
+			return SubmitJobResponse{}, fmt.Errorf("update job to awaiting_confirmation: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(ctx,
+			`UPDATE jobs SET job_token = $1, status = 'scheduled'::job_status WHERE id = $2`,
+			token, jobID,
+		); err != nil {
+			return SubmitJobResponse{}, fmt.Errorf("update job to scheduled: %w", err)
+		}
 	}
 
 	var stripeAccountID string
@@ -220,4 +283,34 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		JobToken:                token,
 		ProviderStripeAccountID: stripeAccountID,
 	}, nil
+}
+
+// canonicalJobSpecHash returns a SHA-256 digest of the job spec fields that
+// the contributor sees and acknowledges at confirmation time. Field declaration
+// order is load-bearing — encoding/json marshals struct fields in declaration
+// order, so reordering this struct silently changes all hashes.
+func canonicalJobSpecHash(req SubmitJobRequest) ([]byte, error) {
+	type spec struct {
+		WorkloadType      string `json:"workload_type"`
+		ContainerImage    string `json:"container_image"`
+		CPUCores          int    `json:"cpu_cores"`
+		RAMMB             int    `json:"ram_mb"`
+		StorageGB         int    `json:"storage_gb"`
+		GPURequired       bool   `json:"gpu_required"`
+		CountryConstraint string `json:"country_constraint"`
+	}
+	b, err := json.Marshal(spec{
+		WorkloadType:      string(req.WorkloadType),
+		ContainerImage:    req.ContainerImage,
+		CPUCores:          req.CPUCores,
+		RAMMB:             req.RAMMB,
+		StorageGB:         req.StorageGB,
+		GPURequired:       req.GPURequired,
+		CountryConstraint: req.CountryConstraint,
+	})
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.Sum256(b)
+	return h[:], nil
 }

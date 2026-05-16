@@ -11,11 +11,13 @@ import (
 // WorkloadType enum. The mapping is a var (not const) so tests can
 // temporarily remove entries to exercise MustValidateWorkloadMapping.
 var marketplaceToAgent = map[types.MarketplaceWorkloadType]agent.WorkloadType{
-	types.MarketplaceAppHosting:    agent.WorkloadCompute,
-	types.MarketplaceBatchCompute:  agent.WorkloadCompute,
-	types.MarketplaceAIInference:   agent.WorkloadCompute,
-	types.MarketplaceObjectStorage: agent.WorkloadStorage,
-	types.MarketplaceCDNEdge:       agent.WorkloadCompute,
+	types.MarketplaceAppHosting:       agent.WorkloadCompute,
+	types.MarketplaceBatchCompute:     agent.WorkloadCompute,
+	types.MarketplaceAIInference:      agent.WorkloadCompute,
+	types.MarketplaceObjectStorage:    agent.WorkloadStorage,
+	types.MarketplaceCDNEdge:          agent.WorkloadCompute,
+	types.MarketplacePrintTraditional: agent.WorkloadPrintTraditional,
+	types.MarketplacePrint3D:          agent.WorkloadPrint3D,
 }
 
 // MarketplaceToAgent translates a MarketplaceWorkloadType to the agent

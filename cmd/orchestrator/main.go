@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -82,8 +83,10 @@ func main() {
 		idSource = nil
 	}
 
+	printConfirmEnabled, _ := strconv.ParseBool(os.Getenv("PRINT_CONFIRMATION_ENABLED"))
+
 	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
+	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
 	_ = orch  // orchestrator used by api.New via registry; available for future direct use
 
 	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)

@@ -8,11 +8,13 @@ import "fmt"
 type MarketplaceWorkloadType string
 
 const (
-	MarketplaceAppHosting    MarketplaceWorkloadType = "app_hosting"
-	MarketplaceBatchCompute  MarketplaceWorkloadType = "batch_compute"
-	MarketplaceAIInference   MarketplaceWorkloadType = "ai_inference"
-	MarketplaceObjectStorage MarketplaceWorkloadType = "object_storage"
-	MarketplaceCDNEdge       MarketplaceWorkloadType = "cdn_edge"
+	MarketplaceAppHosting       MarketplaceWorkloadType = "app_hosting"
+	MarketplaceBatchCompute     MarketplaceWorkloadType = "batch_compute"
+	MarketplaceAIInference      MarketplaceWorkloadType = "ai_inference"
+	MarketplaceObjectStorage    MarketplaceWorkloadType = "object_storage"
+	MarketplaceCDNEdge          MarketplaceWorkloadType = "cdn_edge"
+	MarketplacePrintTraditional MarketplaceWorkloadType = "print_traditional"
+	MarketplacePrint3D          MarketplaceWorkloadType = "print_3d"
 )
 
 // AllMarketplaceWorkloadTypes returns every defined MarketplaceWorkloadType.
@@ -24,6 +26,8 @@ func AllMarketplaceWorkloadTypes() []MarketplaceWorkloadType {
 		MarketplaceAIInference,
 		MarketplaceObjectStorage,
 		MarketplaceCDNEdge,
+		MarketplacePrintTraditional,
+		MarketplacePrint3D,
 	}
 }
 

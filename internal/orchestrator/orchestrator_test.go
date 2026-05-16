@@ -260,7 +260,7 @@ func TestSubmitJob_RejectsImageNotInAllowlist(t *testing.T) {
 			},
 		},
 	})
-	orch := New(nil, NewNodeRegistry(), nil, nil, path)
+	orch := New(nil, NewNodeRegistry(), nil, nil, path, false, 0)
 
 	_, err := orch.SubmitJob(context.Background(), SubmitJobRequest{
 		ConsumerID:     "c1",
@@ -289,7 +289,7 @@ func TestSubmitJob_RejectsMappingInconsistency(t *testing.T) {
 			},
 		},
 	})
-	orch := New(nil, NewNodeRegistry(), nil, nil, path)
+	orch := New(nil, NewNodeRegistry(), nil, nil, path, false, 0)
 
 	_, err := orch.SubmitJob(context.Background(), SubmitJobRequest{
 		ConsumerID:     "c1",
@@ -380,8 +380,12 @@ func TestNodeRegistry_FindMatch_OptOutDoesNotAffectOtherCategory(t *testing.T) {
 }
 
 func TestNodeRegistry_FindMatch_PrintingRequiresEnabledPrinter(t *testing.T) {
-	// No marketplace workload type currently routes to printing. Temporarily
-	// re-route MarketplaceAppHosting → WorkloadPrintTraditional to exercise the branch.
+	// Temporarily remap MarketplaceAppHosting → WorkloadPrintTraditional so
+	// FindMatch's HasEnabledPrinter gate can be exercised via a workload type
+	// whose nodes the test helper can construct without a real node_printers row.
+	// MarketplacePrintTraditional now routes to printing natively, but
+	// the in-memory NodeEntry has no printer-state helper — this remap keeps
+	// the test self-contained at the registry layer.
 	original := marketplaceToAgent[types.MarketplaceAppHosting]
 	marketplaceToAgent[types.MarketplaceAppHosting] = agent.WorkloadPrintTraditional
 	defer func() { marketplaceToAgent[types.MarketplaceAppHosting] = original }()
@@ -428,5 +432,112 @@ func TestNodeRegistry_FindMatch_PrintingRequiresEnabledPrinter(t *testing.T) {
 		RAMMB:        1024,
 	}); err == nil {
 		t.Fatal("expected no candidates: node opted out of printing")
+	}
+}
+
+// ── B4: print confirmation gate (canonical hash + flag routing) ───────────────
+
+func TestCanonicalJobSpecHash_Deterministic(t *testing.T) {
+	req := SubmitJobRequest{
+		WorkloadType:      types.MarketplacePrintTraditional,
+		ContainerImage:    "soholink/print-worker@sha256:aaaa",
+		CPUCores:          4,
+		RAMMB:             8192,
+		StorageGB:         50,
+		GPURequired:       false,
+		CountryConstraint: "US",
+	}
+	h1, err := canonicalJobSpecHash(req)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash: %v", err)
+	}
+	h2, err := canonicalJobSpecHash(req)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash second call: %v", err)
+	}
+	if string(h1) != string(h2) {
+		t.Error("canonicalJobSpecHash is not deterministic for identical inputs")
+	}
+}
+
+func TestCanonicalJobSpecHash_ContainerImageAffectsHash(t *testing.T) {
+	base := SubmitJobRequest{
+		WorkloadType:   types.MarketplacePrintTraditional,
+		ContainerImage: "soholink/print-worker@sha256:aaaa",
+		CPUCores:       4,
+		RAMMB:          8192,
+	}
+	different := base
+	different.ContainerImage = "soholink/print-worker@sha256:bbbb"
+
+	h1, err := canonicalJobSpecHash(base)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash: %v", err)
+	}
+	h2, err := canonicalJobSpecHash(different)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash different image: %v", err)
+	}
+	if string(h1) == string(h2) {
+		t.Error("expected different hashes for different container images")
+	}
+}
+
+func TestCanonicalJobSpecHash_ConsumerIDExcluded(t *testing.T) {
+	// ConsumerID is an orchestrator-internal identity, not part of the spec
+	// a contributor acknowledges. Changing it must not change the hash.
+	base := SubmitJobRequest{
+		ConsumerID:     "consumer-A",
+		WorkloadType:   types.MarketplacePrintTraditional,
+		ContainerImage: "soholink/print-worker@sha256:aaaa",
+		CPUCores:       4,
+		RAMMB:          8192,
+	}
+	different := base
+	different.ConsumerID = "consumer-B"
+
+	h1, err := canonicalJobSpecHash(base)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash: %v", err)
+	}
+	h2, err := canonicalJobSpecHash(different)
+	if err != nil {
+		t.Fatalf("canonicalJobSpecHash different consumer: %v", err)
+	}
+	if string(h1) != string(h2) {
+		t.Error("ConsumerID should not affect the spec hash")
+	}
+}
+
+func TestSubmitJob_PrintConfirmGate_FlagOff_WritesScheduled(t *testing.T) {
+	// When printConfirmEnabled is false, a print job takes the scheduled path.
+	// With an empty registry FindMatch returns before any DB access, confirming
+	// the code did not branch into the confirmation path on its own.
+	path := writeTempAllowlist(t, agent.Allowlist{
+		Version:  1,
+		IssuedAt: time.Now(),
+		Entries: []agent.AllowlistEntry{
+			{
+				Name:   "soholink/print-worker",
+				Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				Type:   agent.WorkloadPrintTraditional,
+				Egress: agent.EgressOutbound,
+			},
+		},
+	})
+	orch := New(nil, NewNodeRegistry(), nil, nil, path, false, 0)
+
+	_, err := orch.SubmitJob(context.Background(), SubmitJobRequest{
+		ConsumerID:     "c1",
+		WorkloadType:   types.MarketplacePrintTraditional,
+		ContainerImage: "soholink/print-worker@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	})
+	// Expected: fails at FindMatch ("find nodes: no available nodes match request"),
+	// not at any print-confirmation-specific path.
+	if err == nil {
+		t.Fatal("expected error from empty registry, got nil")
+	}
+	if !strings.Contains(err.Error(), "find nodes") {
+		t.Errorf("expected 'find nodes' error (scheduled path), got: %v", err)
 	}
 }

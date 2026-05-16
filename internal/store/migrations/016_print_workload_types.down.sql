@@ -1,0 +1,9 @@
+-- 016_print_workload_types.down.sql
+-- Reverses 016_print_workload_types.up.sql.
+--
+-- NOTE: PostgreSQL does not support removing values from an existing
+-- ENUM type. The 'print_traditional' and 'print_3d' values added by
+-- 016.up remain after this rollback. A complete rollback requires
+-- recreating workload_type from scratch (which cascades through the
+-- jobs table) and is out of scope for an incremental migration.
+-- Restore from a pre-016 snapshot if full enum removal is required.
