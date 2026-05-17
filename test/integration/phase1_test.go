@@ -105,7 +105,7 @@ func TestPhase1EndToEnd(t *testing.T) {
 		"soholink/test-image",
 		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		agent.WorkloadCompute)
-	orch := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath)
+	orch := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, false, 4*time.Hour)
 
 	resp, err := orch.SubmitJob(ctx, orchestrator.SubmitJobRequest{
 		ConsumerID:     consumerID,
