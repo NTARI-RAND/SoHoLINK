@@ -369,6 +369,35 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     Also surfaced that `printer_name TEXT NOT NULL` was missing from the migration 014
     description in CLAUDE.md (now corrected). Carry-forward from TODO 11 closed.
 
+24. **Zombie `running` rows — `handleGetJobs` flips `scheduled` → `running` optimistically**:
+    `internal/api/nodes.go`'s `handleGetJobs` UPDATEs a job's status to `running` at poll time,
+    before the agent confirms it can actually start the container. If the agent's `runJob` then
+    returns early (printer vanished, image not in allowlist, container start failure), the job
+    stays stuck in `running` with no recovery path. Fix requires either a start-confirmation
+    endpoint (`POST /jobs/<id>/started`) the agent calls after successful container launch, or a
+    running-timeout reaper that flips stale `running` rows back to `scheduled` (or `failed`).
+
+25. **Portal's orphaned registry — `cmd/portal/main.go` constructs a `NodeRegistry` that never
+    receives heartbeats**: `portal/main.go` calls `orchestrator.NewNodeRegistry()` and passes it
+    to `orchestrator.New`, but agent heartbeats land at the orchestrator binary's API server,
+    not at the portal process. `FindMatch` on the portal's registry returns "no available nodes
+    match request" for *every* job submitted through `POST /consumer/job`, regardless of workload
+    type. Latent rather than active because no production traffic flows through this path yet —
+    the consumer-side marketplace is non-functional but unused. Fix paths (all non-trivial): expose
+    an orchestrator-side HTTP submission endpoint the portal calls over the network; merge portal
+    and orchestrator into one process; or have both processes refresh a shared registry from the
+    DB on heartbeat events.
+
+26. **Integration tag missing from exported-signature audit workflow** — RESOLVED `27157dc`:
+    B4 commit 3 (`0115d41`) extended `orchestrator.New` with two new parameters. The audit grep
+    for callers scoped to `cmd/` and `internal/`, missing `test/integration/phase1_test.go:108`.
+    The stale call site compiled fine without the `integration` build tag, so local
+    `go build ./cmd/...` and `go test ./internal/...` passed on every B4 commit. CI runs with
+    the tag set and broke on #68 through #71. Rule now documented in Critical API Notes
+    (Exported function signature changes); pre-commit verification flow gained
+    `go build -tags integration ./...` and `grep -rn "FuncName(" .` on signature-changing
+    commits.
+
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
 
@@ -405,6 +434,15 @@ These have caused bugs before — read before touching related code:
   `template.ParseFiles(layoutPath, pagePath)` to avoid last-parsed-wins collision.
   Do not revert to a shared parsed set.
 - `template.ParseFiles` names templates by base filename only — keep base names unique.
+
+**Exported function signature changes:**
+- When adding parameters to any exported function, grep the full repo for callers:
+  `grep -rn "PackageName\.FuncName(" .` — `test/integration/` is a peer of `cmd/`
+  and `internal/` and will be missed by a narrower scope.
+- After the change, verify with `go build -tags integration ./...` before committing.
+  Build-tagged files are invisible to ordinary `go build ./...` and `go test ./...`.
+  CI runs with the tag set; missing this locally means CI is the first build attempt.
+  (Root cause of `test/integration/phase1_test.go` stale call, CI #68–#71.)
 
 **Workload type vocabulary (post-B3):**
 - Two enums, by design — they evolve independently:
@@ -887,6 +925,9 @@ against real Postgres; all green. `printer_name TEXT NOT NULL` missing from migr
 description corrected. Do not deploy until B4 commit 6 (auto-decline sweeper) is ready and reviewed — the
 portal decline action without the sweeper leaves jobs in `awaiting_confirmation` indefinitely if the 4-hour
 window expires without a sweeper running.
+**CI fix (`27157dc`)**: `test/integration/phase1_test.go` stale 5-arg `orchestrator.New` call updated
+to 7-arg (`false, 4*time.Hour`). CI #68–#71 were all failing on this; #72 green. Root cause documented
+in TODO 26 and Critical API Notes (exported signature change workflow).
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
