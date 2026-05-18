@@ -498,8 +498,9 @@ These have caused bugs before — read before touching related code:
   identically to compute/storage. With the flag on, `SubmitJob` writes
   `awaiting_confirmation` with `printer_id`, `spec_hash`, and `confirmation_deadline`
   populated; the agent's `scheduled`-filtered poll never sees these jobs until later
-  B4 commits move them forward. Do not flip the flag in production until at least
-  B4 commit 5 (decline reroute) is deployed.
+  B4 commits implement the forward steps. Do not flip the flag in production
+  until B4 is fully deployed — without the auto-decline sweeper (commit 6,
+  `0475943`), expired confirmations stall in `awaiting_confirmation` indefinitely.
 - **Validation lives on a method, not inline.** `SubmitJobRequest.Validate()`
   exists so tests can exercise validation logic without constructing an
   `Orchestrator`. Tests that require "this constructor must never be hardened"
@@ -696,7 +697,7 @@ explicit field comment documenting that `FindMatch` does not yet filter on it
 8 new unit tests across `internal/types` (3) and `internal/orchestrator` (5).
 Defense 3 deferred to B7 (see TODO 13).
 
-### Sub-phase B4 — Print Job Confirmation Flow (commits 1–5 + test coverage complete, Dev XXI)
+### Sub-phase B4 — Print Job Confirmation Flow (complete, Dev XXII · `0475943`)
 Pending-confirmation state for print workloads. Tray notification + portal page surface
 job spec to contributor with explicit acknowledgment text. Acceptance logged with
 timestamp + spec hash. Decline → orchestrator routes to next printer node. Auto-decline
@@ -745,9 +746,14 @@ timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec`
 - **Integration coverage (`dc1de1d`)** — `orchestrator_integration_test.go` (build tag:
   integration): 6 tests against real Postgres covering all SubmitJob print-gate paths
   and both RerouteDeclinedJob outcomes. Closes TODO 23.
-- **Remaining**: auto-decline sweeper (commit 6) — background goroutine finding
-  `awaiting_confirmation` rows past `confirmation_deadline`, flipping to `declined`;
-  `idx_jobs_confirmation_deadline` partial index already in place (migration 015).
+- **Commit 6 (`0475943`)** — Auto-decline sweeper. Exported per-job function
+  `ExpireConfirmation(ctx, jobID) (bool, error)` with a race-safe UPDATE that
+  re-checks status and deadline; `flipped=false, err=nil` is the lost-race case.
+  Unexported batch tick handler `expireConfirmations` mirrors the
+  `rerouteDeclined` pattern (SELECT ids → iterate → UPDATE, LIMIT 100). Wired
+  into `StartDeclineRerouteLoop` before `rerouteDeclined` so freshly-expired
+  jobs reroute in the same 30s tick. `idx_jobs_confirmation_deadline` from
+  migration 015 powers the SELECT. 2 new integration tests.
 
 ### Sub-phase B5 — Long-Running Job Lifecycle
 Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
@@ -950,6 +956,16 @@ window expires without a sweeper running.
 **CI fix (`27157dc`)**: `test/integration/phase1_test.go` stale 5-arg `orchestrator.New` call updated
 to 7-arg (`false, 4*time.Hour`). CI #68–#71 were all failing on this; #72 green. Root cause documented
 in TODO 26 and Critical API Notes (exported signature change workflow).
+
+### Deployment checkpoint — `0475943` (2026-05-18, Dev XXII)
+**`027ac81`**: Codifies the three-layer commit message convention (Code drafts →
+Chat audits → human authorizes) that had emerged in practice but was not yet
+written down.
+**B4 commit 6 (`0475943`)**: Auto-decline sweeper. `ExpireConfirmation` exported
+per-job function + `expireConfirmations` batch tick handler co-located on the
+existing `StartDeclineRerouteLoop` 30s ticker (expire-then-reroute ordering).
+2 new integration tests. B4 lifecycle complete — the dc1de1d deploy hold ("Do
+not deploy until B4 commit 6") is resolved.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
