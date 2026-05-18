@@ -755,12 +755,57 @@ timeout (~4 hours). Threads `PrinterInfo.ConnectionPath` through `ContainerSpec`
   jobs reroute in the same 30s tick. `idx_jobs_confirmation_deadline` from
   migration 015 powers the SELECT. 2 new integration tests.
 
-### Sub-phase B5 — Long-Running Job Lifecycle
-Container progress reporting. New statuses: `awaiting_pickup`, `picked_up`, `delivered`.
-Failure detection (filament runout, thermal runaway, print detachment) reported as
-`failed` with cause. Payout eligibility gated on `picked_up`/`delivered` for prints,
-`completed` for compute/storage. Orchestrator `/jobs/<id>/complete` consumes JSON body.
-Metering conditioned on exit code 0 (resolves TODOs 7 and 8).
+### Sub-phase B5 — Long-Running Job Lifecycle (design locked, Dev XXIII)
+
+Closes TODOs 5 (`/complete` JSON body), 6 (exit-code-conditioned metering), and
+24 (zombie `running` rows). Adds the print-specific lifecycle statuses
+`awaiting_pickup`, `picked_up`, `delivered` named in the original scope, plus
+failure-cause reporting for print workloads.
+
+**State machine.**
+
+Compute / storage: `scheduled → dispatched → running → completed | failed`
+
+Print: `scheduled → dispatched → running → awaiting_pickup → picked_up → delivered | failed`
+
+`dispatched` is a new intermediate status that closes TODO 24. `handleGetJobs`
+flips `scheduled → dispatched` as the atomic claim; the agent transitions
+`dispatched → running` via `POST /jobs/{id}/started` after `ContainerStart`
+succeeds. A reaper reverts stale `dispatched` rows (> 60s without `/started`)
+back to `scheduled`. Chosen over the alternative of keeping the
+`scheduled → running` flip with a `started_at IS NULL` reaper — the new
+intermediate status gives `running` an unambiguous meaning at the cost of one
+enum value.
+
+**Commit plan (7 commits).**
+
+1. Migration 018 — extend `job_status` with `dispatched`, `awaiting_pickup`,
+   `picked_up`, `delivered`; add columns `started_at`, `picked_up_at`,
+   `delivered_at`, `exit_code`, `failure_cause`. Enum down migration is
+   one-way (Postgres limitation, documented in down SQL).
+2. Start-confirmation endpoint (`POST /jobs/{id}/started`) + `dispatched`-timeout
+   reaper. `handleGetJobs` switches to `scheduled → dispatched`. Closes TODO 24.
+3. `/complete` parses JSON body `{exit_code, failure_cause, tmpfs_exhausted}`.
+   Closes TODO 5.
+4. Exit-code-conditioned metering. `exit_code != 0` → `failed`, no meter.
+   `exit_code == 0` → `completed` for compute/storage, `awaiting_pickup` for
+   print. Closes TODO 6.
+5. Print lifecycle endpoints `POST /jobs/{id}/pickup` and
+   `POST /jobs/{id}/delivered`; transition logic; ownership/authorization per
+   policy answers below.
+6. Failure-cause reporting: agent detects filament runout, thermal runaway,
+   print detachment via printer telemetry; orchestrator persists the cause.
+7. Payout eligibility query update — prints metered on `delivered`; compute
+   and storage on `completed`.
+
+**Open policy questions (block C5+ only).**
+
+- Who confirms `awaiting_pickup → picked_up`: contributor, consumer, or
+  NTARI admin?
+- Who confirms `picked_up → delivered`: most likely consumer; needs lock.
+- Payout trigger for prints: fire at `picked_up` or hold until `delivered`?
+  Working preference: hold until `delivered`; `picked_up → delivered` window
+  acts as the dispute window.
 
 ### Sub-phase B6 — Portal UI for Opt-Out Management (complete, 2026-05-05 · `ff1e08d`, `101a6f3`, `5e6c8f5`, `fe83d19`)
 - **Commit `ff1e08d`** — migration 014: `opt_out_compute`, `opt_out_storage`,
