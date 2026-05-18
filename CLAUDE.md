@@ -28,8 +28,9 @@ SoHoLINK uses a three-layer workflow. Claude Code is layer 2 — the execution l
 or CLAUDE.md edits that were not requested are violations of this discipline.
 When in doubt, stop and report — do not act.
 
-Commit messages are written by the human verbatim. Do not append Co-Authored-By,
-Signed-off-by, or similar trailers.
+Commit messages are drafted by Claude Code (which has direct diff visibility),
+audited by Claude Chat, and authorized by the human. Do not append
+Co-Authored-By, Signed-off-by, or similar trailers.
 
 **Reply format.** Claude Chat replies are split into two parts to minimize
 the human's reading load:
