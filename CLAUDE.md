@@ -31,6 +31,18 @@ When in doubt, stop and report — do not act.
 Commit messages are written by the human verbatim. Do not append Co-Authored-By,
 Signed-off-by, or similar trailers.
 
+**Reply format.** Claude Chat replies are split into two parts to minimize
+the human's reading load:
+
+1. **For the human (top):** 1-3 lines. Decision point or status, plus
+   judgment calls. End with explicit ask ("Approve?", "Which option?").
+2. **For Code (block below):** Paste-ready, self-contained. Commands,
+   `str_replace` pairs, verification, commit message verbatim. The human
+   pastes without reading line-by-line.
+
+Avoid ambiguity that Code can read as self-authorization — "I will draft
+a proposal" not "I'll write the X."
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
@@ -443,6 +455,15 @@ These have caused bugs before — read before touching related code:
   Build-tagged files are invisible to ordinary `go build ./...` and `go test ./...`.
   CI runs with the tag set; missing this locally means CI is the first build attempt.
   (Root cause of `test/integration/phase1_test.go` stale call, CI #68–#71.)
+
+**CI verification (in-loop via gh):**
+- After pushing to master, run `gh run list -R NTARI-RAND/SoHoLINK --limit 1`
+  to confirm the latest commit passes CI before continuing work. Without this,
+  failures can compound across multiple commits unobserved (CI #68–#71 in
+  Dev XXI ran red for four commits before being surfaced externally).
+- `gh` was installed in Dev XXI via `winget install --id GitHub.cli` and
+  authenticated with `gh auth login`. If missing on a fresh shell, reinstall
+  the same way.
 
 **Workload type vocabulary (post-B3):**
 - Two enums, by design — they evolve independently:
