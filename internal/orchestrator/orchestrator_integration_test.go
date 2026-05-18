@@ -20,13 +20,13 @@ import (
 
 // orchFixture holds shared DB state for orchestrator integration tests.
 type orchFixture struct {
-	db         *store.DB
-	orch       *orchestrator.Orchestrator
-	registry   *orchestrator.NodeRegistry
+	db          *store.DB
+	orch        *orchestrator.Orchestrator
+	registry    *orchestrator.NodeRegistry
 	tokenSecret []byte
-	providerID string
-	consumerID string
-	nodeID     string
+	providerID  string
+	consumerID  string
+	nodeID      string
 }
 
 // setupOrchFixture connects to Postgres, runs migrations, truncates all tables,
@@ -436,5 +436,93 @@ func TestRerouteDeclinedJob_NoCandidates(t *testing.T) {
 	}
 	if status != "failed" {
 		t.Errorf("status: got %q, want %q", status, "failed")
+	}
+}
+
+// TestExpireConfirmation_DeadlinePast_FlipsToDeclined verifies that
+// ExpireConfirmation flips an awaiting_confirmation job to declined when its
+// deadline has passed, sets declined_at, and returns flipped=true.
+func TestExpireConfirmation_DeadlinePast_FlipsToDeclined(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   printer_id, spec_hash, confirmation_deadline)
+		 VALUES ($1, $2, 'print_traditional'::workload_type,
+		         'awaiting_confirmation'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         'expire-test-printer', $4, NOW() - INTERVAL '1 second')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchPrintImage, make([]byte, 32),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert awaiting_confirmation job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpireConfirmation(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpireConfirmation: %v", err)
+	}
+	if !flipped {
+		t.Fatalf("ExpireConfirmation flipped: got false, want true")
+	}
+
+	var status string
+	var declinedAt *time.Time
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, declined_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &declinedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "declined" {
+		t.Errorf("status: got %q, want %q", status, "declined")
+	}
+	if declinedAt == nil {
+		t.Errorf("declined_at: got nil, want non-nil")
+	}
+}
+
+// TestExpireConfirmation_DeadlineFuture_NoChange verifies that
+// ExpireConfirmation does not flip a job whose deadline is still in the
+// future. Returns flipped=false with no error and leaves status unchanged.
+func TestExpireConfirmation_DeadlineFuture_NoChange(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   printer_id, spec_hash, confirmation_deadline)
+		 VALUES ($1, $2, 'print_traditional'::workload_type,
+		         'awaiting_confirmation'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         'expire-test-printer', $4, NOW() + INTERVAL '4 hours')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchPrintImage, make([]byte, 32),
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert awaiting_confirmation job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpireConfirmation(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpireConfirmation: %v", err)
+	}
+	if flipped {
+		t.Fatalf("ExpireConfirmation flipped: got true, want false")
+	}
+
+	var status string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "awaiting_confirmation" {
+		t.Errorf("status: got %q, want %q", status, "awaiting_confirmation")
 	}
 }

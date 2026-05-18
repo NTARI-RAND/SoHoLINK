@@ -461,10 +461,79 @@ func (o *Orchestrator) rerouteDeclined(ctx context.Context) {
 	}
 }
 
-// StartDeclineRerouteLoop runs a background goroutine that periodically finds
-// declined jobs and attempts to re-dispatch them to a different node. Stops
-// when ctx is cancelled. Run only from cmd/orchestrator — not from cmd/portal,
-// which has a separate registry instance that never receives agent heartbeats.
+// ExpireConfirmation flips a single job from awaiting_confirmation to declined
+// if its deadline has passed. Returns flipped=true when the row was actually
+// changed; flipped=false with err=nil is the lost-race case (a portal action
+// confirmed or extended the row between the caller's SELECT and this UPDATE).
+// Race-safe: the UPDATE re-checks both status and confirmation_deadline.
+func (o *Orchestrator) ExpireConfirmation(ctx context.Context, jobID string) (bool, error) {
+	ct, err := o.db.Pool.Exec(ctx,
+		`UPDATE jobs
+		 SET status      = 'declined'::job_status,
+		     declined_at = NOW(),
+		     updated_at  = NOW()
+		 WHERE id = $1
+		   AND status = 'awaiting_confirmation'::job_status
+		   AND confirmation_deadline < NOW()`,
+		jobID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("expire: update job %s: %w", jobID, err)
+	}
+	return ct.RowsAffected() == 1, nil
+}
+
+// expireConfirmations finds awaiting_confirmation jobs whose deadline has
+// passed and flips each to declined via ExpireConfirmation. Called on every
+// tick of StartDeclineRerouteLoop, before rerouteDeclined so freshly-expired
+// jobs are rerouted in the same tick.
+func (o *Orchestrator) expireConfirmations(ctx context.Context) {
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT id FROM jobs
+		 WHERE status = 'awaiting_confirmation'::job_status
+		   AND confirmation_deadline < NOW()
+		 LIMIT 100`)
+	if err != nil {
+		slog.Error("expire: query awaiting_confirmation jobs", "error", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.Error("expire: scan job id", "error", err)
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("expire: awaiting_confirmation rows", "error", err)
+		return
+	}
+
+	for _, id := range ids {
+		flipped, err := o.ExpireConfirmation(ctx, id)
+		if err != nil {
+			slog.Error("expire: update job to declined", "job_id", id, "error", err)
+			continue
+		}
+		if flipped {
+			slog.Info("auto-declined expired confirmation", "job_id", id)
+		} else {
+			slog.Debug("expire: lost race on auto-decline", "job_id", id)
+		}
+	}
+}
+
+// StartDeclineRerouteLoop runs a background goroutine that periodically (a)
+// auto-declines awaiting_confirmation jobs whose deadline has passed and (b)
+// re-dispatches declined jobs to a different node. Both passes run on the same
+// 30s ticker, with expire-then-reroute ordering so a freshly-expired job is
+// rerouted in the same tick. Stops when ctx is cancelled. Run only from
+// cmd/orchestrator — not from cmd/portal, which has a separate registry
+// instance that never receives agent heartbeats.
 func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -474,6 +543,7 @@ func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				o.expireConfirmations(ctx)
 				o.rerouteDeclined(ctx)
 			}
 		}
