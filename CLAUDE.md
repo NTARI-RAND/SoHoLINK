@@ -1002,7 +1002,7 @@ window expires without a sweeper running.
 to 7-arg (`false, 4*time.Hour`). CI #68–#71 were all failing on this; #72 green. Root cause documented
 in TODO 26 and Critical API Notes (exported signature change workflow).
 
-### Deployment checkpoint — `0475943` (2026-05-18, Dev XXII)
+### Deployment checkpoint — `0475943` (2026-05-18, Dev XXII) · resolved `2528e79` (2026-05-18)
 **`027ac81`**: Codifies the three-layer commit message convention (Code drafts →
 Chat audits → human authorizes) that had emerged in practice but was not yet
 written down.
