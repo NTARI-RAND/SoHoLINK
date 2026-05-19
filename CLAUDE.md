@@ -780,9 +780,10 @@ enum value.
 **Commit plan (7 commits).**
 
 1. Migration 018 — extend `job_status` with `dispatched`, `awaiting_pickup`,
-   `picked_up`, `delivered`; add columns `started_at`, `picked_up_at`,
-   `delivered_at`, `exit_code`, `failure_cause`. Enum down migration is
-   one-way (Postgres limitation, documented in down SQL).
+   `picked_up`, `delivered`; add columns `picked_up_at`, `delivered_at`,
+   `exit_code`, `failure_cause` on `jobs` (`started_at` already exists from
+   migration 001). Enum down migration is one-way (Postgres limitation,
+   documented in down SQL).
 2. Start-confirmation endpoint (`POST /jobs/{id}/started`) + `dispatched`-timeout
    reaper. `handleGetJobs` switches to `scheduled → dispatched`. Closes TODO 24.
 3. `/complete` parses JSON body `{exit_code, failure_cause, tmpfs_exhausted}`.
