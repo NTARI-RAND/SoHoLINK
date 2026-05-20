@@ -527,12 +527,78 @@ func (o *Orchestrator) expireConfirmations(ctx context.Context) {
 	}
 }
 
+// ExpireDispatched flips a single job from dispatched back to scheduled if it
+// has been in dispatched state for more than 2 minutes without a /started
+// confirmation. Returns flipped=true when the row was actually changed;
+// flipped=false with err=nil is the lost-race case (the agent called /started
+// between the caller's SELECT and this UPDATE).
+// Race-safe: the UPDATE re-checks both status and updated_at.
+func (o *Orchestrator) ExpireDispatched(ctx context.Context, jobID string) (bool, error) {
+	ct, err := o.db.Pool.Exec(ctx,
+		`UPDATE jobs
+		 SET status     = 'scheduled'::job_status,
+		     updated_at = NOW()
+		 WHERE id = $1
+		   AND status = 'dispatched'::job_status
+		   AND updated_at < NOW() - INTERVAL '2 minutes'`,
+		jobID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("expire dispatched: update job %s: %w", jobID, err)
+	}
+	return ct.RowsAffected() == 1, nil
+}
+
+// expireDispatched finds dispatched jobs that have not received a /started
+// confirmation within 2 minutes and reverts each to scheduled. Called on
+// every tick of StartDeclineRerouteLoop, after expireConfirmations and before
+// rerouteDeclined.
+func (o *Orchestrator) expireDispatched(ctx context.Context) {
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT id FROM jobs
+		 WHERE status = 'dispatched'::job_status
+		   AND updated_at < NOW() - INTERVAL '2 minutes'
+		 LIMIT 100`)
+	if err != nil {
+		slog.Error("expire dispatched: query dispatched jobs", "error", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.Error("expire dispatched: scan job id", "error", err)
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("expire dispatched: rows", "error", err)
+		return
+	}
+
+	for _, id := range ids {
+		flipped, err := o.ExpireDispatched(ctx, id)
+		if err != nil {
+			slog.Error("expire dispatched: update job", "job_id", id, "error", err)
+			continue
+		}
+		if flipped {
+			slog.Info("dispatched expired — returned to scheduled", "job_id", id)
+		} else {
+			slog.Debug("expire dispatched lost race", "job_id", id)
+		}
+	}
+}
+
 // StartDeclineRerouteLoop runs a background goroutine that periodically (a)
-// auto-declines awaiting_confirmation jobs whose deadline has passed and (b)
-// re-dispatches declined jobs to a different node. Both passes run on the same
-// 30s ticker, with expire-then-reroute ordering so a freshly-expired job is
-// rerouted in the same tick. Stops when ctx is cancelled. Run only from
-// cmd/orchestrator — not from cmd/portal, which has a separate registry
+// auto-declines awaiting_confirmation jobs whose deadline has passed, (b)
+// reverts stale dispatched jobs back to scheduled, and (c) re-dispatches
+// declined jobs to a different node. All three passes run on the same 30s
+// ticker in expire-then-reroute order. Stops when ctx is cancelled. Run only
+// from cmd/orchestrator — not from cmd/portal, which has a separate registry
 // instance that never receives agent heartbeats.
 func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 	go func() {
@@ -544,6 +610,7 @@ func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 				return
 			case <-ticker.C:
 				o.expireConfirmations(ctx)
+				o.expireDispatched(ctx)
 				o.rerouteDeclined(ctx)
 			}
 		}

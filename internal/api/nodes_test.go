@@ -629,3 +629,173 @@ func TestHandleReportPrinters_UpsertsPreservingEnabled(t *testing.T) {
 		t.Errorf("expected p2 inserted with enabled=false, got true")
 	}
 }
+
+// ── handleGetJobs ─────────────────────────────────────────────────────────────
+
+func TestHandleGetJobs_FlipsToDispatched(t *testing.T) {
+	db := connectAPITestDB(t)
+	participantID := seedAPIParticipant(t, db, "getjobs_dispatched@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'getjobs-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, container_image)
+		 VALUES ($1, $2, 'app_hosting', 'scheduled', 0, 2, 4096, 'img:latest')
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var startedAt *string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status, started_at::text FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &startedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "dispatched" {
+		t.Errorf("status: got %q, want %q", status, "dispatched")
+	}
+	if startedAt != nil {
+		t.Errorf("started_at: expected NULL, got %q", *startedAt)
+	}
+}
+
+// ── handleStartedJob ──────────────────────────────────────────────────────────
+
+func TestHandleStartedJob_Success(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "started_success@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'started-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb)
+		 VALUES ($1, $2, 'app_hosting', 'dispatched', 0, 2, 4096)
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleStartedJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var startedAt *string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status, started_at::text FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &startedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "running" {
+		t.Errorf("status: got %q, want %q", status, "running")
+	}
+	if startedAt == nil {
+		t.Errorf("started_at: expected non-NULL, got nil")
+	}
+}
+
+func TestHandleStartedJob_NotDispatched_409(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "started_409@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'started-409-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb)
+		 VALUES ($1, $2, 'app_hosting', 'scheduled', 0, 2, 4096)
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleStartedJob(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want unchanged %q", status, "scheduled")
+	}
+}
+
+func TestHandleStartedJob_NotFound_404(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+
+	r := httptest.NewRequest(http.MethodPost, "/jobs/00000000-0000-0000-0000-000000000000/started", nil)
+	r.SetPathValue("id", "00000000-0000-0000-0000-000000000000")
+	w := httptest.NewRecorder()
+	ps.handleStartedJob(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleStartedJob_ForbiddenSPIFFE_403: skipped — identity.contextKey is
+// unexported; SPIFFE context cannot be injected from package api tests.
+// The auth path is covered by the same pattern as handleCompleteJob (shared
+// code block) and by production mTLS enforcement.

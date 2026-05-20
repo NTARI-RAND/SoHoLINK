@@ -526,3 +526,85 @@ func TestExpireConfirmation_DeadlineFuture_NoChange(t *testing.T) {
 		t.Errorf("status: got %q, want %q", status, "awaiting_confirmation")
 	}
 }
+
+// TestExpireDispatched_FlipsBackToScheduled verifies that ExpireDispatched
+// reverts a dispatched job to scheduled when updated_at is older than 2 minutes,
+// and returns flipped=true.
+func TestExpireDispatched_FlipsBackToScheduled(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   updated_at)
+		 VALUES ($1, $2, 'app_hosting'::workload_type,
+		         'dispatched'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         NOW() - INTERVAL '3 minutes')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchComputeImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert dispatched job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpireDispatched(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpireDispatched: %v", err)
+	}
+	if !flipped {
+		t.Fatalf("ExpireDispatched flipped: got false, want true")
+	}
+
+	var status string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want %q", status, "scheduled")
+	}
+}
+
+// TestExpireDispatched_RaceLoss verifies that ExpireDispatched does not flip a
+// dispatched job whose updated_at is within the 2-minute window (simulating
+// a fresh dispatch where the agent has not yet timed out). Returns flipped=false.
+func TestExpireDispatched_RaceLoss(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image)
+		 VALUES ($1, $2, 'app_hosting'::workload_type,
+		         'dispatched'::job_status,
+		         2, 4096, 0, FALSE, $3)
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchComputeImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert dispatched job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpireDispatched(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpireDispatched: %v", err)
+	}
+	if flipped {
+		t.Fatalf("ExpireDispatched flipped: got true, want false")
+	}
+
+	var status string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "dispatched" {
+		t.Errorf("status: got %q, want unchanged %q", status, "dispatched")
+	}
+}

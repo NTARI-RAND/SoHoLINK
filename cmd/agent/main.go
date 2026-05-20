@@ -366,7 +366,44 @@ func runJob(
 		},
 	}
 
-	result, err := executor.Run(ctx, spec)
+	// Start the container. On error, stop the telemetry goroutine and bail.
+	// Note: if /started is later rejected (409), Stop tears down the container;
+	// a docker-test harness is needed for proper test coverage of this path.
+	ec, err := executor.Start(ctx, spec)
+	if err != nil {
+		slog.Error("executor start failed", "job_id", job.JobID, "error", err)
+		close(done)
+		return
+	}
+
+	// POST /jobs/{id}/started — confirms to orchestrator the container actually
+	// started. 409 means the orchestrator has reclaimed the job (reaper fired or
+	// another agent claimed it); stop the local container and bail. No /complete
+	// call — orchestrator state is already reconciled.
+	startedURL := controlPlaneAddr + "/jobs/" + job.JobID + "/started"
+	startedReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, startedURL, nil)
+	if reqErr != nil {
+		slog.Error("started request build failed", "job_id", job.JobID, "error", reqErr)
+		_ = executor.Stop(ctx, ec)
+		close(done)
+		return
+	}
+	startedResp, doErr := telemetryClient.Do(startedReq)
+	if doErr != nil || (startedResp != nil && startedResp.StatusCode >= 300) {
+		code := 0
+		if startedResp != nil {
+			code = startedResp.StatusCode
+			startedResp.Body.Close()
+		}
+		slog.Warn("started rejected — stopping container",
+			"job_id", job.JobID, "status", code, "error", doErr)
+		_ = executor.Stop(ctx, ec)
+		close(done)
+		return
+	}
+	startedResp.Body.Close()
+
+	result, err := executor.Wait(ctx, ec)
 	close(done)
 
 	if err != nil {

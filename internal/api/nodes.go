@@ -94,6 +94,7 @@ func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator
 	mux.HandleFunc("POST /nodes/heartbeat", handleHeartbeat(db, registry))
 	mux.HandleFunc("POST /nodes/printers", handleReportPrinters(db))
 	mux.HandleFunc("GET /nodes/jobs", handleGetJobs(db))
+	mux.HandleFunc("POST /jobs/{id}/started", handleStartedJob(db))
 	mux.HandleFunc("POST /jobs/{id}/telemetry", handleTelemetry(db))
 	mux.HandleFunc("POST /jobs/{id}/complete", handleCompleteJob(db))
 }
@@ -531,8 +532,8 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 
 		if len(jobIDs) > 0 {
 			_, err = db.Pool.Exec(r.Context(),
-				`UPDATE jobs SET started_at = NOW(), status = 'running'::job_status, updated_at = NOW()
-				 WHERE id = ANY($1) AND started_at IS NULL`,
+				`UPDATE jobs SET status = 'dispatched'::job_status, updated_at = NOW()
+				 WHERE id = ANY($1) AND status = 'scheduled'::job_status`,
 				jobIDs,
 			)
 			if err != nil {
@@ -600,6 +601,53 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 	}
 }
 
+func handleStartedJob(db *store.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := r.PathValue("id")
+		if jobID == "" {
+			writeError(w, http.StatusBadRequest, "job ID required")
+			return
+		}
+
+		var nodeSpiffeID string
+		err := db.Pool.QueryRow(r.Context(), `
+			SELECT COALESCE(n.spiffe_id, '')
+			FROM jobs j
+			INNER JOIN nodes n ON j.node_id = n.id
+			WHERE j.id = $1`,
+			jobID,
+		).Scan(&nodeSpiffeID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		if nodeSpiffeID != "" {
+			spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+			if !ok || spiffeID.String() != nodeSpiffeID {
+				writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
+				return
+			}
+		}
+
+		tag, err := db.Pool.Exec(r.Context(),
+			`UPDATE jobs SET started_at = NOW(), status = 'running'::job_status, updated_at = NOW()
+			 WHERE id = $1 AND status = 'dispatched'::job_status`,
+			jobID,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			writeError(w, http.StatusConflict, "job is not in dispatched state")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"started": true}) //nolint:errcheck
+	}
+}
+
 func handleTelemetry(db *store.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.PathValue("id")
@@ -662,6 +710,10 @@ func (s *APIServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) handleCompleteJob(w http.ResponseWriter, r *http.Request) {
 	handleCompleteJob(s.db)(w, r)
+}
+
+func (s *APIServer) handleStartedJob(w http.ResponseWriter, r *http.Request) {
+	handleStartedJob(s.db)(w, r)
 }
 
 func (s *APIServer) handleReportPrinters(w http.ResponseWriter, r *http.Request) {

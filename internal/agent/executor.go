@@ -51,6 +51,15 @@ type ExecutionResult struct {
 	TmpfsExhausted bool
 }
 
+// ExecutionContext is the handle returned by Start. It carries the resources
+// Wait needs to clean up, and lets Stop tear down a partially or fully
+// started container in the agent's /started 409 path.
+type ExecutionContext struct {
+	JobID       string
+	ContainerID string
+	NetworkID   string
+}
+
 // imageInspector is the subset of the Docker client used for image
 // inspection. Extracted so tests can fake it without a Docker daemon.
 type imageInspector interface {
@@ -105,36 +114,37 @@ func newExecutorForTest(allowlist *Allowlist, inspector imageInspector, optout *
 	}
 }
 
-// Run executes the workload described by spec: allowlist check, root-user
-// check, per-job network creation, hardened container start, wait, and
-// cleanup. See buildHostConfig for the security baseline applied.
-func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult, error) {
+// Start performs all pre-flight checks and launches the container. On success
+// it returns an ExecutionContext that the caller must eventually pass to either
+// Wait (normal path) or Stop (abort path). Start uses explicit error-path
+// cleanup rather than defers so resources survive to be used by Wait/Stop.
+func (e *Executor) Start(ctx context.Context, spec ContainerSpec) (*ExecutionContext, error) {
 	// Allowlist check — must be the first action, before any Docker call.
 	entry, err := e.allowlist.Lookup(spec.Image)
 	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("run: %w", err)
+		return nil, fmt.Errorf("start: %w", err)
 	}
 
 	// Opt-out gate — consult contributor consent before any Docker interaction.
 	if !e.optout.IsResourceEnabled(entry.Type, "") {
-		return ExecutionResult{}, fmt.Errorf("run: %w: %s", ErrWorkloadOptedOut, entry.Type)
+		return nil, fmt.Errorf("start: %w: %s", ErrWorkloadOptedOut, entry.Type)
 	}
 
 	// Inspect; pull if missing, then re-inspect to read the image metadata.
 	inspect, err := e.inspector.ImageInspect(ctx, spec.Image)
 	if err != nil {
 		if !dockerclient.IsErrNotFound(err) {
-			return ExecutionResult{}, fmt.Errorf("run: image inspect: %w", err)
+			return nil, fmt.Errorf("start: image inspect: %w", err)
 		}
 		reader, perr := e.client.ImagePull(ctx, spec.Image, image.PullOptions{})
 		if perr != nil {
-			return ExecutionResult{}, fmt.Errorf("run: image pull: %w", perr)
+			return nil, fmt.Errorf("start: image pull: %w", perr)
 		}
 		_, _ = io.Copy(io.Discard, reader)
 		reader.Close()
 		inspect, err = e.inspector.ImageInspect(ctx, spec.Image)
 		if err != nil {
-			return ExecutionResult{}, fmt.Errorf("run: image inspect after pull: %w", err)
+			return nil, fmt.Errorf("start: image inspect after pull: %w", err)
 		}
 	}
 
@@ -145,7 +155,7 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 		user = inspect.Config.User
 	}
 	if isRootUser(user) {
-		return ExecutionResult{}, fmt.Errorf("run: %w", ErrRootContainerNotAllowed)
+		return nil, fmt.Errorf("start: %w", ErrRootContainerNotAllowed)
 	}
 
 	// Build env slice: caller-supplied vars plus the two SoHoLINK injections.
@@ -156,18 +166,10 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 	env = append(env, "SOHOLINK_JOB_ID="+spec.JobID)
 	env = append(env, "SOHOLINK_JOB_TOKEN="+spec.JobToken)
 
-	// Create per-job network. Defer registered FIRST so it runs LAST (after
-	// container removal — Docker requires the network be empty before removal).
 	networkID, err := e.createJobNetwork(ctx, spec.JobID, entry.Egress)
 	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("run: %w", err)
+		return nil, fmt.Errorf("start: %w", err)
 	}
-	defer func() {
-		if rmErr := e.client.NetworkRemove(context.Background(), networkID); rmErr != nil {
-			e.log.Warn("network remove failed",
-				"job_id", spec.JobID, "network_id", networkID, "error", rmErr)
-		}
-	}()
 
 	hostCfg := buildHostConfig(spec, entry)
 	netCfg := &network.NetworkingConfig{
@@ -184,53 +186,98 @@ func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult
 		"",  // auto-generate container name
 	)
 	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("run: container create: %w", err)
+		if rmErr := e.client.NetworkRemove(context.Background(), networkID); rmErr != nil {
+			slog.Warn("network remove failed during start cleanup",
+				"job_id", spec.JobID, "network_id", networkID, "error", rmErr)
+		}
+		return nil, fmt.Errorf("start: container create: %w", err)
 	}
 	containerID := resp.ID
 
-	// Container removal — registered SECOND so it runs FIRST (before network removal).
-	defer func() {
+	if err := e.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		if rmErr := e.client.ContainerRemove(context.Background(), containerID,
 			container.RemoveOptions{Force: true}); rmErr != nil {
-			e.log.Warn("container remove failed",
+			slog.Warn("container remove failed during start cleanup",
 				"job_id", spec.JobID, "container_id", containerID, "error", rmErr)
 		}
-	}()
-
-	if err := e.client.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return ExecutionResult{}, fmt.Errorf("run: container start: %w", err)
+		if rmErr := e.client.NetworkRemove(context.Background(), networkID); rmErr != nil {
+			slog.Warn("network remove failed during start cleanup",
+				"job_id", spec.JobID, "network_id", networkID, "error", rmErr)
+		}
+		return nil, fmt.Errorf("start: container start: %w", err)
 	}
 
-	statusCh, errCh := e.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	return &ExecutionContext{
+		JobID:       spec.JobID,
+		ContainerID: containerID,
+		NetworkID:   networkID,
+	}, nil
+}
+
+// Wait blocks until the container exits, then cleans up the container and
+// network. It must be called exactly once per successful Start.
+func (e *Executor) Wait(ctx context.Context, ec *ExecutionContext) (ExecutionResult, error) {
+	defer e.cleanup(context.Background(), ec)
+
+	statusCh, errCh := e.client.ContainerWait(ctx, ec.ContainerID, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
 		if err != nil {
-			return ExecutionResult{JobID: spec.JobID, Error: err.Error()}, nil
+			return ExecutionResult{JobID: ec.JobID, Error: err.Error()}, nil
 		}
-		return ExecutionResult{JobID: spec.JobID}, nil
+		return ExecutionResult{JobID: ec.JobID}, nil
 	case waitResp := <-statusCh:
 		result := ExecutionResult{
-			JobID:    spec.JobID,
+			JobID:    ec.JobID,
 			ExitCode: int(waitResp.StatusCode),
 		}
 		if waitResp.Error != nil {
 			result.Error = waitResp.Error.Message
 		}
 		if waitResp.StatusCode != 0 {
-			result.TmpfsExhausted = e.scanStderrForENOSPC(ctx, containerID)
+			result.TmpfsExhausted = e.scanStderrForENOSPC(ctx, ec.ContainerID)
 		}
 		return result, nil
 	}
 }
 
-// Stop gracefully stops the container then removes it.
-func (e *Executor) Stop(ctx context.Context, containerID string) error {
-	if err := e.client.ContainerStop(ctx, containerID, container.StopOptions{}); err != nil {
-		return fmt.Errorf("stop container %s: %w", containerID, err)
+// Run is a convenience wrapper around Start + Wait. Tests and any callers
+// that do not need to interpose between container start and wait can use this.
+func (e *Executor) Run(ctx context.Context, spec ContainerSpec) (ExecutionResult, error) {
+	ec, err := e.Start(ctx, spec)
+	if err != nil {
+		return ExecutionResult{JobID: spec.JobID}, err
 	}
-	if err := e.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
-		return fmt.Errorf("remove container %s: %w", containerID, err)
+	return e.Wait(ctx, ec)
+}
+
+// cleanup removes the container and network. Errors are logged, not returned —
+// cleanup must never mask the original error that triggered the teardown.
+func (e *Executor) cleanup(ctx context.Context, ec *ExecutionContext) {
+	if err := e.client.ContainerRemove(ctx, ec.ContainerID,
+		container.RemoveOptions{Force: true}); err != nil {
+		slog.Warn("container remove failed",
+			"container_id", ec.ContainerID, "job_id", ec.JobID, "error", err)
 	}
+	if err := e.client.NetworkRemove(ctx, ec.NetworkID); err != nil {
+		slog.Warn("network remove failed",
+			"network_id", ec.NetworkID, "job_id", ec.JobID, "error", err)
+	}
+}
+
+// Stop terminates and cleans up a container started via Start. Used by runJob
+// when the orchestrator rejects /jobs/{id}/started (e.g. 409 — job already
+// reaped or claimed elsewhere). Internal failures are logged but never
+// returned — the caller is already in an error path and cleanup must not
+// mask the original 409 context.
+func (e *Executor) Stop(ctx context.Context, ec *ExecutionContext) error {
+	timeout := 10 // seconds — SIGTERM-to-SIGKILL grace period
+	if err := e.client.ContainerStop(ctx, ec.ContainerID,
+		container.StopOptions{Timeout: &timeout}); err != nil {
+		slog.Warn("container stop failed",
+			"container_id", ec.ContainerID, "job_id", ec.JobID, "error", err)
+	}
+	e.cleanup(ctx, ec)
 	return nil
 }
 
