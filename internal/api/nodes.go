@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -547,6 +548,16 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 	}
 }
 
+// completeJobRequest is the JSON body the agent POSTs to /jobs/{id}/complete.
+// ExitCode is a pointer so the handler distinguishes "not sent" (old agent —
+// persisted as NULL) from "sent zero" (success — persisted as 0). C4 uses this
+// distinction to decide whether to fire metering.
+type completeJobRequest struct {
+	ExitCode       *int   `json:"exit_code,omitempty"`
+	FailureCause   string `json:"failure_cause,omitempty"`
+	TmpfsExhausted bool   `json:"tmpfs_exhausted,omitempty"`
+}
+
 func handleCompleteJob(db *store.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.PathValue("id")
@@ -578,10 +589,25 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			}
 		}
 
+		var req completeJobRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		// Derive failure_cause: explicit field wins; otherwise fall back to
+		// "tmpfs_exhausted" if the agent flagged ENOSPC; otherwise empty (NULLed
+		// in the UPDATE via NULLIF).
+		cause := req.FailureCause
+		if cause == "" && req.TmpfsExhausted {
+			cause = "tmpfs_exhausted"
+		}
+
 		tag, err := db.Pool.Exec(r.Context(),
-			`UPDATE jobs SET status = 'completed'::job_status, completed_at = NOW(), updated_at = NOW()
+			`UPDATE jobs SET status = 'completed'::job_status, completed_at = NOW(), updated_at = NOW(),
+				exit_code = $2, failure_cause = NULLIF($3, '')
 			 WHERE id = $1 AND status = 'running'::job_status`,
-			jobID,
+			jobID, req.ExitCode, cause,
 		)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")

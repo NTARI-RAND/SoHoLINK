@@ -312,6 +312,21 @@ func TestHandleCompleteJob_RunningJob(t *testing.T) {
 	if status != "completed" {
 		t.Errorf("expected status=completed, got %q", status)
 	}
+
+	var exitCode *int
+	var failureCause *string
+	err = db.Pool.QueryRow(context.Background(),
+		`SELECT exit_code, failure_cause FROM jobs WHERE id = $1`, jobID,
+	).Scan(&exitCode, &failureCause)
+	if err != nil {
+		t.Fatalf("query job columns: %v", err)
+	}
+	if exitCode == nil || *exitCode != 0 {
+		t.Errorf("expected exit_code=0, got %v", exitCode)
+	}
+	if failureCause != nil {
+		t.Errorf("expected failure_cause=NULL, got %q", *failureCause)
+	}
 }
 
 func TestHandleCompleteJob_NotRunning(t *testing.T) {
@@ -353,6 +368,267 @@ func TestHandleCompleteJob_NotRunning(t *testing.T) {
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", w.Code)
+	}
+}
+
+func TestHandleCompleteJob_PersistsExitCodeNonzero(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_nonzero@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-nonzero-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 1})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var exitCode *int
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT exit_code, status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&exitCode, &status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if exitCode == nil || *exitCode != 1 {
+		t.Errorf("expected exit_code=1, got %v", exitCode)
+	}
+	// C4 will change status to 'failed' for non-zero; C3 still writes 'completed'.
+	if status != "completed" {
+		t.Errorf("expected status=completed (C4 will change this), got %q", status)
+	}
+}
+
+func TestHandleCompleteJob_PersistsFailureCause(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_cause@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-cause-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 1, "failure_cause": "container OOM"})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var exitCode *int
+	var failureCause *string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT exit_code, failure_cause FROM jobs WHERE id = $1`, jobID,
+	).Scan(&exitCode, &failureCause); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if exitCode == nil || *exitCode != 1 {
+		t.Errorf("expected exit_code=1, got %v", exitCode)
+	}
+	if failureCause == nil || *failureCause != "container OOM" {
+		t.Errorf("expected failure_cause=%q, got %v", "container OOM", failureCause)
+	}
+}
+
+func TestHandleCompleteJob_TmpfsFallback(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_tmpfs@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-tmpfs-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// no explicit failure_cause — should be derived from tmpfs_exhausted flag
+	b, _ := json.Marshal(map[string]any{"exit_code": 1, "tmpfs_exhausted": true})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var failureCause *string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT failure_cause FROM jobs WHERE id = $1`, jobID,
+	).Scan(&failureCause); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if failureCause == nil || *failureCause != "tmpfs_exhausted" {
+		t.Errorf("expected failure_cause=%q, got %v", "tmpfs_exhausted", failureCause)
+	}
+}
+
+func TestHandleCompleteJob_BackwardCompat_NoBody(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_nobody@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-nobody-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// old agent sends no body — handler must accept and persist NULL for both columns
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", http.NoBody)
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var exitCode *int
+	var failureCause *string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT exit_code, failure_cause FROM jobs WHERE id = $1`, jobID,
+	).Scan(&exitCode, &failureCause); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if exitCode != nil {
+		t.Errorf("expected exit_code=NULL, got %d", *exitCode)
+	}
+	if failureCause != nil {
+		t.Errorf("expected failure_cause=NULL, got %q", *failureCause)
+	}
+}
+
+func TestHandleCompleteJob_MalformedBody_400(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_malformed@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-malformed-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// exit_code is a string — malformed JSON for our struct, triggers 400
+	b := []byte(`{"exit_code": "not a number"}`)
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// UPDATE was never executed — job should still be in running state
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "running" {
+		t.Errorf("expected status=running after 400, got %q", status)
 	}
 }
 

@@ -414,8 +414,15 @@ func runJob(
 	// Signal job completion to the control plane so it can set completed_at
 	// and trigger metering. Only called on successful execution.
 	completeURL := controlPlaneAddr + "/jobs/" + job.JobID + "/complete"
-	completeBody, _ := json.Marshal(map[string]any{
-		"tmpfs_exhausted": result.TmpfsExhausted,
+	completeBody, _ := json.Marshal(struct {
+		ExitCode       int    `json:"exit_code"`
+		FailureCause   string `json:"failure_cause,omitempty"`
+		TmpfsExhausted bool   `json:"tmpfs_exhausted,omitempty"`
+	}{
+		ExitCode:       result.ExitCode,
+		TmpfsExhausted: result.TmpfsExhausted,
+		// FailureCause stays empty for C3; C6 adds agent-side detection
+		// (filament runout, thermal runaway, print detachment).
 	})
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, bytes.NewReader(completeBody))
 	if reqErr == nil {
