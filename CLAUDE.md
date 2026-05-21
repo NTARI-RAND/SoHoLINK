@@ -1013,16 +1013,20 @@ existing `StartDeclineRerouteLoop` 30s ticker (expire-then-reroute ordering).
 2 new integration tests. B4 lifecycle complete — the dc1de1d deploy hold ("Do
 not deploy until B4 commit 6") is resolved.
 
-### Deployment checkpoint — `54846c5` (2026-05-20, Dev XXIII)
+### Deployment checkpoint — `8ecb6cf` (2026-05-20, Dev XXIII)
 
-B5 commits 1-3 shipped. Migration 018 applied (job_status extended with
+B5 commits 1-4 shipped. Migration 018 applied (job_status extended with
 `dispatched`, `awaiting_pickup`, `picked_up`, `delivered`; new columns
 `picked_up_at`, `delivered_at`, `exit_code`, `failure_cause` on `jobs`).
 `handleGetJobs` now flips `scheduled → dispatched` instead of `running`;
 `POST /jobs/{id}/started` endpoint live (verified: 401 on unauthenticated
 request, not 404). `expireDispatched` reaper running on the 30s tick in
 `StartDeclineRerouteLoop`. `/complete` parses `{exit_code, failure_cause,
-tmpfs_exhausted}` and persists exit_code + failure_cause.
+tmpfs_exhausted}` and persists exit_code + failure_cause. `/complete`
+also branches terminal status on exit_code and workload_type:
+nil/non-zero → `failed`; zero on print workloads → `awaiting_pickup`
+(non-terminal, no `completed_at` set); zero on compute/storage → `completed`
+with metering. ComputeMetering gated — fires only on `completed` status.
 
 **Operational note**: agent binaries built before commit `129729e` do not
 POST `/jobs/{id}/started` and will see their dispatched jobs reverted to
