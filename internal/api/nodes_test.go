@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
@@ -327,6 +328,26 @@ func TestHandleCompleteJob_RunningJob(t *testing.T) {
 	if failureCause != nil {
 		t.Errorf("expected failure_cause=NULL, got %q", *failureCause)
 	}
+
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&completedAt); err != nil {
+		t.Fatalf("query completed_at: %v", err)
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at to be set, got NULL")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount == 0 {
+		t.Error("expected job_metering row to exist after successful completion")
+	}
 }
 
 func TestHandleCompleteJob_NotRunning(t *testing.T) {
@@ -419,9 +440,18 @@ func TestHandleCompleteJob_PersistsExitCodeNonzero(t *testing.T) {
 	if exitCode == nil || *exitCode != 1 {
 		t.Errorf("expected exit_code=1, got %v", exitCode)
 	}
-	// C4 will change status to 'failed' for non-zero; C3 still writes 'completed'.
-	if status != "completed" {
-		t.Errorf("expected status=completed (C4 will change this), got %q", status)
+	if status != "failed" {
+		t.Errorf("expected status=failed, got %q", status)
+	}
+
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&completedAt); err != nil {
+		t.Fatalf("query completed_at: %v", err)
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at to be set on failed status")
 	}
 }
 
@@ -476,6 +506,16 @@ func TestHandleCompleteJob_PersistsFailureCause(t *testing.T) {
 	if failureCause == nil || *failureCause != "container OOM" {
 		t.Errorf("expected failure_cause=%q, got %v", "container OOM", failureCause)
 	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("expected status=failed, got %q", status)
+	}
 }
 
 func TestHandleCompleteJob_TmpfsFallback(t *testing.T) {
@@ -526,9 +566,19 @@ func TestHandleCompleteJob_TmpfsFallback(t *testing.T) {
 	if failureCause == nil || *failureCause != "tmpfs_exhausted" {
 		t.Errorf("expected failure_cause=%q, got %v", "tmpfs_exhausted", failureCause)
 	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("expected status=failed, got %q", status)
+	}
 }
 
-func TestHandleCompleteJob_BackwardCompat_NoBody(t *testing.T) {
+func TestHandleCompleteJob_NilExitCode_Failed(t *testing.T) {
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 	participantID := seedAPIParticipant(t, db, "complete_nobody@test.com")
@@ -555,7 +605,9 @@ func TestHandleCompleteJob_BackwardCompat_NoBody(t *testing.T) {
 		t.Fatalf("seed job: %v", err)
 	}
 
-	// old agent sends no body — handler must accept and persist NULL for both columns
+	// Old agents send no body. After C4, nil exit_code means we cannot confirm
+	// success — treated as failed. This is intentional: metering must not fire
+	// without explicit confirmation of exit_code == 0.
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", http.NoBody)
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
@@ -566,18 +618,26 @@ func TestHandleCompleteJob_BackwardCompat_NoBody(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
+	var status string
 	var exitCode *int
 	var failureCause *string
+	var completedAt *time.Time
 	if err := db.Pool.QueryRow(context.Background(),
-		`SELECT exit_code, failure_cause FROM jobs WHERE id = $1`, jobID,
-	).Scan(&exitCode, &failureCause); err != nil {
+		`SELECT status, exit_code, failure_cause, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &exitCode, &failureCause, &completedAt); err != nil {
 		t.Fatalf("query job: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("expected status=failed (nil exit_code → cannot confirm success), got %q", status)
 	}
 	if exitCode != nil {
 		t.Errorf("expected exit_code=NULL, got %d", *exitCode)
 	}
 	if failureCause != nil {
 		t.Errorf("expected failure_cause=NULL, got %q", *failureCause)
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at to be set on failed status")
 	}
 }
 
@@ -629,6 +689,252 @@ func TestHandleCompleteJob_MalformedBody_400(t *testing.T) {
 	}
 	if status != "running" {
 		t.Errorf("expected status=running after 400, got %q", status)
+	}
+}
+
+func TestHandleCompleteJob_Print_AwaitingPickup(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_print_trad@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-print-trad-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'print_traditional', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 0})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var respBody map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if respBody["status"] != "awaiting_pickup" {
+		t.Errorf("expected response status=awaiting_pickup, got %q", respBody["status"])
+	}
+
+	var status string
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "awaiting_pickup" {
+		t.Errorf("expected status=awaiting_pickup, got %q", status)
+	}
+	if completedAt != nil {
+		t.Error("expected completed_at=NULL for non-terminal awaiting_pickup")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("expected no metering for print job in awaiting_pickup, got %d rows", meterCount)
+	}
+}
+
+func TestHandleCompleteJob_Print3D_AwaitingPickup(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_print3d@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-print3d-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'print_3d', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 0})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "awaiting_pickup" {
+		t.Errorf("expected status=awaiting_pickup, got %q", status)
+	}
+	if completedAt != nil {
+		t.Error("expected completed_at=NULL for non-terminal awaiting_pickup")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("expected no metering for print_3d job in awaiting_pickup, got %d rows", meterCount)
+	}
+}
+
+func TestHandleCompleteJob_FailedSetsCompletedAt(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_failed_at@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-failed-at-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 1})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("expected status=failed, got %q", status)
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at to be set on failed status (failed is terminal)")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("expected no metering on failed status, got %d rows", meterCount)
+	}
+}
+
+func TestHandleCompleteJob_NoMeteringOnFailed(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_no_meter@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-no-meter-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'batch_compute', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 2, "failure_cause": "oom kill"})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("metering must not fire on failed status: got %d rows in job_metering", meterCount)
 	}
 }
 

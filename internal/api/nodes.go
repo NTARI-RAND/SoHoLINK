@@ -566,14 +566,14 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		var nodeSpiffeID string
+		var nodeSpiffeID, workloadType string
 		err := db.Pool.QueryRow(r.Context(), `
-			SELECT COALESCE(n.spiffe_id, '')
+			SELECT COALESCE(n.spiffe_id, ''), j.workload_type::text
 			FROM jobs j
 			INNER JOIN nodes n ON j.node_id = n.id
 			WHERE j.id = $1`,
 			jobID,
-		).Scan(&nodeSpiffeID)
+		).Scan(&nodeSpiffeID, &workloadType)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
@@ -603,11 +603,36 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			cause = "tmpfs_exhausted"
 		}
 
+		// Determine terminal status based on exit_code and workload type.
+		// nil exit_code (no body / old agent) → failed; non-zero → failed;
+		// zero + print workload → awaiting_pickup (C5/C7 handles transitions
+		// from there); zero + anything else → completed with metering.
+		var newStatus string
+		var shouldMeter bool
+		switch {
+		case req.ExitCode == nil || *req.ExitCode != 0:
+			newStatus = "failed"
+		case workloadType == "print_traditional" || workloadType == "print_3d":
+			newStatus = "awaiting_pickup"
+		default:
+			newStatus = "completed"
+			shouldMeter = true
+		}
+
+		// completed_at is set only on terminal statuses. awaiting_pickup is
+		// non-terminal — completed_at gets set later when the job reaches
+		// delivered (C5) or failed.
+		var completedAt *time.Time
+		if newStatus == "completed" || newStatus == "failed" {
+			t := time.Now().UTC()
+			completedAt = &t
+		}
+
 		tag, err := db.Pool.Exec(r.Context(),
-			`UPDATE jobs SET status = 'completed'::job_status, completed_at = NOW(), updated_at = NOW(),
+			`UPDATE jobs SET status = $4::job_status, completed_at = $5, updated_at = NOW(),
 				exit_code = $2, failure_cause = NULLIF($3, '')
 			 WHERE id = $1 AND status = 'running'::job_status`,
-			jobID, req.ExitCode, cause,
+			jobID, req.ExitCode, cause, newStatus, completedAt,
 		)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -618,12 +643,14 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		if err := store.ComputeMetering(r.Context(), db, jobID); err != nil {
-			log.Printf("ComputeMetering job=%s error=%v", jobID, err)
+		if shouldMeter {
+			if err := store.ComputeMetering(r.Context(), db, jobID); err != nil {
+				log.Printf("ComputeMetering job=%s error=%v", jobID, err)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"completed": true}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]string{"status": newStatus}) //nolint:errcheck
 	}
 }
 
