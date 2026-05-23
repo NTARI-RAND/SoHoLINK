@@ -1013,26 +1013,61 @@ existing `StartDeclineRerouteLoop` 30s ticker (expire-then-reroute ordering).
 2 new integration tests. B4 lifecycle complete — the dc1de1d deploy hold ("Do
 not deploy until B4 commit 6") is resolved.
 
-### Deployment checkpoint — `8ecb6cf` (2026-05-20, Dev XXIII)
+### Deployment checkpoint — `7dc6c96` (2026-05-23, Dev XXIII)
 
-B5 commits 1-4 shipped. Migration 018 applied (job_status extended with
-`dispatched`, `awaiting_pickup`, `picked_up`, `delivered`; new columns
+B5 commits 1-5 shipped. Migration 018 applied (job_status extended with
+`dispatched`, `awaiting_pickup`, `picked_up`, `delivered`; columns
 `picked_up_at`, `delivered_at`, `exit_code`, `failure_cause` on `jobs`).
-`handleGetJobs` now flips `scheduled → dispatched` instead of `running`;
-`POST /jobs/{id}/started` endpoint live (verified: 401 on unauthenticated
-request, not 404). `expireDispatched` reaper running on the 30s tick in
-`StartDeclineRerouteLoop`. `/complete` parses `{exit_code, failure_cause,
-tmpfs_exhausted}` and persists exit_code + failure_cause. `/complete`
-also branches terminal status on exit_code and workload_type:
-nil/non-zero → `failed`; zero on print workloads → `awaiting_pickup`
-(non-terminal, no `completed_at` set); zero on compute/storage → `completed`
-with metering. ComputeMetering gated — fires only on `completed` status.
+Migration 019 applied (`awaiting_pickup_at timestamptz` on `jobs`).
+`handleGetJobs` flips `scheduled → dispatched` (C2) with the C5 self-print
+SQL predicate on both SELECT and UPDATE — skip print jobs assigned to a
+node owned by the job's consumer.
+`POST /jobs/{id}/started` (C2) flips `dispatched → running`.
+`expireDispatched` reaper reverts stale dispatched rows (C2).
+`/complete` (C3 + C4) parses `{exit_code, failure_cause, tmpfs_exhausted}`
+and branches terminal status: nil/non-zero → `failed`; zero + print →
+`awaiting_pickup` (sets `awaiting_pickup_at`); zero + compute/storage →
+`completed` with metering.
+`POST /consumer/job/{id}/picked-up` (C5) flips `awaiting_pickup → picked_up`.
+`POST /consumer/job/{id}/delivered` (C5) flips `picked_up → delivered`,
+sets `delivered_at` and `completed_at`.
+`POST /provider/job/{id}/no-show` (C5) flips `awaiting_pickup → failed`
+with `failure_cause='no_show_after_7d'` when the awaiting window has
+elapsed.
+`expirePickedUp` reaper (C5) auto-advances `picked_up → delivered` after
+the 7-day dispute window, wired into `StartDeclineRerouteLoop` between
+`expireDispatched` and `rerouteDeclined`.
+`NodeRegistry.FindMatch` (C5) excludes consumer-owned nodes from print
+workload matches via `ExcludeConsumerParticipantID`.
+`NodeEntry.ProviderID` renamed to `ParticipantID` (C5).
 
-**Operational note**: agent binaries built before commit `129729e` do not
-POST `/jobs/{id}/started` and will see their dispatched jobs reverted to
-`scheduled` by `expireDispatched` after ~2 minutes. No stuck rows; the
-job re-enters the dispatch pool on the next agent poll. Rebuild and
-redistribute agent binaries before enabling participant traffic.
+**Operational note (agent binaries)**: agent binaries built before commit
+`129729e` do not POST `/jobs/{id}/started` and will see their dispatched
+jobs reverted to `scheduled` by `expireDispatched` after ~2 minutes. No
+stuck rows; the job re-enters the dispatch pool on the next agent poll.
+Rebuild and redistribute agent binaries before enabling participant traffic.
+
+**Operational note (C5→C7 dispute gap)**: in C5 no-show is contributor-
+unilateral. The provider can flag a job as no-show after 7 days and the
+job fails immediately. There is no consumer recourse in-band — contested
+no-shows are handled out-of-band by NTARI admin (manual DB inspection)
+until C7 introduces the disputes table and admin review flow.
+
+**Operational note (C5→C9 metering gap)**: print payout metering is
+deferred to C9. Print jobs reach `delivered` in C5 (via consumer attest
+or 7d auto-advance) and accumulate as terminal-payout-eligible rows, but
+no money moves on prints until C9 updates the payout eligibility query
+AND adds the `ComputeMetering` call to `handleConsumerDelivered` and
+`expirePickedUp`. Compute and storage payouts are unaffected.
+
+**Operational note (window tunings)**: the 7-day windows for no-show
+(`awaiting_pickup → failed`) and dispute (`picked_up → delivered`) are
+pilot-specific tunings for the hyper-local Shenandoah Condominiums
+context, where in-person inspection is near-immediate. Broader deployments
+(e.g. mobile distribution via Hip Hop Cares) may warrant different
+tunings; the windows are SQL literals `INTERVAL '7 days'` in
+`handleProviderNoShow` and `expirePickedUp` — tuning will require either
+a migration to parameterize them or hardcoded changes.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
