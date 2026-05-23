@@ -91,7 +91,7 @@ func setupOrchFixture(t *testing.T, allowlistPath string, printConfirmEnabled bo
 	registry := orchestrator.NewNodeRegistry()
 	registry.Register(orchestrator.NodeEntry{
 		NodeID:        nodeID,
-		ProviderID:    providerID,
+		ParticipantID: providerID,
 		NodeClass:     "A",
 		CountryCode:   "US",
 		Status:        "online",
@@ -334,7 +334,7 @@ func TestRerouteDeclinedJob_Success(t *testing.T) {
 	}
 	f.registry.Register(orchestrator.NodeEntry{
 		NodeID:        nodeBID,
-		ProviderID:    f.providerID,
+		ParticipantID: f.providerID,
 		NodeClass:     "A",
 		CountryCode:   "US",
 		Status:        "online",
@@ -606,5 +606,152 @@ func TestExpireDispatched_RaceLoss(t *testing.T) {
 	}
 	if status != "dispatched" {
 		t.Errorf("status: got %q, want unchanged %q", status, "dispatched")
+	}
+}
+
+// TestExpirePickedUp_AdvancesAfter7Days verifies that ExpirePickedUp advances a
+// picked_up job to delivered when picked_up_at is older than 7 days, and that
+// no job_metering row is created (C9 deferral guard).
+func TestExpirePickedUp_AdvancesAfter7Days(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   picked_up_at)
+		 VALUES ($1, $2, 'print_traditional'::workload_type,
+		         'picked_up'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         NOW() - INTERVAL '8 days')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchPrintImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert picked_up job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpirePickedUp(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpirePickedUp: %v", err)
+	}
+	if !flipped {
+		t.Fatalf("ExpirePickedUp flipped: got false, want true")
+	}
+
+	var status string
+	var deliveredAt, completedAt *time.Time
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, delivered_at, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &deliveredAt, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "delivered" {
+		t.Errorf("status: got %q, want %q", status, "delivered")
+	}
+	if deliveredAt == nil {
+		t.Errorf("delivered_at: got nil, want non-nil")
+	}
+	if completedAt == nil {
+		t.Errorf("completed_at: got nil, want non-nil")
+	}
+
+	var meterCount int
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("job_metering count: got %d, want 0 (C9 metering deferred)", meterCount)
+	}
+}
+
+// TestExpirePickedUp_DoesNotAdvanceBefore7Days verifies that ExpirePickedUp
+// does not advance a picked_up job whose picked_up_at is within the 7-day
+// window. Returns flipped=false with status unchanged.
+func TestExpirePickedUp_DoesNotAdvanceBefore7Days(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   picked_up_at)
+		 VALUES ($1, $2, 'print_traditional'::workload_type,
+		         'picked_up'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         NOW() - INTERVAL '1 day')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchPrintImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert picked_up job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpirePickedUp(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpirePickedUp: %v", err)
+	}
+	if flipped {
+		t.Fatalf("ExpirePickedUp flipped: got true, want false")
+	}
+
+	var status string
+	var deliveredAt *time.Time
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, delivered_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &deliveredAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "picked_up" {
+		t.Errorf("status: got %q, want unchanged %q", status, "picked_up")
+	}
+	if deliveredAt != nil {
+		t.Errorf("delivered_at: got non-nil, want nil")
+	}
+}
+
+// TestExpirePickedUp_OnlyAffectsPickedUpStatus verifies that ExpirePickedUp
+// does not touch a job that is in awaiting_pickup status (not picked_up), even
+// when the timestamp is older than 7 days.
+func TestExpirePickedUp_OnlyAffectsPickedUpStatus(t *testing.T) {
+	allowlistPath := writeOrchAllowlist(t)
+	f := setupOrchFixture(t, allowlistPath, false)
+	ctx := context.Background()
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image,
+		                   awaiting_pickup_at, updated_at)
+		 VALUES ($1, $2, 'print_traditional'::workload_type,
+		         'awaiting_pickup'::job_status,
+		         2, 4096, 0, FALSE, $3,
+		         NOW() - INTERVAL '8 days', NOW() - INTERVAL '8 days')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchPrintImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert awaiting_pickup job: %v", err)
+	}
+
+	flipped, err := f.orch.ExpirePickedUp(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ExpirePickedUp: %v", err)
+	}
+	if flipped {
+		t.Fatalf("ExpirePickedUp flipped: got true, want false (awaiting_pickup is not picked_up)")
+	}
+
+	var status string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "awaiting_pickup" {
+		t.Errorf("status: got %q, want unchanged %q", status, "awaiting_pickup")
 	}
 }

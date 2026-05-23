@@ -128,7 +128,7 @@ func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.
 
 		registry.Register(orchestrator.NodeEntry{
 			NodeID:        req.NodeID,
-			ProviderID:    req.ProviderID,
+			ParticipantID: req.ProviderID,
 			NodeClass:     req.NodeClass,
 			CountryCode:   req.CountryCode,
 			Region:        req.Region,
@@ -270,7 +270,7 @@ func handleClaimNode(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 		// Register in in-memory registry so the node appears immediately.
 		registry.Register(orchestrator.NodeEntry{
 			NodeID:      nodeID,
-			ProviderID:  participantID,
+			ParticipantID: participantID,
 			NodeClass:   "C",
 			CountryCode: req.CountryCode,
 			Region:      req.Region,
@@ -506,7 +506,11 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		rows, err := db.Pool.Query(r.Context(),
 			`SELECT id, COALESCE(job_token, ''), COALESCE(container_image, ''), COALESCE(printer_id, '')
 			 FROM jobs
-			 WHERE node_id = $1 AND status = 'scheduled'::job_status`,
+			 WHERE node_id = $1 AND status = 'scheduled'::job_status
+			 AND NOT (
+			     workload_type IN ('print_traditional'::workload_type, 'print_3d'::workload_type)
+			     AND participant_id = (SELECT participant_id FROM nodes WHERE id = $1)
+			 )`,
 			nodeID,
 		)
 		if err != nil {
@@ -534,8 +538,12 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		if len(jobIDs) > 0 {
 			_, err = db.Pool.Exec(r.Context(),
 				`UPDATE jobs SET status = 'dispatched'::job_status, updated_at = NOW()
-				 WHERE id = ANY($1) AND status = 'scheduled'::job_status`,
-				jobIDs,
+				 WHERE id = ANY($1) AND status = 'scheduled'::job_status
+				 AND NOT (
+				     workload_type IN ('print_traditional'::workload_type, 'print_3d'::workload_type)
+				     AND participant_id = (SELECT participant_id FROM nodes WHERE id = $2)
+				 )`,
+				jobIDs, nodeID,
 			)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "database error")
@@ -628,11 +636,19 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			completedAt = &t
 		}
 
+		// C5: set awaiting_pickup_at when transitioning into awaiting_pickup, so the
+		// no-show window has a stable anchor. NULL on all other transitions.
+		var awaitingPickupAt *time.Time
+		if newStatus == "awaiting_pickup" {
+			t := time.Now().UTC()
+			awaitingPickupAt = &t
+		}
+
 		tag, err := db.Pool.Exec(r.Context(),
-			`UPDATE jobs SET status = $4::job_status, completed_at = $5, updated_at = NOW(),
+			`UPDATE jobs SET status = $4::job_status, completed_at = $5, awaiting_pickup_at = $6, updated_at = NOW(),
 				exit_code = $2, failure_cause = NULLIF($3, '')
 			 WHERE id = $1 AND status = 'running'::job_status`,
-			jobID, req.ExitCode, cause, newStatus, completedAt,
+			jobID, req.ExitCode, cause, newStatus, completedAt, awaitingPickupAt,
 		)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")

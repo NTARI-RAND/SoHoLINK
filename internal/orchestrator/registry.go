@@ -22,7 +22,7 @@ type HardwareProfile struct {
 // NodeEntry is the in-memory representation of a registered node.
 type NodeEntry struct {
 	NodeID          string
-	ProviderID      string
+	ParticipantID   string // owner of this node; matches participants.id in the DB. Legacy field name was ProviderID (pre-migration 011, before unified participants table).
 	NodeClass       string
 	CountryCode     string
 	Region          string
@@ -64,7 +64,8 @@ type MatchRequest struct {
 	RAMMB             int
 	GPURequired       bool
 	StorageGB         int
-	ExcludedNodeIDs   []string // nodes that have already declined this job
+	ExcludedNodeIDs              []string // nodes that have already declined this job
+	ExcludeConsumerParticipantID string   // C5: for print workloads only, exclude nodes owned by this participant. Prevents self-print (platform extraction on a transaction the participant could perform unaided is predatory by the platform operator). Compute/storage self-use is legitimate, so this field is interpreted only on print workload types.
 }
 
 // NodeRegistry is a concurrency-safe in-memory store of active nodes.
@@ -176,6 +177,12 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 					}
 				case agent.WorkloadPrintTraditional, agent.WorkloadPrint3D:
 					if node.OptOutPrinting || !node.HasEnabledPrinter {
+						continue
+					}
+					// C5 self-print exclusion: a print workload routed to a node owned by the
+					// consumer means the platform takes its share on a transaction the
+					// participant could perform unaided. Reject the match.
+					if req.ExcludeConsumerParticipantID != "" && node.ParticipantID == req.ExcludeConsumerParticipantID {
 						continue
 					}
 				}

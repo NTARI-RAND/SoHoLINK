@@ -17,7 +17,7 @@ import (
 func newOnlineNode(id, country string, cpu, ramMB, storageGB int, gpu bool) NodeEntry {
 	return NodeEntry{
 		NodeID:        id,
-		ProviderID:    "test-provider",
+		ParticipantID: "test-provider",
 		NodeClass:     "A",
 		CountryCode:   country,
 		Status:        "online",
@@ -577,5 +577,94 @@ func TestSubmitJob_PrintConfirmGate_FlagOff_WritesScheduled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "find nodes") {
 		t.Errorf("expected 'find nodes' error (scheduled path), got: %v", err)
+	}
+}
+
+// ── C5: ExcludeConsumerParticipantID self-print filter ───────────────────────
+
+func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_PrintTraditional(t *testing.T) {
+	r := NewNodeRegistry()
+
+	consumerNode := newOnlineNode("node-consumer", "US", 4, 8192, 50, false)
+	consumerNode.ParticipantID = "consumer-participant-id"
+	consumerNode.HasEnabledPrinter = true
+	r.Register(consumerNode)
+
+	otherNode := newOnlineNode("node-other", "US", 4, 8192, 50, false)
+	otherNode.ParticipantID = "other-participant-id"
+	otherNode.HasEnabledPrinter = true
+	r.Register(otherNode)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplacePrintTraditional,
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "consumer-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate after self-print exclusion, got %d", len(candidates))
+	}
+	if candidates[0].NodeID == "node-consumer" {
+		t.Errorf("FindMatch returned consumer's own node — self-print exclusion failed")
+	}
+}
+
+func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_Print3D(t *testing.T) {
+	r := NewNodeRegistry()
+
+	consumerNode := newOnlineNode("node-consumer-3d", "US", 4, 8192, 50, false)
+	consumerNode.ParticipantID = "consumer-participant-id"
+	consumerNode.HasEnabledPrinter = true
+	r.Register(consumerNode)
+
+	otherNode := newOnlineNode("node-other-3d", "US", 4, 8192, 50, false)
+	otherNode.ParticipantID = "other-participant-id"
+	otherNode.HasEnabledPrinter = true
+	r.Register(otherNode)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplacePrint3D,
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "consumer-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate after self-print exclusion, got %d", len(candidates))
+	}
+	if candidates[0].NodeID == "node-consumer-3d" {
+		t.Errorf("FindMatch returned consumer's own node — self-print exclusion failed for print_3d")
+	}
+}
+
+func TestNodeRegistry_FindMatch_DoesNotExcludeOwnNode_Compute(t *testing.T) {
+	r := NewNodeRegistry()
+
+	// Same participant owns both nodes. Compute self-use is legitimate —
+	// ExcludeConsumerParticipantID must be ignored for non-print workloads.
+	consumerNode := newOnlineNode("node-consumer-compute", "US", 4, 8192, 50, false)
+	consumerNode.ParticipantID = "consumer-participant-id"
+	r.Register(consumerNode)
+
+	otherNode := newOnlineNode("node-other-compute", "US", 4, 8192, 50, false)
+	otherNode.ParticipantID = "other-participant-id"
+	r.Register(otherNode)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplaceAppHosting,
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "consumer-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Errorf("expected both nodes for compute (self-use legitimate), got %d", len(candidates))
 	}
 }

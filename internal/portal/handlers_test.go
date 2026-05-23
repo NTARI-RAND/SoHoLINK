@@ -626,3 +626,405 @@ func TestHandlePostOptOut_upsertsPrinterEnabledFlags(t *testing.T) {
 	check("PrinterB", false)
 	check("PrinterC", false)
 }
+
+// ── handleConsumerPickedUp ───────────────────────────────────────────────────
+
+func TestHandleConsumerPickedUp_Success(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "pickup_ok@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "pickup_ok_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, NOW(), 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/picked-up", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "pickup_ok@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerPickedUp(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "picked_up" {
+		t.Errorf("expected status=picked_up in response, got %q", resp["status"])
+	}
+
+	var status string
+	var pickedUpAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status::text, picked_up_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &pickedUpAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "picked_up" {
+		t.Errorf("expected DB status=picked_up, got %q", status)
+	}
+	if pickedUpAt == nil {
+		t.Error("expected picked_up_at IS NOT NULL")
+	}
+}
+
+func TestHandleConsumerPickedUp_WrongConsumer_404(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "pickup_wrong_owner@test.com", "pass1234")
+	otherID := seedParticipant(t, db, "pickup_other@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "pickup_wrong_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, NOW(), 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/picked-up", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: otherID, Email: "pickup_other@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerPickedUp(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleConsumerPickedUp_WrongStatus_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "pickup_badstatus@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "pickup_badstatus_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'running'::job_status, 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/picked-up", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "pickup_badstatus@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerPickedUp(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["current_status"] != "running" {
+		t.Errorf("expected current_status=running in 409 body, got %q", resp["current_status"])
+	}
+}
+
+// ── handleConsumerDelivered ──────────────────────────────────────────────────
+
+func TestHandleConsumerDelivered_Success(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "delivered_ok@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "delivered_ok_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, picked_up_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'picked_up'::job_status, NOW(), 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/delivered", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "delivered_ok@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerDelivered(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "delivered" {
+		t.Errorf("expected status=delivered in response, got %q", resp["status"])
+	}
+
+	var status string
+	var deliveredAt, completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status::text, delivered_at, completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &deliveredAt, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "delivered" {
+		t.Errorf("expected DB status=delivered, got %q", status)
+	}
+	if deliveredAt == nil {
+		t.Error("expected delivered_at IS NOT NULL")
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at IS NOT NULL for terminal delivered status")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("C5 must not meter on delivered (metering deferred to C7), got %d rows", meterCount)
+	}
+}
+
+func TestHandleConsumerDelivered_WrongConsumer_404(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "delivered_wrong@test.com", "pass1234")
+	otherID := seedParticipant(t, db, "delivered_other@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "delivered_wrong_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, picked_up_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'picked_up'::job_status, NOW(), 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/delivered", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: otherID, Email: "delivered_other@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerDelivered(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleConsumerDelivered_WrongStatus_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "delivered_badstatus@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "delivered_badstatus_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, NOW(), 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/delivered", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "delivered_badstatus@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerDelivered(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["current_status"] != "awaiting_pickup" {
+		t.Errorf("expected current_status=awaiting_pickup in 409 body, got %q", resp["current_status"])
+	}
+}
+
+// ── handleProviderNoShow ─────────────────────────────────────────────────────
+
+func TestHandleProviderNoShow_Success(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "noshow_ok_consumer@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "noshow_ok_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	oldPickupAt := time.Now().Add(-8 * 24 * time.Hour)
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, $3, 1000)
+		 RETURNING id`,
+		consumerID, nodeID, oldPickupAt,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/provider/job/"+jobID+"/no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: providerID, Email: "noshow_ok_prov@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleProviderNoShow(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "failed" {
+		t.Errorf("expected status=failed in response, got %q", resp["status"])
+	}
+
+	var status, failureCause string
+	var completedAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status::text, COALESCE(failure_cause, ''), completed_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &failureCause, &completedAt); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("expected DB status=failed, got %q", status)
+	}
+	if failureCause != "no_show_after_7d" {
+		t.Errorf("expected failure_cause=no_show_after_7d, got %q", failureCause)
+	}
+	if completedAt == nil {
+		t.Error("expected completed_at IS NOT NULL for terminal failed status")
+	}
+
+	var meterCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM job_metering WHERE job_id = $1`, jobID,
+	).Scan(&meterCount); err != nil {
+		t.Fatalf("query job_metering: %v", err)
+	}
+	if meterCount != 0 {
+		t.Errorf("C5 must not meter on no-show failed path, got %d rows", meterCount)
+	}
+}
+
+func TestHandleProviderNoShow_WrongProvider_404(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "noshow_wrongprov_consumer@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "noshow_wrongprov@test.com", "pass1234")
+	otherProviderID := seedParticipant(t, db, "noshow_otherprov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	oldPickupAt := time.Now().Add(-8 * 24 * time.Hour)
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, $3, 1000)
+		 RETURNING id`,
+		consumerID, nodeID, oldPickupAt,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/provider/job/"+jobID+"/no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: otherProviderID, Email: "noshow_otherprov@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleProviderNoShow(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHandleProviderNoShow_WrongStatus_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "noshow_badstatus_consumer@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "noshow_badstatus_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'running'::job_status, 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/provider/job/"+jobID+"/no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: providerID, Email: "noshow_badstatus_prov@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleProviderNoShow(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+}
+
+func TestHandleProviderNoShow_TooSoon_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "noshow_toosoon_consumer@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "noshow_toosoon_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	recentPickupAt := time.Now().Add(-1 * 24 * time.Hour)
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, awaiting_pickup_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'awaiting_pickup'::job_status, $3, 1000)
+		 RETURNING id`,
+		consumerID, nodeID, recentPickupAt,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/provider/job/"+jobID+"/no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: providerID, Email: "noshow_toosoon_prov@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleProviderNoShow(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "too_soon" {
+		t.Errorf("expected error=too_soon in 409 body, got %q", resp["error"])
+	}
+}

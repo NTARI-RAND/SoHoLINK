@@ -348,6 +348,16 @@ func TestHandleCompleteJob_RunningJob(t *testing.T) {
 	if meterCount == 0 {
 		t.Error("expected job_metering row to exist after successful completion")
 	}
+
+	var awaitingPickupAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT awaiting_pickup_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&awaitingPickupAt); err != nil {
+		t.Fatalf("query awaiting_pickup_at: %v", err)
+	}
+	if awaitingPickupAt != nil {
+		t.Errorf("expected awaiting_pickup_at IS NULL for compute completed path, got %v", *awaitingPickupAt)
+	}
 }
 
 func TestHandleCompleteJob_NotRunning(t *testing.T) {
@@ -761,6 +771,16 @@ func TestHandleCompleteJob_Print_AwaitingPickup(t *testing.T) {
 	if meterCount != 0 {
 		t.Errorf("expected no metering for print job in awaiting_pickup, got %d rows", meterCount)
 	}
+
+	var awaitingPickupAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT awaiting_pickup_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&awaitingPickupAt); err != nil {
+		t.Fatalf("query awaiting_pickup_at: %v", err)
+	}
+	if awaitingPickupAt == nil {
+		t.Error("expected awaiting_pickup_at IS NOT NULL for print_traditional awaiting_pickup")
+	}
 }
 
 func TestHandleCompleteJob_Print3D_AwaitingPickup(t *testing.T) {
@@ -823,6 +843,16 @@ func TestHandleCompleteJob_Print3D_AwaitingPickup(t *testing.T) {
 	}
 	if meterCount != 0 {
 		t.Errorf("expected no metering for print_3d job in awaiting_pickup, got %d rows", meterCount)
+	}
+
+	var awaitingPickupAt *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT awaiting_pickup_at FROM jobs WHERE id = $1`, jobID,
+	).Scan(&awaitingPickupAt); err != nil {
+		t.Fatalf("query awaiting_pickup_at: %v", err)
+	}
+	if awaitingPickupAt == nil {
+		t.Error("expected awaiting_pickup_at IS NOT NULL for print_3d awaiting_pickup")
 	}
 }
 
@@ -1260,6 +1290,158 @@ func TestHandleGetJobs_FlipsToDispatched(t *testing.T) {
 	}
 	if startedAt != nil {
 		t.Errorf("started_at: expected NULL, got %q", *startedAt)
+	}
+}
+
+func TestHandleGetJobs_RejectsSelfPrintTraditional(t *testing.T) {
+	db := connectAPITestDB(t)
+	participantID := seedAPIParticipant(t, db, "selfprint_trad@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'selfprint-trad-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, container_image)
+		 VALUES ($1, $2, 'print_traditional', 'scheduled', 0, 2, 4096, 'img:latest')
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got []json.RawMessage
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty job list for self-print, got %d jobs", len(got))
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want %q (self-print should not dispatch)", status, "scheduled")
+	}
+}
+
+func TestHandleGetJobs_RejectsSelfPrint3D(t *testing.T) {
+	db := connectAPITestDB(t)
+	participantID := seedAPIParticipant(t, db, "selfprint_3d@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'selfprint-3d-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, container_image)
+		 VALUES ($1, $2, 'print_3d', 'scheduled', 0, 2, 4096, 'img:latest')
+		 RETURNING id`,
+		participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got []json.RawMessage
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty job list for self-print, got %d jobs", len(got))
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want %q (self-print should not dispatch)", status, "scheduled")
+	}
+}
+
+func TestHandleGetJobs_AllowsOtherOwnedPrint(t *testing.T) {
+	db := connectAPITestDB(t)
+	nodeOwnerID := seedAPIParticipant(t, db, "selfprint_nodeowner@test.com")
+	jobConsumerID := seedAPIParticipant(t, db, "selfprint_consumer@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'selfprint-other-host', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`,
+		nodeOwnerID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, container_image)
+		 VALUES ($1, $2, 'print_traditional', 'scheduled', 0, 2, 4096, 'img:latest')
+		 RETURNING id`,
+		jobConsumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "dispatched" {
+		t.Errorf("status: got %q, want %q (different-participant print should dispatch)", status, "dispatched")
 	}
 }
 

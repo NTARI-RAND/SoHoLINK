@@ -329,6 +329,10 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleJobStatus)))
 	mux.Handle("GET /consumer/job/{id}/status-stream",
 		RequireAuth(sm, http.HandlerFunc(ps.handleJobStatusStream)))
+	mux.Handle("POST /consumer/job/{id}/picked-up",
+		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerPickedUp)))
+	mux.Handle("POST /consumer/job/{id}/delivered",
+		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerDelivered)))
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, http.HandlerFunc(ps.handleDisputeQueue)))
 	mux.Handle("POST /dispute/{id}/resolve",
@@ -357,6 +361,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleJobConfirm)))
 	mux.Handle("POST /provider/job/{id}/confirm",
 		RequireAuth(sm, http.HandlerFunc(ps.handleJobConfirmAction)))
+	mux.Handle("POST /provider/job/{id}/no-show",
+		RequireAuth(sm, http.HandlerFunc(ps.handleProviderNoShow)))
 
 	ps.srv = &http.Server{
 		Addr:         addr,
@@ -2043,4 +2049,161 @@ func (ps *PortalServer) handlePostOptOut(w http.ResponseWriter, r *http.Request)
 		"success": true,
 		"version": newVersion,
 	})
+}
+
+// handleConsumerPickedUp transitions a print job from awaiting_pickup → picked_up.
+// The consumer must own the job (jobs.participant_id == session UserID).
+// Sets picked_up_at = NOW(). C5 print lifecycle.
+func (ps *PortalServer) handleConsumerPickedUp(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var currentStatus string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT status::text FROM jobs WHERE id = $1 AND participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&currentStatus)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	if currentStatus != "awaiting_pickup" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":          "wrong_status",
+			"current_status": currentStatus,
+		})
+		return
+	}
+
+	tag, err := ps.db.Pool.Exec(r.Context(),
+		`UPDATE jobs SET status = 'picked_up'::job_status, picked_up_at = NOW(), updated_at = NOW()
+		 WHERE id = $1 AND status = 'awaiting_pickup'::job_status`,
+		jobID,
+	)
+	if err != nil {
+		slog.Error("handleConsumerPickedUp: update", "job_id", jobID, "error", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "status changed concurrently", http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "picked_up"})
+}
+
+// handleConsumerDelivered transitions a print job from picked_up → delivered.
+// The consumer must own the job (jobs.participant_id == session UserID).
+// Sets delivered_at and completed_at (terminal, payout-eligible for C7). C5 print lifecycle.
+func (ps *PortalServer) handleConsumerDelivered(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var currentStatus string
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT status::text FROM jobs WHERE id = $1 AND participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&currentStatus)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	if currentStatus != "picked_up" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":          "wrong_status",
+			"current_status": currentStatus,
+		})
+		return
+	}
+
+	tag, err := ps.db.Pool.Exec(r.Context(),
+		`UPDATE jobs SET status = 'delivered'::job_status,
+			delivered_at = NOW(), completed_at = NOW(), updated_at = NOW()
+		 WHERE id = $1 AND status = 'picked_up'::job_status`,
+		jobID,
+	)
+	if err != nil {
+		slog.Error("handleConsumerDelivered: update", "job_id", jobID, "error", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "status changed concurrently", http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "delivered"})
+}
+
+// handleProviderNoShow flags an awaiting_pickup print job as failed after 7 days
+// without consumer pickup. Authorization: caller must own the node assigned to
+// the job (provider role, via JOIN). In C5 this is unilateral — no consumer
+// dispute mechanism exists yet. C7 will add disputes; admin recourse is
+// out-of-band until then.
+func (ps *PortalServer) handleProviderNoShow(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var currentStatus string
+	var awaitingPickupAt *time.Time
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT j.status::text, j.awaiting_pickup_at
+		 FROM jobs j JOIN nodes n ON n.id = j.node_id
+		 WHERE j.id = $1 AND n.participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&currentStatus, &awaitingPickupAt)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	if currentStatus != "awaiting_pickup" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":          "wrong_status",
+			"current_status": currentStatus,
+		})
+		return
+	}
+	if awaitingPickupAt == nil || time.Since(*awaitingPickupAt) < 7*24*time.Hour {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "too_soon"})
+		return
+	}
+
+	// Race-safe: 7-day check re-encoded in WHERE so a concurrent update between
+	// the SELECT and this Exec cannot produce a premature no-show.
+	tag, err := ps.db.Pool.Exec(r.Context(),
+		`UPDATE jobs SET status = 'failed'::job_status,
+			failure_cause = 'no_show_after_7d',
+			completed_at = NOW(),
+			updated_at = NOW()
+		 WHERE id = $1
+		   AND status = 'awaiting_pickup'::job_status
+		   AND awaiting_pickup_at < NOW() - INTERVAL '7 days'`,
+		jobID,
+	)
+	if err != nil {
+		slog.Error("handleProviderNoShow: update", "job_id", jobID, "error", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "status changed concurrently", http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "failed"})
 }

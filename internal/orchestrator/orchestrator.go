@@ -156,12 +156,13 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 	}
 
 	candidates, err := o.registry.FindMatch(MatchRequest{
-		WorkloadType:      req.WorkloadType,
-		CountryConstraint: req.CountryConstraint,
-		CPUCores:          req.CPUCores,
-		RAMMB:             req.RAMMB,
-		GPURequired:       req.GPURequired,
-		StorageGB:         req.StorageGB,
+		WorkloadType:                 req.WorkloadType,
+		CountryConstraint:            req.CountryConstraint,
+		CPUCores:                     req.CPUCores,
+		RAMMB:                        req.RAMMB,
+		GPURequired:                  req.GPURequired,
+		StorageGB:                    req.StorageGB,
+		ExcludeConsumerParticipantID: req.ConsumerID,
 	})
 	if err != nil {
 		return SubmitJobResponse{}, fmt.Errorf("find nodes: %w", err)
@@ -329,21 +330,22 @@ func canonicalJobSpecHash(req SubmitJobRequest) ([]byte, error) {
 // produces no row update.
 func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) error {
 	var (
-		workloadType      string
-		cpuCores          int
-		ramMB             int
-		storageGB         int
-		gpuRequired       bool
-		countryConstraint string
-		specHash          []byte
+		workloadType         string
+		cpuCores             int
+		ramMB                int
+		storageGB            int
+		gpuRequired          bool
+		countryConstraint    string
+		specHash             []byte
+		consumerParticipantID string
 	)
 	err := o.db.Pool.QueryRow(ctx,
 		`SELECT workload_type, COALESCE(cpu_cores, 0), COALESCE(ram_mb, 0),
 		        COALESCE(storage_gb, 0), gpu_required, COALESCE(country_constraint, ''),
-		        spec_hash
+		        spec_hash, COALESCE(participant_id::text, '')
 		 FROM jobs WHERE id = $1`,
 		jobID,
-	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &specHash)
+	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &specHash, &consumerParticipantID)
 	if err != nil {
 		return fmt.Errorf("reroute: read job %s: %w", jobID, err)
 	}
@@ -368,13 +370,14 @@ func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) err
 	}
 
 	candidates, findErr := o.registry.FindMatch(MatchRequest{
-		WorkloadType:      types.MarketplaceWorkloadType(workloadType),
-		CountryConstraint: countryConstraint,
-		CPUCores:          cpuCores,
-		RAMMB:             ramMB,
-		StorageGB:         storageGB,
-		GPURequired:       gpuRequired,
-		ExcludedNodeIDs:   excludedIDs,
+		WorkloadType:                 types.MarketplaceWorkloadType(workloadType),
+		CountryConstraint:            countryConstraint,
+		CPUCores:                     cpuCores,
+		RAMMB:                        ramMB,
+		StorageGB:                    storageGB,
+		GPURequired:                  gpuRequired,
+		ExcludedNodeIDs:              excludedIDs,
+		ExcludeConsumerParticipantID: consumerParticipantID,
 	})
 	if findErr != nil {
 		// No eligible nodes remain — fail the job.
@@ -593,12 +596,82 @@ func (o *Orchestrator) expireDispatched(ctx context.Context) {
 	}
 }
 
+// ExpirePickedUp advances a single picked_up print job to delivered when the
+// 7-day dispute window has elapsed. Returns (true, nil) if the job was
+// advanced, (false, nil) if the window has not elapsed or the job is no longer
+// in picked_up status (lost-race). Callers treat flipped=false, err=nil as benign.
+//
+// C5: does NOT call ComputeMetering — print metering is deferred to C9.
+func (o *Orchestrator) ExpirePickedUp(ctx context.Context, jobID string) (bool, error) {
+	ct, err := o.db.Pool.Exec(ctx,
+		`UPDATE jobs
+		 SET status       = 'delivered'::job_status,
+		     delivered_at = NOW(),
+		     completed_at = NOW(),
+		     updated_at   = NOW()
+		 WHERE id = $1
+		   AND status = 'picked_up'::job_status
+		   AND picked_up_at < NOW() - INTERVAL '7 days'`,
+		jobID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("expire picked_up: update job %s: %w", jobID, err)
+	}
+	return ct.RowsAffected() == 1, nil
+}
+
+// expirePickedUp finds picked_up print jobs whose 7-day dispute window has
+// elapsed and auto-advances each to delivered. Called on every tick of
+// StartDeclineRerouteLoop, after expireDispatched and before rerouteDeclined.
+//
+// C5: no metering — print payout eligibility is deferred to C9.
+func (o *Orchestrator) expirePickedUp(ctx context.Context) {
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT id FROM jobs
+		 WHERE status = 'picked_up'::job_status
+		   AND picked_up_at < NOW() - INTERVAL '7 days'
+		 LIMIT 100`)
+	if err != nil {
+		slog.Error("expire picked_up: query", "error", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.Error("expire picked_up: scan", "error", err)
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("expire picked_up: rows", "error", err)
+		return
+	}
+
+	for _, id := range ids {
+		flipped, err := o.ExpirePickedUp(ctx, id)
+		if err != nil {
+			slog.Error("expire picked_up: update job", "job_id", id, "error", err)
+			continue
+		}
+		if flipped {
+			slog.Info("picked_up expired — auto-advanced to delivered", "job_id", id)
+		} else {
+			slog.Debug("expire picked_up lost race", "job_id", id)
+		}
+	}
+}
+
 // StartDeclineRerouteLoop runs a background goroutine that periodically (a)
 // auto-declines awaiting_confirmation jobs whose deadline has passed, (b)
-// reverts stale dispatched jobs back to scheduled, and (c) re-dispatches
-// declined jobs to a different node. All three passes run on the same 30s
-// ticker in expire-then-reroute order. Stops when ctx is cancelled. Run only
-// from cmd/orchestrator — not from cmd/portal, which has a separate registry
+// reverts stale dispatched jobs back to scheduled, (c) auto-advances stale
+// picked_up print jobs to delivered, and (d) re-dispatches declined jobs to a
+// different node. All four passes run on the same 30s ticker in
+// expire-then-reroute order. Stops when ctx is cancelled. Run only from
+// cmd/orchestrator — not from cmd/portal, which has a separate registry
 // instance that never receives agent heartbeats.
 func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 	go func() {
@@ -611,6 +684,7 @@ func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 			case <-ticker.C:
 				o.expireConfirmations(ctx)
 				o.expireDispatched(ctx)
+				o.expirePickedUp(ctx)
 				o.rerouteDeclined(ctx)
 			}
 		}
