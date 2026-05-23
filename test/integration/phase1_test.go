@@ -88,7 +88,7 @@ func TestPhase1EndToEnd(t *testing.T) {
 	registry := orchestrator.NewNodeRegistry()
 	registry.Register(orchestrator.NodeEntry{
 		NodeID:        nodeID,
-		ProviderID:    providerID,
+		ParticipantID: providerID,
 		NodeClass:     "A",
 		CountryCode:   "US",
 		Status:        "online",
