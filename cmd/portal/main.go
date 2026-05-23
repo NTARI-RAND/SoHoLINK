@@ -10,14 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchclient"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/portal"
-	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/scheduler"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -27,15 +25,6 @@ func mustEnv(key string) string {
 		log.Fatalf("required environment variable %s is not set", key)
 	}
 	return v
-}
-
-func mustHex(key string) []byte {
-	raw := mustEnv(key)
-	b, err := hex.DecodeString(raw)
-	if err != nil {
-		log.Fatalf("%s: invalid hex: %v", key, err)
-	}
-	return b
 }
 
 func mustEd25519Key(key string) ed25519.PrivateKey {
@@ -70,14 +59,9 @@ func main() {
 	addr         := mustEnv("PORTAL_ADDR")
 	baseURL      := mustEnv("PORTAL_BASE_URL")
 	templatesDir := mustEnv("PORTAL_TEMPLATES_DIR")
-	tokenSecret     := mustHex("ORCHESTRATOR_TOKEN_SECRET")
 	metricsAddr     := mustEnv("METRICS_ADDR")
 	webhookSecret   := mustEnv("STRIPE_WEBHOOK_SECRET")
-
-	allowlistPath := os.Getenv("ALLOWLIST_PATH")
-	if allowlistPath == "" {
-		allowlistPath = "/etc/soholink/allowlist.json"
-	}
+	internalOrchURL := mustEnv("ORCHESTRATOR_INTERNAL_URL")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -96,10 +80,7 @@ func main() {
 
 	paymentClient := payment.New(stripeKey)
 
-	printConfirmEnabled, _ := strconv.ParseBool(os.Getenv("PRINT_CONFIRMATION_ENABLED"))
-
-	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
+	orch := orchclient.New(internalOrchURL)
 
 	ps, err := portal.New(db, addr, sessionPrivKey, templatesDir, paymentClient, baseURL, orch, metricsAddr, webhookSecret)
 	if err != nil {
