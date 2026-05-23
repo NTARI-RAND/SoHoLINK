@@ -80,6 +80,8 @@ services:
       dockerfile: Dockerfile.orchestrator
     restart: unless-stopped
     env_file: .env
+    environment:
+      INTERNAL_ADDR: ":8083"
     expose:
       - "8082"
     volumes:

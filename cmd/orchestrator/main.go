@@ -46,6 +46,7 @@ func main() {
 	tokenSecret  := mustHex("ORCHESTRATOR_TOKEN_SECRET")
 	apiAddr      := mustEnv("API_ADDR")
 	metricsAddr  := mustEnv("METRICS_ADDR")
+	internalAddr := mustEnv("INTERNAL_ADDR")
 	spiffeSocket := mustEnv("SPIFFE_ENDPOINT_SOCKET")
 
 	allowlistPath := os.Getenv("ALLOWLIST_PATH")
@@ -91,12 +92,20 @@ func main() {
 	orchestrator.StartEvictionLoop(ctx, registry, 5*time.Minute)
 	orch.StartDeclineRerouteLoop(ctx)
 
-	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
+	srv         := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
+	internalSrv := api.NewInternal(orch, internalAddr)
 
 	go func() {
 		slog.Info("API server listening", "addr", apiAddr)
 		if err := srv.Start(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("API server error", "error", err)
+		}
+	}()
+
+	go func() {
+		slog.Info("internal API server listening", "addr", internalAddr)
+		if err := internalSrv.Start(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("internal API server error", "error", err)
 		}
 	}()
 
@@ -110,6 +119,9 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if err := internalSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("internal API server shutdown error", "error", err)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("API server shutdown error", "error", err)
 	}
