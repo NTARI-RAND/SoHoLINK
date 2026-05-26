@@ -10,6 +10,23 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
 
+  pg-backup:
+    build:
+      context: ./deploy/pg-backup
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGDATABASE: postgres
+      BACKUP_INTERVAL_SECONDS: "86400"
+      RETENTION_DAYS: "90"
+    volumes:
+      - "D:/SoHoLINK-backups:/backups"
+    depends_on:
+      postgres:
+        condition: service_started
+
   spire-server:
     image: ghcr.io/spiffe/spire-server:1.9.6
     restart: unless-stopped
