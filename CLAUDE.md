@@ -57,6 +57,29 @@ reproduces the approved artifact for confirmation. It is not an
 opportunity to "freshen" or improve the design. Any change to an
 already-approved spec must be flagged for re-audit before writing.
 
+**Verify by content, not by anchor.** After any multi-paragraph edit
+(`str_replace` with long `new_str`, heredoc splice, `sed` range insert),
+view the spliced body in full and compare to the proposal. Header or
+anchor match catches absence, not drift. Body drift commonly involves
+SHAs, line numbers, port numbers, or citations that resemble the
+proposal but differ in specifics.
+
+**Heredoc-splice for multi-paragraph inserts; `str_replace` for short
+edits only.** `str_replace` fails or silently improvises when `old_str`
+matching is sensitive to whitespace, line endings, em-dashes, or
+backticks. For multi-paragraph or formatted content, write the new
+content to `/tmp/edit-foo.txt` via heredoc, delete the old range with
+`sed -i "${start},${end}d"`, then insert with
+`sed -i "$((start-1))r /tmp/edit-foo.txt"`. Tradeoff: heredoc-splice
+produces CRLF warnings on Windows (sed writes LF into a CRLF-normalized
+repo); git normalizes at commit time. Worth it.
+
+**Pre-flight grep before `str_replace`.** Before invoking `str_replace`,
+grep for the `old_str` text to confirm it exists exactly once. Zero
+matches: STOP and report — do not retry with a different `old_str`, do
+not improvise. Multiple matches: expand `old_str` to make it unique, or
+switch to heredoc-splice on a range anchor.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
