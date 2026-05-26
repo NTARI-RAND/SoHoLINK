@@ -253,12 +253,12 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
    public release.
 
 5. **Orchestrator `/jobs/<id>/complete` ignores JSON body — RESOLVED (B5 commit 3,
-   `b8143f5`)**: `/complete` now parses `{exit_code, failure_cause, tmpfs_exhausted}`.
+   Dev XXIII; see deployment checkpoint `7dc6c96`)**: `/complete` now parses `{exit_code, failure_cause, tmpfs_exhausted}`.
    Exit-code-conditioned metering and print lifecycle branching implemented in the
    same commit (see TODO 6 RESOLVED).
 
 6. **Job completion fires on any non-error return regardless of ExitCode — RESOLVED
-   (B5 commit 4, `bee5d67`)**: `exit_code != 0` → `failed`, no meter. `exit_code == 0`
+   (B5 commit 4, Dev XXIII; see deployment checkpoint `7dc6c96`)**: `exit_code != 0` → `failed`, no meter. `exit_code == 0`
    → `completed` for compute/storage, `awaiting_pickup` for print. Pre-existing bug
    discovered during B2 audit; closed in B5.
 
@@ -404,21 +404,18 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     Also surfaced that `printer_name TEXT NOT NULL` was missing from the migration 014
     description in CLAUDE.md (now corrected). Carry-forward from TODO 11 closed.
 
-24. **Zombie `running` rows — RESOLVED (B5 commit 2, `e4a6e92`)**: `handleGetJobs` now
+24. **Zombie `running` rows — RESOLVED (B5 commit 2, Dev XXIII; see deployment checkpoint `7dc6c96`)**: `handleGetJobs` now
     flips `scheduled → dispatched` (not `running`). Agent calls `POST /jobs/{id}/started`
     after successful `ContainerStart`, transitioning `dispatched → running`. `expireDispatched`
     reaper reverts stale `dispatched` rows (> 60s without `/started`) back to `scheduled`.
     `running` is now unambiguous — a job in `running` has a confirmed container start.
 
-25. **Portal's orphaned registry — RESOLVED (Dev XXIV, three commits `2efe5e2` + `1aade8a` +
-    `5ff8461`)**: Portal no longer constructs a `NodeRegistry`. Job submission path replaced
-    by `internal/orchclient` — an HTTP client that POSTs to the orchestrator's
-    `POST /internal/jobs/submit` endpoint over the Docker-internal network
-    (`http://orchestrator:8082`). Portal's `jobSubmitter` interface satisfied by
-    `orchclient.Client`. Orchestrator gains an internal listener on `:8082` (separate mux,
-    no SPIFFE auth, Docker-internal only). Migration and registry wiring removed from
-    `cmd/portal/main.go`. Submit path tested via `TestPortalSubmitsViaOrchestratorClient`
-    (unit, mock transport) and the existing phase1 integration test (end-to-end).
+25. **Portal's orphaned registry — `cmd/portal/main.go` constructs a `NodeRegistry` that never receives heartbeats** — RESOLVED Dev XXIV via the "expose orchestrator-side HTTP submission endpoint" fix path. Three commits:
+    - **`b8143f5`** — Orchestrator gains a second HTTP listener bound to `INTERNAL_ADDR` (Docker-internal, `:8083`), serving `POST /internal/jobs/submit`. Not exposed via the Cloudflare tunnel; reachable only from within the `soholink_default` Docker network.
+    - **`bee5d67`** — New `internal/orchclient` package: HTTP client implementing the portal's `jobSubmitter` interface, posting to the orchestrator's internal endpoint over plain HTTP within the Docker network.
+    - **`e4a6e92`** — `cmd/portal/main.go` swaps the in-process `orchestrator.New(...)` construction for `orchclient.New(...)`. Adds `ORCHESTRATOR_INTERNAL_URL` (`http://orchestrator:8083`) to the portal service environment in `docker-compose.yml` plus `depends_on: orchestrator: service_healthy`. Portal main stops reading `ORCHESTRATOR_TOKEN_SECRET`, `PRINT_CONFIRMATION_ENABLED`, `ALLOWLIST_PATH` — these are orchestrator-only after this commit. Per-service env hygiene cleanup deferred.
+
+    `POST /consumer/job` now reaches the orchestrator's heartbeat-fed `NodeRegistry`. End-to-end smoke test (register → heartbeat → job → payout) pending hardware re-registration (see Dev XXIV deployment checkpoint).
 
 26. **Integration tag missing from exported-signature audit workflow** — RESOLVED `27157dc`:
     B4 commit 3 (`0115d41`) extended `orchestrator.New` with two new parameters. The audit grep
@@ -430,48 +427,17 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     `go build -tags integration ./...` and `grep -rn "FuncName(" .` on signature-changing
     commits.
 
-27. **TimescaleDB hypertable handling is known incomplete**: golang-migrate runner applies
-    migrations in sequence; TimescaleDB hypertable and continuous-aggregate DDL has known
-    edge cases (documented in commit messages as "TimescaleDB hypertable handling (deferred)").
-    Not blocking current B-phase work — no hypertables in active use yet. Revisit when
-    time-series retention policy or continuous aggregates are introduced.
+27. **`pg_basebackup` for true PITR + TimescaleDB hypertable handling**: The Dev XXIV pg_dump sidecar (`1aade8a`) is logical SQL text. TimescaleDB hypertable handling is known incomplete — both `1aade8a` and `5ff8461` flag this in their commit messages, and `docs/backups.md` records the limitation in its scope section. End-to-end restoration is untested (see TODO 28). Separately, WAL replay (`5ff8461`) requires a binary base backup to serve as the replay starting point; a logical dump cannot. Both concerns resolve by adding `pg_basebackup` alongside (or replacing) the current pg_dump sidecar. Once landed, the WAL archive becomes load-bearing for actual PITR.
 
-28. **`TEST_DATABASE_URL` env var required for integration tests (post-Dev XXIV, `2efe5e2`)**:
-    Integration tests use `TEST_DATABASE_URL` (not `DATABASE_URL`). A `current_database()`
-    guard in test fixtures refuses destructive operations unless the target DB name contains
-    "test". Set `TEST_DATABASE_URL=postgres://postgres:changeme@localhost:5432/soholink_test?sslmode=disable`
-    and run `scripts/setup-test-db.sh` before running integration tests locally. The guard
-    was introduced after a TRUNCATE-cascade incident on 2026-05-24 that wiped production
-    data (109 participants, 72 nodes, 57 jobs) when `DATABASE_URL` pointed to the production
-    DB during a test run.
+28. **Restoration testing in sandbox**: Stand up a separate Postgres stack (separate compose file, separate volume), execute the documented restoration procedure from `docs/backups.md`, verify the restored DB is functional. Output is either confirmation that the procedure works as written, or an updated procedure that does. Likely merged with TODO 27 since the procedure changes when the backup format changes.
 
-29. **`.env.example` is stale (post-Dev XXIV)**: `.env.example` predates `2efe5e2` and does
-    not include `TEST_DATABASE_URL`. Update it when next touching `.env.example` — add
-    `TEST_DATABASE_URL=postgres://postgres:changeme@localhost:5432/soholink_test?sslmode=disable`
-    alongside the existing `DATABASE_URL` entry.
+29. **Off-host backup replication**: `D:\SoHoLINK-backups\` is local to NTARIHQ. A hardware failure on the host destroys both the postgres data volume and the backups simultaneously. Documented as a known limitation in `docs/backups.md`. Candidate solutions: `rclone` or `restic` to S3-compatible storage (Backblaze B2 is cheapest at NTARI's scale).
 
-30. **WAL archiving enabled but not true PITR**: `archive_mode=on` on the postgres service
-    archives WAL segments to `D:/SoHoLINK-backups/wal/`. This provides forensic capability
-    (replay individual transactions) but is NOT a substitute for point-in-time recovery.
-    True PITR requires a `pg_basebackup` base snapshot plus WAL segments from that point.
-    The pg-backup sidecar runs daily `pg_dump` to `D:/SoHoLINK-backups/` with 90-day
-    retention. If PITR is needed in future, add a scheduled `pg_basebackup` job and document
-    the restore procedure in `docs/backups.md`.
+30. **CI gating in `deploy/redeploy.sh`**: Refuse to run unless the current master HEAD has a green CI run on GitHub. Implementation: `gh run list --json conclusion --jq '.[0].conclusion' == "success"`. The Dev XXIV data loss incident reinforced the "never deploy on red CI" discipline; codifying it in the deploy script makes the discipline mechanical.
 
-31. **Printer telemetry failure-cause reporting not implemented (B5 commit 6 deferred)**:
-    Agent does not yet detect filament runout, thermal runaway, or print detachment via
-    printer telemetry. `failure_cause` column exists in the DB (migration 018) and is
-    populated from the `/complete` JSON body (`b8143f5`) and hardcoded for the no-show path
-    (`failure_cause='no_show_after_7d'`), but the agent-side detection and reporting path
-    is not implemented. Implement in a future B5 follow-up or B8 session.
+31. **Printer-telemetry-based failure-cause reporting** (re-housed from original B5 commit plan, item 6): The B5 lifecycle ships the `failure_cause` schema (migration 018) and generic population via the agent's `/complete` JSON body. What's not implemented: agent-side detection of print-specific failure modes (filament runout, thermal runaway, print detachment) via printer telemetry, with the orchestrator persisting the cause. The placeholder comment at `cmd/agent/main.go:425` marks the intended location. Effectively blocked on B8 (Windows-native print agent) since native print spooler telemetry is platform-specific anyway.
 
-32. **Payout eligibility for print jobs not implemented (B5 commit 7 deferred)**:
-    `EligiblePayouts` in `internal/store/payouts.go` gates on `j.status = 'completed'`
-    only. Print jobs terminate at `delivered` — they are never selected by this query.
-    Print payouts are currently disabled. Implement by updating the eligibility query to
-    include `delivered` status for print workloads (or restructuring the query to handle
-    the two terminal statuses per workload class). Defer until print pilot produces real
-    delivered jobs to test against.
+32. **Payout eligibility query gates exclusively on `completed`** (re-housed from original B5 commit plan, item 7): `internal/store/payouts.go::EligiblePayouts` selects `WHERE j.status = 'completed' AND j.completed_at < NOW() - INTERVAL '24 hours'`. Print jobs terminate at `delivered`, so the existing query never selects them — print payouts are effectively disabled under the running code. Fix: extend the status filter to `IN ('completed', 'delivered')`. Per C5 implementation both terminal statuses set `completed_at`, so the 24-hour dispute window applies uniformly across workload types. This is the print-metering gap documented as an operational note in the Dev XXIII deployment checkpoint.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -532,7 +498,11 @@ These have caused bugs before — read before touching related code:
   necessarily a passing commit. Cross-reference against
   `https://www.githubstatus.com/` before concluding the commit is clean.
   (Incident `gnftqj9htp0g` on 2026-05-26 caused commit `5ff8461` to have
-  zero check runs despite a clean push.)
+  zero check runs despite a clean push.) Specific outage signature:
+  `gh api "repos/<org>/<repo>/commits/<sha>/check-runs"` returns
+  `total_count: 0` when no run was ever queued — distinguishes outage
+  from actual CI failure, which would show a populated `check_runs`
+  array with `conclusion: "failure"`.
 
 **Workload type vocabulary (post-B3):**
 - Two enums, by design — they evolve independently:
@@ -613,30 +583,22 @@ These have caused bugs before — read before touching related code:
   If submit performance ever becomes a bottleneck, swap to startup-load
   with reload-on-SIGHUP — interface stays the same.
 
-## Integration Test Isolation
-Integration tests (`-tags integration`) require a dedicated test database. **Never point
-integration tests at the production database.** A TRUNCATE-cascade incident on 2026-05-24
-wiped 109 participants, 72 nodes, and 57 jobs from production when `DATABASE_URL` targeted
-the production DB during a test run. The TRUNCATE forensic fingerprint in `pg_stat_user_tables`
-is `n_tup_ins > 0, n_tup_del = 0, n_live_tup = 0, n_dead_tup = 0`.
-
-**Setup (one-time per machine):**
-```
-bash scripts/setup-test-db.sh
-```
-Creates `soholink_test` database on local Postgres.
-
-**Running integration tests:**
-```
-TEST_DATABASE_URL="postgres://postgres:changeme@localhost:5432/soholink_test?sslmode=disable" \
-  go test -tags integration -v ./test/integration/ ./internal/orchestrator/
-```
-
-**Guards in place (post-Dev XXIV, `2efe5e2`):**
-- Integration tests read `TEST_DATABASE_URL` (not `DATABASE_URL`).
-- Test fixtures call `current_database()` and refuse destructive operations unless the DB
-  name contains "test". This guard is a last line of defense — do not rely on it alone.
-- `.env` `DATABASE_URL` is never read by integration tests.
+**Integration test isolation (post-Dev XXIV data loss incident):**
+- Integration tests must read `TEST_DATABASE_URL`, never `DATABASE_URL`.
+  Sharing an env var between production binaries and destructive test
+  fixtures cost 109 participants, 72 nodes, and 57 jobs on 2026-05-24 —
+  see Dev XXIV deployment checkpoint for the incident record.
+- Every test fixture that issues `TRUNCATE`, `DELETE`, or `DROP` must guard
+  its target with `current_database()` and refuse to act unless the
+  connected database name contains `"test"`. The guard fires before any
+  destructive statement; on mismatch the test fails fast.
+- The signature `n_tup_ins > 0 AND n_tup_del = 0 AND n_live_tup = 0 AND
+  n_dead_tup = 0` in `pg_stat_user_tables` is the unmistakable fingerprint
+  of a TRUNCATE event. DELETEs leave dead tuples; TRUNCATE bypasses MVCC
+  and reclaims pages directly. Useful for forensic identification.
+- Generalize: any destructive operation in any test fixture must verify
+  its target before firing. Tests that share a credential with production
+  are loaded weapons.
 
 ## Coding Conventions
 - All errors handled explicitly — no blank `_` discards (except `//nolint:errcheck` on fire-and-forget cleanups)
@@ -715,7 +677,7 @@ RESOLVED, Dev XV).
 - **DNS** — CNAME `soholink.org` → tunnel (proxied); CNAME `api.soholink.org` → tunnel (proxied), live
 - **Public pages** — `/`, `/login`, `/register`, `/join`, `/download`, `/privacy`, `/static/*` (auth-free)
 - **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; currently unsigned dev build, SignPath Foundation application pending — see TODO 19)
-- **Backup paths** — `D:/SoHoLINK-backups/` (daily pg_dump, 90-day retention); `D:/SoHoLINK-backups/wal/` (WAL archive segments — forensic only, not PITR; see TODO 30)
+- **Backup paths** — `D:/SoHoLINK-backups/` (daily pg_dump, 90-day retention); `D:/SoHoLINK-backups/wal/` (WAL archive segments — forensic only, not PITR; see TODO 27)
 - **`docs/backups.md`** — backup architecture, restore procedures, WAL archive notes
 
 ## First Live Pilot
@@ -1172,40 +1134,26 @@ a migration to parameterize them or hardcoded changes.
 
 ### Deployment checkpoint — `5ff8461` (2026-05-26, Dev XXIV)
 
-Six commits. No production behavior change from the B5 participant perspective
-(state machine already live from Dev XXIII); this session closes the orphaned-
-registry architectural gap and adds operational hardening.
+Six commits shipped across two threads: TODO 25 closure (three commits) and an unscheduled data safety initiative (three commits). The data safety work interrupted the original Dev XXIV scope after a production data loss event surfaced during an end-to-end smoke test of the TODO 25 fix.
 
-- **`2efe5e2`** — Data safety: integration tests renamed to `TEST_DATABASE_URL`;
-  `current_database()` guard in test fixtures refuses destructive ops unless DB name
-  contains "test". Introduced after 2026-05-24 TRUNCATE-cascade incident (109
-  participants, 72 nodes, 57 jobs lost). `scripts/setup-test-db.sh` creates
-  `soholink_test` database. `.env.example` needs updating (TODO 29).
+**TODO 25 closure** (`b8143f5` → `bee5d67` → `e4a6e92`): Portal no longer constructs an orphaned in-process `NodeRegistry`. Orchestrator binary gains a Docker-internal HTTP listener (`INTERNAL_ADDR=:8083`) serving `POST /internal/jobs/submit`; new `internal/orchclient` package implements the portal's `jobSubmitter` interface as an HTTP client targeting `http://orchestrator:8083`; `cmd/portal/main.go` swaps the in-process construction for the HTTP client. `POST /consumer/job` now reaches the orchestrator's heartbeat-fed registry. Portal main stops reading `ORCHESTRATOR_TOKEN_SECRET`, `PRINT_CONFIRMATION_ENABLED`, `ALLOWLIST_PATH` — orchestrator-only after this commit; per-service env hygiene cleanup deferred.
 
-- **`1aade8a`** — pg-backup sidecar: Alpine 3.20 + postgresql16-client container;
-  daily `pg_dump` to `D:/SoHoLINK-backups/` with 90-day retention. WAL archiving
-  (`archive_mode=on`) added to postgres service for forensic capability. Stack grows
-  from 7 to 8 services. `docs/backups.md` added.
+**Critical incident: production data loss (2026-05-24).** During an attempted end-to-end smoke test (register → heartbeat → job → payout) of the TODO 25 fix, login attempts with previously working accounts failed. Forensic analysis of `pg_stat_user_tables` showed the fingerprint of a TRUNCATE event: `n_tup_ins > 0, n_tup_del = 0, n_live_tup = 0, n_dead_tup = 0`. DELETEs leave dead tuples; TRUNCATE bypasses MVCC and reclaims pages directly. Root cause: integration test fixtures in six files read `DATABASE_URL` (same env var as production binaries) and unconditionally called `TRUNCATE participants CASCADE` at fixture setup. Any `go test ./...` invocation with `DATABASE_URL` exported in the shell — the documented workflow for running integration tests — would propagate via CASCADE through `participants` to `nodes` and `jobs`. **Loss: 109 participants, 72 nodes, 57 jobs. Unrecoverable** — no backups existed. Documented in `docs/backups.md` and the commit message of `2efe5e2` for durable git-history record.
 
-- **`5ff8461`** — orchclient + portal orphaned-registry fix (three logical commits
-  squashed): `internal/orchclient` HTTP client package; orchestrator gains internal
-  listener on `:8082`; portal's `jobSubmitter` interface wired to `orchclient.Client`.
-  Removes portal's `NodeRegistry` construction entirely. Closes TODO 25.
-  `TestPortalSubmitsViaOrchestratorClient` unit test; phase1 integration test covers
-  end-to-end. CI check-runs showed `total_count: 0` for this commit due to GitHub
-  Actions platform incident `gnftqj9htp0g` (active at push time, 2026-05-26 ~12:17
-  UTC). Commit is believed clean; verify when Actions recovers.
+**Data safety initiative — Steps 1–3 shipped:**
+- **Step 1 (`2efe5e2`)**: Tests now read `TEST_DATABASE_URL` (renamed across six fixtures); `current_database()` guard refuses any destructive operation unless the connected database name contains `"test"`. CI spins up `POSTGRES_DB: soholink_test` and passes `TEST_DATABASE_URL` to the integration test step. New `scripts/setup-test-db.sh` creates the `soholink_test` database in the local Postgres container. New `docs/test-database.md` documents the workflow.
+- **Step 2 (`1aade8a`)**: pg-backup sidecar (Alpine 3.20 + postgresql16-client) writing daily `pg_dump` snapshots to `D:/SoHoLINK-backups/`. Loop/once dispatcher, UTC ISO timestamps, partial-file cleanup on failure, 90-day prune via `find -mtime +N -delete`. First backup confirmed: `dump-20260526T095040Z.sql.gz`.
+- **Step 3 (`5ff8461`)**: WAL archiving. Postgres compose service gains a `command:` override setting `archive_mode=on` and `archive_command` to copy WAL segments to `/wal-archive` (idempotent test-then-cp pattern). New bind mount `D:/SoHoLINK-backups/wal:/wal-archive`. Verified via `pg_stat_archiver` (`archived_count=1, failed_count=0` after forced `pg_switch_wal`).
 
-**Production state**: stack still at Dev XXIII (`7dc6c96`) as of Dev XXIV close.
-Dev XXIV commits ready to deploy; no migration required (no new migrations in these
-commits). `D:/` drive must be attached before `docker compose up` — pg-backup
-volume mount will fail otherwise.
+**Honest scope of the data safety work.** WAL archiving alone does NOT deliver true PITR. WAL replay requires a binary base backup (`pg_basebackup`) as the replay starting point; the current logical pg_dump backups cannot serve. The archived WAL provides forensic capability and a foundation for future PITR. Deferred follow-ups: pg_basebackup with TimescaleDB hypertable handling (TODO 27), restoration testing in sandbox (TODO 28), off-host backup replication (TODO 29), CI gating in `redeploy.sh` (TODO 30).
 
-**Stack health at Dev XXIV close** (pre-deploy):
-- `soholink.org` — 200
-- `api.soholink.org/health` — 200
-- `api.soholink.org/nodes/register` — `mTLS required` (expected)
-- All 7 containers healthy (pg-backup not yet deployed)
+**Workflow discipline lessons codified** (added to the Workflow Discipline and Critical API Notes sections above): test infrastructure is not safe by default; "use this exact message" means exact; re-show is reproduction, not redesign; bind mounts from removable drives have a boot-order constraint (see Production Deployment); GitHub Actions outages are observable via the check-runs and status APIs (see Critical API Notes).
+
+**CI state at session close.** Five of six commits passed CI green. The sixth (`5ff8461`) was pushed during GitHub Actions incident `gnftqj9htp0g` (still investigating at session close) and never queued a check run. No re-push needed; runs auto-queue once GitHub recovers.
+
+**Operational notes:**
+- **Hardware re-registration blocking**: production database is essentially empty after the data loss. Jodson needs to re-register his hardware nodes via the portal `/register` flow before participant traffic can flow. Blocks end-to-end smoke test (register → heartbeat → job → payout) of the TODO 25 fix.
+- **postgres container restarted** during Step 3 (`archive_mode=on` requires postgres recreation). Uptime stamp at session close: postgres ~1 hour, all other services ~2 hours.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
