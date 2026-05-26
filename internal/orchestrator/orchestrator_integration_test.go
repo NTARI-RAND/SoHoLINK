@@ -31,14 +31,14 @@ type orchFixture struct {
 
 // setupOrchFixture connects to Postgres, runs migrations, truncates all tables,
 // seeds a provider + consumer participant and one node, and registers the node
-// in the in-memory registry. Skips the test if DATABASE_URL is not set.
+// in the in-memory registry. Skips the test if TEST_DATABASE_URL is not set.
 // Not safe for parallel use across tests in the same process: TRUNCATE happens
 // unconditionally at the start of every fixture build.
 func setupOrchFixture(t *testing.T, allowlistPath string, printConfirmEnabled bool) *orchFixture {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
+	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("DATABASE_URL not set")
+		t.Skip("TEST_DATABASE_URL not set — skipping integration test (see docs/test-database.md)")
 	}
 
 	ctx := context.Background()
@@ -51,6 +51,14 @@ func setupOrchFixture(t *testing.T, allowlistPath string, printConfirmEnabled bo
 
 	if err := store.RunMigrations(db); err != nil {
 		t.Fatalf("store.RunMigrations: %v", err)
+	}
+
+	var dbName string
+	if err := db.Pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("current_database: %v", err)
+	}
+	if !strings.Contains(dbName, "test") {
+		t.Fatalf("refusing to run destructive integration test: connected database %q does not contain \"test\" in its name; set TEST_DATABASE_URL to a dedicated test database", dbName)
 	}
 
 	if _, err := db.Pool.Exec(ctx, `

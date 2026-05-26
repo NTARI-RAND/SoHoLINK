@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,9 +19,9 @@ import (
 )
 
 func TestPhase1EndToEnd(t *testing.T) {
-	dbURL := os.Getenv("DATABASE_URL")
+	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
-		t.Skip("DATABASE_URL not set")
+		t.Skip("TEST_DATABASE_URL not set — skipping integration test (see docs/test-database.md)")
 	}
 
 	ctx := context.Background()
@@ -33,6 +34,14 @@ func TestPhase1EndToEnd(t *testing.T) {
 
 	if err := store.RunMigrations(db); err != nil {
 		t.Fatalf("store.RunMigrations: %v", err)
+	}
+
+	var dbName string
+	if err := db.Pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("current_database: %v", err)
+	}
+	if !strings.Contains(dbName, "test") {
+		t.Fatalf("refusing to run destructive integration test: connected database %q does not contain \"test\" in its name; set TEST_DATABASE_URL to a dedicated test database", dbName)
 	}
 
 	// TRUNCATE guard — removes any rows left by a previous interrupted run.

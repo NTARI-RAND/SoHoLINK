@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,9 +11,9 @@ import (
 )
 
 func TestRunUptimeScorer(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("DATABASE_URL not set — skipping uptime scorer integration test")
+		t.Skip("TEST_DATABASE_URL not set — skipping integration test (see docs/test-database.md)")
 	}
 
 	ctx := context.Background()
@@ -22,6 +23,14 @@ func TestRunUptimeScorer(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Pool.Close()
+
+	var dbName string
+	if err := db.Pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
+		t.Fatalf("current_database: %v", err)
+	}
+	if !strings.Contains(dbName, "test") {
+		t.Fatalf("refusing to run destructive integration test: connected database %q does not contain \"test\" in its name; set TEST_DATABASE_URL to a dedicated test database", dbName)
+	}
 
 	// Seed: create a participant and a node.
 	var participantID, nodeID string
