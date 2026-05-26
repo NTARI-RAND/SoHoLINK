@@ -101,6 +101,57 @@ pg-backup /usr/local/bin/backup.sh once` and verify a new file
 appears in `D:\SoHoLINK-backups\` before assuming backups are
 running correctly.
 
+## WAL archiving
+
+PostgreSQL writes every database change to a Write-Ahead Log (WAL)
+before applying it to the table files. With `archive_mode = on`,
+the postgres service copies each completed WAL segment to
+`D:\SoHoLINK-backups\wal\` on the host. Segments are 16MB each;
+Postgres rotates them based on write activity.
+
+**What this gives us:**
+
+- **Forensic capability:** archived WAL files can be inspected with
+  tools like `pg_waldump` to see what changed and when, even between
+  daily pg_dump snapshots.
+- **Foundation for future PITR:** if we later add a binary base
+  backup (`pg_basebackup`) alongside the existing pg_dump backups,
+  the combination of base + archived WAL enables point-in-time
+  recovery to any second between the base and the present.
+
+**What this does NOT give us today:**
+
+- **True point-in-time recovery is not yet operational.** WAL replay
+  requires a binary base backup as its starting point. Our current
+  pg_dump backups are logical SQL text — WAL cannot be replayed
+  against them. Until pg_basebackup is added (a future commit; see
+  also the TimescaleDB hypertable handling concern noted in commit
+  1aade8a), the archived WAL serves as foundation and forensic
+  material, not as a restoration mechanism on its own.
+
+**Disk usage:**
+
+WAL segments are 16MB each, uncompressed. Daily rotation count
+depends on write activity. For NTARI's pilot scale (low write
+volume), expect on the order of 50-200MB of WAL per day. The 1.8TB
+My Passport drive accommodates this comfortably.
+
+**Failure modes:**
+
+If `archive_command` fails (e.g. D:\ unplugged), Postgres retains
+WAL segments in `pg_wal/` rather than recycling them. Sustained
+failure can eventually fill the postgres data volume. To check:
+
+```bash
+docker compose exec postgres psql -U postgres -d postgres \
+  -c "SELECT * FROM pg_stat_archiver;"
+```
+
+The `failed_count` column should remain at or near zero. If it
+grows, either D:\ is unplugged (apply the recovery procedure under
+"Drive attachment requirement") or the archive destination has
+another issue.
+
 ## Scope and limitations
 
 - **Database covered:** `postgres` only (production data). The

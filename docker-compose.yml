@@ -5,8 +5,15 @@ services:
     env_file: .env
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - "postgres"
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - "D:/SoHoLINK-backups/wal:/wal-archive"
     ports:
       - "127.0.0.1:5432:5432"
 
