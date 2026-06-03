@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -255,6 +257,39 @@ func handleClaimNode(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			return
 		}
 
+		// Read SPIRE join token issued at portal token-generation time.
+		// Needed for the workload entry registration call below, and
+		// returned to the agent in the response so it can attest to
+		// spire-agent. Empty if portal SPIRE token-gen failed upstream.
+		var spireJoinToken string
+		_ = db.Pool.QueryRow(r.Context(),
+			`SELECT COALESCE(spire_join_token, '') FROM node_registration_tokens WHERE token = $1`,
+			req.Token,
+		).Scan(&spireJoinToken)
+
+		// Register a SPIRE workload entry so the contributor's soholink-agent
+		// can obtain a workload SVID for spiffe://soholink.org/node/<nodeID>
+		// from its local spire-agent. Without this the agent has no identity
+		// to present at mTLS time. If registration fails, roll back the node
+		// row — the registration token stays unused so the participant can
+		// retry with the same token.
+		selector := os.Getenv("SPIRE_NODE_SELECTOR")
+		if selector == "" {
+			selector = `windows:user_name:NT AUTHORITY\SYSTEM`
+		}
+		if spireErr := registerNodeSpireEntry(r.Context(), nodeID, spireJoinToken, selector); spireErr != nil {
+			slog.Error("spire workload entry registration failed; rolling back node row",
+				"node_id", nodeID,
+				"error", spireErr)
+			if _, rollbackErr := db.Pool.Exec(r.Context(), `DELETE FROM nodes WHERE id = $1`, nodeID); rollbackErr != nil {
+				slog.Error("compensating delete of node row failed; manual cleanup required",
+					"node_id", nodeID,
+					"rollback_error", rollbackErr)
+			}
+			writeError(w, http.StatusInternalServerError, "spire workload entry registration failed")
+			return
+		}
+
 		// Mark token consumed.
 		_, err = db.Pool.Exec(r.Context(), `
 			UPDATE node_registration_tokens
@@ -294,13 +329,6 @@ func handleClaimNode(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			return
 		}
 
-		// Read SPIRE join token if one was generated at portal token-generation time.
-		var spireJoinToken string
-		_ = db.Pool.QueryRow(r.Context(),
-			`SELECT COALESCE(spire_join_token, '') FROM node_registration_tokens WHERE token = $1`,
-			req.Token,
-		).Scan(&spireJoinToken)
-
 		resp := struct {
 			NodeID         string `json:"node_id"`
 			TokenSecret    string `json:"token_secret"`
@@ -313,6 +341,39 @@ func handleClaimNode(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	}
+}
+
+// registerNodeSpireEntry calls `spire-server entry create` to register a
+// workload entry that lets the contributor's soholink-agent process obtain
+// a workload SVID for spiffe://soholink.org/node/<nodeID> from its local
+// spire-agent. Without this entry the agent has no identity to present at
+// mTLS time and cannot reach the orchestrator.
+//
+// If spireJoinToken is empty the SPIRE chain was already broken upstream
+// (portal could not reach spire-server during token generation) — we
+// preserve graceful degradation by skipping with a warning rather than
+// failing the claim.
+func registerNodeSpireEntry(ctx context.Context, nodeID, spireJoinToken, selector string) error {
+	if spireJoinToken == "" {
+		slog.Warn("spire workload entry skipped — spire_join_token empty",
+			"node_id", nodeID,
+			"reason", "portal SPIRE token generation likely failed upstream")
+		return nil
+	}
+	parentID := "spiffe://soholink.org/spire/agent/join_token/" + spireJoinToken
+	spiffeID := "spiffe://soholink.org/node/" + nodeID
+	out, err := exec.CommandContext(ctx,
+		"/opt/spire/bin/spire-server", "entry", "create",
+		"-socketPath", "/run/spire-server/private/api.sock",
+		"-parentID", parentID,
+		"-spiffeID", spiffeID,
+		"-selector", selector,
+		"-ttl", "3600",
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("spire-server entry create failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.HandlerFunc {
