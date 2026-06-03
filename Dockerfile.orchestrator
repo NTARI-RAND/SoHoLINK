@@ -13,6 +13,7 @@ FROM alpine:latest
 
 WORKDIR /app
 COPY --from=builder /src/orchestrator ./orchestrator
+COPY --from=ghcr.io/spiffe/spire-server:1.9.6 /opt/spire/bin/spire-server /opt/spire/bin/spire-server
 
 EXPOSE 8082
 CMD ["./orchestrator"]
