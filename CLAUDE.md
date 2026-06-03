@@ -95,6 +95,68 @@ failing `go vet` with "unknown escape sequence". Resolution: backtick
 raw string `` `NT AUTHORITY\SYSTEM` ``, which has no escape semantics
 to lose.
 
+**`gh api` endpoint paths must omit the leading slash on Windows/Git Bash.**
+Git Bash rewrites arguments beginning with `/` as Windows filesystem paths:
+`gh api "/repos/..."` resolves to `gh api "C:/Program Files/Git/repos/..."`
+and fails with "invalid API endpoint". Use `gh api "repos/..."` (no leading
+slash). On Linux hosts the leading slash is fine, but the no-slash form is
+unambiguous across environments. Encountered Dev XXVII TODO 30 implementation.
+
+**`core.autocrlf=true` means `cat -A` CRLF does not imply CRLF in the blob.**
+On a Windows clone with `core.autocrlf=true`, git expands LF→CRLF on
+checkout, so `cat -A` shows `^M$` even when the git blob stores bare LF.
+To check what is actually in git: `git show HEAD:<file> | cat -A`. Use
+`git add --renormalize` to confirm whether any file needs a blob update.
+Encountered Dev XXVII TODO 30 prep: `cat -A deploy/redeploy.sh` showed CRLF
+but `git show HEAD:deploy/redeploy.sh | cat -A` showed LF — the file was
+already correct in the blob.
+
+**Handoff documents must reconcile against CLAUDE.md before being
+written.** Inter-session handoff docs are session-memory artifacts;
+CLAUDE.md is the canonical state document. When the two diverge,
+CLAUDE.md is authoritative. The first action of any session that
+received a handoff doc is to verify TODO statuses, version numbers,
+and resolved-vs-open claims against CLAUDE.md before acting on them.
+Encountered Dev XXVII opener: the XXVI→XXVII handoff listed TODOs 21
+and 24 as open scope; CLAUDE.md correctly recorded them as already
+closed (line 421 and line 445 respectively). Catching this at
+session start prevented redundant work.
+
+**Prefer `gh api --jq` over piping to system jq in deploy scripts.**
+`gh` statically links a jq library and exposes it via the `--jq`
+flag, so any host that has `gh` installed also has jq for free —
+no separate `apt install jq` step, no dependency check in the
+script. Eliminates one moving part on production hosts. Encountered
+Dev XXVII TODO 30: NTARIHQ has `gh` but not system `jq`;
+restructuring the CI gate to use `gh api --jq` instead of a
+`gh api | jq` pipeline avoided adding a new host dependency.
+
+**`set -e` interaction with command substitution is shell-dependent;
+add explicit empty-checks on captured output.** POSIX 2008
+standardized the behavior so that `VAR=$(failing_command)` under
+`set -e` aborts in bash and dash, but `#!/bin/sh` resolution varies
+across Linux hosts (dash on Debian/Ubuntu, bash-in-sh-mode on RHEL,
+busybox sh on Alpine) and the failure mode of a missed abort is
+silent fall-through. For deploy scripts and other security-relevant
+`sh` code, add an explicit `[ -z "$VAR" ]` guard immediately after
+the assignment — four lines of belt-and-suspenders that close a
+real silent-deploy path. Encountered Dev XXVII TODO 30 audit: if
+`gh api` failed but `set -e` did not fire, all three downstream
+`cut` extractions would return empty and all three guards would
+evaluate false, silently letting the deploy through.
+
+**Shell-script verification must run in the minimal `sh -c`
+context, not the developer's interactive shell.** Interactive
+shells inherit aliases, PATH augmentations, and shell options
+that scripts will not have when executed by a different user, by
+cron, or by docker. The right check for "does this work in
+production" is `sh -c '<script body>'` — not running the commands
+interactively. Encountered Dev XXVII TODO 30 prep: `gh api
+"/repos/..."` worked in the interactive Git Bash session but
+failed in `sh -c` with "invalid API endpoint" because MSYS path
+conversion behaves differently in the two contexts. The bug was
+production-relevant; the interactive test would have missed it.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
@@ -471,7 +533,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 
 29. **Off-host backup replication**: `D:\SoHoLINK-backups\` is local to NTARIHQ. A hardware failure on the host destroys both the postgres data volume and the backups simultaneously. Documented as a known limitation in `docs/backups.md`. Candidate solutions: `rclone` or `restic` to S3-compatible storage (Backblaze B2 is cheapest at NTARI's scale).
 
-30. **CI gating in `deploy/redeploy.sh`**: Refuse to run unless the current master HEAD has a green CI run on GitHub. Implementation: `gh run list --json conclusion --jq '.[0].conclusion' == "success"`. The Dev XXIV data loss incident reinforced the "never deploy on red CI" discipline; codifying it in the deploy script makes the discipline mechanical.
+30. **CI gating in `deploy/redeploy.sh`** — RESOLVED Dev XXVII (`638a794`, `3c7c2f2`): `deploy/redeploy.sh` now calls the GitHub check-runs API for the exact HEAD SHA, aborting unless all check runs are complete and every conclusion is `success`, `skipped`, or `neutral`. Four guards: empty `gh api` output, no check runs found, incomplete runs, any non-success conclusion. Uses `gh api --jq` (gh bundles jq; no system jq required). Implementation deviated from spec (`gh run list`) in favor of `check-runs/<SHA>`: the branch-list approach has a race condition where a newer passing run green-lights an older deployed commit. Companion commit `638a794` pins `*.sh` to LF in `.gitattributes` (forward-looking policy; blob was already LF via `core.autocrlf` normalization).
 
 31. **Printer-telemetry-based failure-cause reporting** (re-housed from original B5 commit plan, item 6): The B5 lifecycle ships the `failure_cause` schema (migration 018) and generic population via the agent's `/complete` JSON body. What's not implemented: agent-side detection of print-specific failure modes (filament runout, thermal runaway, print detachment) via printer telemetry, with the orchestrator persisting the cause. The placeholder comment at `cmd/agent/main.go:425` marks the intended location. Effectively blocked on B8 (Windows-native print agent) since native print spooler telemetry is platform-specific anyway.
 
@@ -1199,3 +1261,13 @@ Six commits shipped across two threads: TODO 25 closure (three commits) and an u
 Post-pilot architectural workstream. Native execution path separate from the
 containerized agent, targeting Windows print spooler integration. Likely native
 agent with Win32 API bindings, separate trust model from containerized workloads.
+
+### Deployment checkpoint — `3c7c2f2` (2026-06-03, Dev XXVII)
+
+Two commits shipped. No production redeploy in this session — the gate is landed on master and CI is green, but `redeploy.sh` has not yet been exercised against a live deploy; first use will be the next invocation on NTARIHQ.
+
+**TODO 30 closure** (`638a794` → `3c7c2f2`): `deploy/redeploy.sh` gains a CI gate. `638a794` adds `*.sh text eol=lf` to `.gitattributes` as forward-looking policy (blob was already LF; discovered via `git show HEAD:<file> | cat -A` vs `cat -A` discrepancy under `core.autocrlf=true`). `3c7c2f2` replaces the 6-line script body with a 35-line CI gate: one `gh api "repos/.../check-runs"` call with compound `--jq` expression (no system jq dependency), four guards (empty output / no runs / incomplete / non-success), allowlist of `success|skipped|neutral` conclusions. Deviated from CLAUDE.md spec (`gh run list`) in favor of per-SHA check-runs API: spec was written before an implementer considered the branch-advancement race condition.
+
+**Workflow discipline lessons codified** (added to Workflow Discipline above): six lessons total. (1) Handoff documents must reconcile against CLAUDE.md before being written. (2) `gh api` endpoint paths must omit the leading slash on Windows/Git Bash. (3) `core.autocrlf=true` blob vs working-copy CRLF divergence: use `git show HEAD:<file>` to inspect actual stored bytes. (4) Prefer `gh api --jq` over piping to system jq in deploy scripts (gh bundles jq). (5) `set -e` + command substitution is shell-dependent; add explicit empty-checks on captured output. (6) Shell-script verification must run in minimal `sh -c` context, not interactive shell.
+
+**CI state at session close.** Both commits green. `3c7c2f2` CI run #26888560834 completed in 1m25s.
