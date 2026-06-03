@@ -80,6 +80,21 @@ matches: STOP and report — do not retry with a different `old_str`, do
 not improvise. Multiple matches: expand `old_str` to make it unique, or
 switch to heredoc-splice on a range anchor.
 
+**Raw strings for Go literals containing backslashes when inserting
+via sed-heredoc.** When the content being inserted contains literal
+backslashes (e.g., Windows path separators or service-account names
+like `NT AUTHORITY\SYSTEM`), use raw string literals (backtick-quoted)
+on the Go side rather than double-quoted strings with escaped
+backslashes. The bash heredoc + `sed -i Nr` pipeline interacts with
+backslash escaping in ways that can collapse two consecutive
+backslashes into one at write time, producing an invalid Go escape
+sequence at compile time. Encountered Dev XXVI commit 2 (`5961178`):
+a Go double-quoted selector string that should have contained two
+backslashes before "SYSTEM" arrived in the file with only one,
+failing `go vet` with "unknown escape sequence". Resolution: backtick
+raw string `` `NT AUTHORITY\SYSTEM` ``, which has no escape semantics
+to lose.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
@@ -462,7 +477,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 
 32. **Payout eligibility query gates exclusively on `completed`** (re-housed from original B5 commit plan, item 7): `internal/store/payouts.go::EligiblePayouts` selects `WHERE j.status = 'completed' AND j.completed_at < NOW() - INTERVAL '24 hours'`. Print jobs terminate at `delivered`, so the existing query never selects them — print payouts are effectively disabled under the running code. Fix: extend the status filter to `IN ('completed', 'delivered')`. Per C5 implementation both terminal statuses set `completed_at`, so the 24-hour dispute window applies uniformly across workload types. This is the print-metering gap documented as an operational note in the Dev XXIII deployment checkpoint.
 
-33. **Per-node SPIRE workload entry registration missing — contributor onboarding blocker** (discovered Dev XXV during TODO 25 smoke test): `handleClaimNode` creates the node row and returns a SPIRE join token to the agent, but no code anywhere in the repo registers a workload entry with spire-server's Entry API. The agent successfully claims a node, starts its local spire-agent (which attests fine), but when soholink-agent then connects to its local SPIRE socket asking for a workload SVID, no entry matches → no SVID issued → mTLS to orchestrator fails. The contributor lifecycle past the initial claim is broken. Fix: in `handleClaimNode` after the node row insert, call spire-server Entry API (gRPC, via the admin socket) to register `spiffe://soholink.org/node/<node_id>` with `parentID = spiffe://soholink.org/spire/agent/join_token/<spire_join_token>` and a selector matching the soholink-agent process. Companion check: verify the orchestrator's SPIFFE-authenticated routes accept `spiffe://soholink.org/node/*` as authorized callers (not just the orchestrator's own SPIFFE ID). Scope: probably 50-100 lines orchestrator code + tests; verified via repo-wide grep on `entry create | CreateEntries | RegistrationAPI | EntryClient | RegistrationEntry` returning empty.
+34. **Orchestrator accepts any trust-domain SVID without binding to claimed node_id** (discovered Dev XXVI during TODO 33 implementation): `internal/identity/spiffe.go:44` uses `tlsconfig.AuthorizeAny()`, which accepts any valid SVID from the soholink.org trust domain on the orchestrator's mTLS listener. The peer SPIFFE ID is already extracted into request context by `internal/identity/middleware.go` but no route uses it for authorization. Practical consequence: an agent holding SVID `spiffe://soholink.org/node/A` could submit requests (heartbeat, complete, telemetry) with `node_id: B` in the body and the orchestrator would not catch the mismatch. Fix: in middleware or per-route guards, parse the peer SPIFFE ID's path component (`/node/<id>`) and require that any request body's `node_id` matches the cert-bound identity. Scope: ~30-50 lines middleware update + per-route guard additions in `internal/api/nodes.go` for heartbeat / complete / started / telemetry / report-printers handlers.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
