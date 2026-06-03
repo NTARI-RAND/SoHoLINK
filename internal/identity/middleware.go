@@ -43,6 +43,12 @@ func SPIFFEIDFromContext(ctx context.Context) (spiffeid.ID, bool) {
 	return id, ok
 }
 
+// WithSPIFFEID stores id in ctx using the same key as RequireSPIFFE.
+// Intended for tests that call handlers directly, bypassing the middleware.
+func WithSPIFFEID(ctx context.Context, id spiffeid.ID) context.Context {
+	return context.WithValue(ctx, contextKey{}, id)
+}
+
 // UnavailableHandler returns an http.Handler that responds 503 to every
 // request with a JSON body explaining that the SPIFFE identity source is
 // not available. Used when the SPIRE Workload API socket cannot be reached
