@@ -2,3 +2,6 @@
 # computed over raw file bytes and any LF↔CRLF translation breaks
 # signature verification.
 deploy/allowlist/*.json -text
+
+# Shell scripts must use LF; CRLF breaks shebang parsing on Linux
+*.sh text eol=lf
