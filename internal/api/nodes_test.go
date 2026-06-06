@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -120,6 +123,14 @@ func registerTestNode(t *testing.T, ps *APIServer, participantID, nodeID string,
 	if w.Code != http.StatusOK {
 		t.Fatalf("registerTestNode: %d: %s", w.Code, w.Body.String())
 	}
+}
+
+// withNodeSPIFFE returns a new request whose context carries a SPIFFE ID
+// matching spiffe://soholink.org/node/<nodeID>. Tests use this to simulate
+// the peer identity that RequireSPIFFE would populate in production.
+func withNodeSPIFFE(r *http.Request, nodeID string) *http.Request {
+	id := spiffeid.RequireFromString("spiffe://soholink.org/node/" + nodeID)
+	return r.WithContext(identity.WithSPIFFEID(r.Context(), id))
 }
 
 // ── handleRegisterNode ───────────────────────────────────────────────────────
@@ -303,6 +314,7 @@ func TestHandleCompleteJob_RunningJob(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -401,6 +413,7 @@ func TestHandleCompleteJob_NotRunning(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -440,6 +453,7 @@ func TestHandleCompleteJob_PersistsExitCodeNonzero(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -503,6 +517,7 @@ func TestHandleCompleteJob_PersistsFailureCause(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -567,6 +582,7 @@ func TestHandleCompleteJob_TmpfsFallback(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -628,6 +644,7 @@ func TestHandleCompleteJob_NilExitCode_Failed(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", http.NoBody)
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -690,6 +707,7 @@ func TestHandleCompleteJob_MalformedBody_400(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -740,6 +758,7 @@ func TestHandleCompleteJob_Print_AwaitingPickup(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -821,6 +840,7 @@ func TestHandleCompleteJob_Print3D_AwaitingPickup(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -894,6 +914,7 @@ func TestHandleCompleteJob_FailedSetsCompletedAt(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -957,6 +978,7 @@ func TestHandleCompleteJob_NoMeteringOnFailed(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
 	r.Header.Set("Content-Type", "application/json")
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleCompleteJob(w, r)
 
@@ -1483,6 +1505,7 @@ func TestHandleStartedJob_Success(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleStartedJob(w, r)
 
@@ -1534,6 +1557,7 @@ func TestHandleStartedJob_NotDispatched_409(t *testing.T) {
 
 	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
 	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	ps.handleStartedJob(w, r)
 
@@ -1566,7 +1590,284 @@ func TestHandleStartedJob_NotFound_404(t *testing.T) {
 	}
 }
 
-// TestHandleStartedJob_ForbiddenSPIFFE_403: skipped — identity.contextKey is
-// unexported; SPIFFE context cannot be injected from package api tests.
-// The auth path is covered by the same pattern as handleCompleteJob (shared
-// code block) and by production mTLS enforcement.
+// ── handleCompleteJob SPIFFE binding ─────────────────────────────────────────
+
+func TestHandleCompleteJob_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_no_spiffe@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 0})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	// Intentionally do NOT inject SPIFFE — simulates router misconfiguration.
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Confirm side-effects did NOT occur: job remains running.
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "running" {
+		t.Errorf("expected job status unchanged 'running', got %q", status)
+	}
+}
+
+func TestHandleCompleteJob_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "complete_mismatch@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'complete-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{"exit_code": 0})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/complete", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	// Inject a SPIFFE ID for a DIFFERENT node.
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	ps.handleCompleteJob(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "running" {
+		t.Errorf("expected job status unchanged 'running', got %q", status)
+	}
+}
+
+// ── handleStartedJob SPIFFE binding ──────────────────────────────────────────
+
+func TestHandleStartedJob_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "started_no_spiffe@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'started-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb)
+		 VALUES ($1, $2, 'app_hosting', 'dispatched', 0, 2, 4096)
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleStartedJob(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "dispatched" {
+		t.Errorf("expected job status unchanged 'dispatched', got %q", status)
+	}
+}
+
+func TestHandleStartedJob_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "started_mismatch@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'started-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb)
+		 VALUES ($1, $2, 'app_hosting', 'dispatched', 0, 2, 4096)
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/started", nil)
+	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	ps.handleStartedJob(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT status FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("query status: %v", err)
+	}
+	if status != "dispatched" {
+		t.Errorf("expected job status unchanged 'dispatched', got %q", status)
+	}
+}
+
+// ── handleTelemetry SPIFFE binding ───────────────────────────────────────────
+
+func TestHandleTelemetry_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "telemetry_no_spiffe@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'telemetry-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{
+		"node_id":        nodeID,
+		"cpu_pct":        50.0,
+		"ram_pct":        40.0,
+		"bandwidth_mbps": 100,
+		"timestamp":      time.Now().UTC(),
+	})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/telemetry", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	w := httptest.NewRecorder()
+	ps.handleTelemetry(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleTelemetry_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "telemetry_mismatch@test.com")
+
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'telemetry-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		  amount_cents, cpu_cores, ram_mb, started_at)
+		 VALUES ($1, $2, 'app_hosting', 'running', 0, 2, 4096, NOW())
+		 RETURNING id`, participantID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	b, _ := json.Marshal(map[string]any{
+		"node_id":        nodeID,
+		"cpu_pct":        50.0,
+		"ram_pct":        40.0,
+		"bandwidth_mbps": 100,
+		"timestamp":      time.Now().UTC(),
+	})
+	r := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/telemetry", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.SetPathValue("id", jobID)
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	ps.handleTelemetry(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}

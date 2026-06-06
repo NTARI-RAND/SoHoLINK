@@ -635,27 +635,31 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		var nodeSpiffeID, workloadType string
+		var nodeID, workloadType string
 		err := db.Pool.QueryRow(r.Context(), `
-			SELECT COALESCE(n.spiffe_id, ''), j.workload_type::text
+			SELECT j.node_id::text, j.workload_type::text
 			FROM jobs j
-			INNER JOIN nodes n ON j.node_id = n.id
 			WHERE j.id = $1`,
 			jobID,
-		).Scan(&nodeSpiffeID, &workloadType)
+		).Scan(&nodeID, &workloadType)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
 		}
-		// Enforce SPIFFE ownership only when the node has a registered SPIFFE ID.
-		// In production RequireSPIFFE middleware guarantees a valid SVID on the
-		// wire regardless; nodes still bootstrapping SPIRE have no spiffe_id yet.
-		if nodeSpiffeID != "" {
-			spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
-			if !ok || spiffeID.String() != nodeSpiffeID {
-				writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
-				return
-			}
+		// Bind the peer's SPIFFE identity to the node that owns this job.
+		// Node SPIFFE IDs follow a deterministic format
+		// (spiffe://soholink.org/node/<nodeID>) enforced at registration in
+		// registerNodeSpireEntry, so we compare the path component without
+		// needing a per-node lookup. 401 is reserved for missing identity
+		// (router misconfiguration or degraded mode); 403 for mismatch.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+nodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
+			return
 		}
 
 		var req completeJobRequest
@@ -739,24 +743,26 @@ func handleStartedJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		var nodeSpiffeID string
+		var nodeID string
 		err := db.Pool.QueryRow(r.Context(), `
-			SELECT COALESCE(n.spiffe_id, '')
+			SELECT j.node_id::text
 			FROM jobs j
-			INNER JOIN nodes n ON j.node_id = n.id
 			WHERE j.id = $1`,
 			jobID,
-		).Scan(&nodeSpiffeID)
+		).Scan(&nodeID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
 		}
-		if nodeSpiffeID != "" {
-			spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
-			if !ok || spiffeID.String() != nodeSpiffeID {
-				writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
-				return
-			}
+		// See handleCompleteJob for the binding rationale.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+nodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
+			return
 		}
 
 		tag, err := db.Pool.Exec(r.Context(),
@@ -786,28 +792,24 @@ func handleTelemetry(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
-		if !ok {
-			// RequireSPIFFE guarantees this is set; be defensive anyway.
-			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
-			return
-		}
-
-		// Verify the caller's SPIFFE ID matches the node that owns the job.
-		// If the node has no registered spiffe_id yet, the check is skipped.
-		var nodeSpiffeID string
+		var nodeID string
 		err := db.Pool.QueryRow(r.Context(), `
-			SELECT COALESCE(n.spiffe_id, '')
+			SELECT j.node_id::text
 			FROM jobs j
-			INNER JOIN nodes n ON j.node_id = n.id
 			WHERE j.id = $1`,
 			jobID,
-		).Scan(&nodeSpiffeID)
+		).Scan(&nodeID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
 		}
-		if nodeSpiffeID != "" && spiffeID.String() != nodeSpiffeID {
+		// See handleCompleteJob for the binding rationale.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+nodeID {
 			writeError(w, http.StatusForbidden, "SPIFFE identity does not match job owner")
 			return
 		}
@@ -848,4 +850,8 @@ func (s *APIServer) handleStartedJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) handleReportPrinters(w http.ResponseWriter, r *http.Request) {
 	handleReportPrinters(s.db)(w, r)
+}
+
+func (s *APIServer) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	handleTelemetry(s.db)(w, r)
 }
