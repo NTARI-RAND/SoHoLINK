@@ -38,12 +38,6 @@ func TLSClientConfig(source *Source, serverID spiffeid.ID) *tls.Config {
 	return tlsconfig.MTLSClientConfig(source.x509Source, source.x509Source, tlsconfig.AuthorizeID(serverID))
 }
 
-// TLSServerConfig returns a *tls.Config for mTLS inbound connections that
-// presents our SVID and accepts any peer with a valid SPIFFE identity.
-func TLSServerConfig(source *Source) *tls.Config {
-	return tlsconfig.MTLSServerConfig(source.x509Source, source.x509Source, tlsconfig.AuthorizeAny())
-}
-
 // TLSServerConfigOptional returns a *tls.Config that presents our SVID as
 // the server certificate and requests (but does not require) a client
 // certificate. Routes that need SPIFFE authentication check

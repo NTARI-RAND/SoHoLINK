@@ -166,3 +166,9 @@ another issue.
   hardware failure affecting the host disk would destroy both the postgres
   data volume and the backup directory simultaneously. Off-host replication
   (e.g. rclone to S3 or a remote NAS) is not yet configured.
+- **Schema compatibility for pre-TODO-34 dumps:** dumps captured before
+  migration `020_drop_nodes_spiffe_id` include the `nodes.spiffe_id`
+  column. Restore as usual; the standard post-restore migration step
+  (`migrate up`) will apply migration 020 and drop the column, since the
+  restored `schema_migrations` table reflects the dump's pre-020 state.
+  The column was always NULL in practice so no data is lost.
