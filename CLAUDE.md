@@ -157,6 +157,47 @@ failed in `sh -c` with "invalid API endpoint" because MSYS path
 conversion behaves differently in the two contexts. The bug was
 production-relevant; the interactive test would have missed it.
 
+**Half-implemented defenses are worse than absent ones.** A defensive
+check whose precondition is never met (a column-conditional auth check
+where the column is never populated) or whose enclosing function is
+never called (an exported authorizer function with no caller) passes
+code review as "the check is there" while providing zero security.
+Both flavors look like security in a diff. Neither is. When adding a
+defensive check that depends on persisted state, the registration
+and population path must be implemented and tested in the same
+commit as the check — or the check must be designed to fail-closed if
+the state is absent. When adding a defensive helper as an exported
+function, verify it has a caller before considering the work done;
+exported-but-unused functions accumulate as future-reader landmines.
+Two canonical examples codified after Dev XXVIII Finding 2 and
+Finding 3: (a) `nodes.spiffe_id` column with conditional check — the
+column was never populated, making the conditional always false;
+(b) `identity.TLSServerConfig` with `tlsconfig.AuthorizeAny()` — the
+function was orphaned in Dev XV when the server switched to
+`TLSServerConfigOptional`, but remained exported and looked like a
+security boundary for three sessions. Both are now removed (TODO 34
+commits 2 and 3).
+
+**When dispatch output surprises, first check the dispatch.** If Code
+produces a result Chat did not expect, the first hypothesis must be
+that the dispatch was malformed — not that Code overreached its role.
+Chat's spec is the input Code worked from; if the input was
+ambiguous, referenced off-block prose ("use the old_str from Patch 1"
+when Patch 1 lives in the "For Jodson" section above), or
+under-specified a structural requirement, the surprising output is
+downstream of a Chat error, not a Code error. The propose-audit-write
+discipline requires Chat to take responsibility for the dispatch
+shape before attributing the result to executor judgment. If Chat
+consistently blames Code for executing under-specified instructions,
+the three-layer discipline breaks: Code starts being treated as
+untrustworthy, audits become about Code's judgment instead of Chat's
+spec, and the workflow collapses into "Chat tells Code what to do,
+Code is occasionally wrong, Jodson referees." Codified after Dev
+XXVIII Stage A of TODO 34 commit 2, where Chat's spec referenced
+"Patch 1/2/3" blocks living above the For Code block, Code reasonably
+interpreted what it could see, and Chat initially framed the result
+as overreach before being corrected.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
@@ -539,7 +580,9 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 
 32. **Payout eligibility query gates exclusively on `completed`** (re-housed from original B5 commit plan, item 7): `internal/store/payouts.go::EligiblePayouts` selects `WHERE j.status = 'completed' AND j.completed_at < NOW() - INTERVAL '24 hours'`. Print jobs terminate at `delivered`, so the existing query never selects them — print payouts are effectively disabled under the running code. Fix: extend the status filter to `IN ('completed', 'delivered')`. Per C5 implementation both terminal statuses set `completed_at`, so the 24-hour dispute window applies uniformly across workload types. This is the print-metering gap documented as an operational note in the Dev XXIII deployment checkpoint.
 
-34. **Orchestrator accepts any trust-domain SVID without binding to claimed node_id** (discovered Dev XXVI during TODO 33 implementation): `internal/identity/spiffe.go:44` uses `tlsconfig.AuthorizeAny()`, which accepts any valid SVID from the soholink.org trust domain on the orchestrator's mTLS listener. The peer SPIFFE ID is already extracted into request context by `internal/identity/middleware.go` but no route uses it for authorization. Practical consequence: an agent holding SVID `spiffe://soholink.org/node/A` could submit requests (heartbeat, complete, telemetry) with `node_id: B` in the body and the orchestrator would not catch the mismatch. Fix: in middleware or per-route guards, parse the peer SPIFFE ID's path component (`/node/<id>`) and require that any request body's `node_id` matches the cert-bound identity. Scope: ~30-50 lines middleware update + per-route guard additions in `internal/api/nodes.go` for heartbeat / complete / started / telemetry / report-printers handlers.
+34. **SPIFFE peer ID binding on job-route handlers — RESOLVED Dev XXVIII** (`6641aef` → `b130fc7` → `56a2f03`): `handleCompleteJob`, `handleStartedJob`, and `handleTelemetry` now bind the peer's SPIFFE ID to the node UUID extracted from `jobs.node_id`. The binding uses deterministic construction (`spiffeID.Path() == "/node/" + jobs.node_id`) rather than a per-node DB lookup, valid because `registerNodeSpireEntry` is the only SVID issuance site and always uses that exact format. 401 for missing identity, 403 for path mismatch, 404 for nonexistent job (lookup precedes identity check). Pre-fix: the three handlers gated on `if nodeSpiffeID != ""` after reading `nodes.spiffe_id`, which was never populated — making the checks entirely inert. Commit 1 (`6641aef`) exported `identity.WithSPIFFEID` to unblock test-side SPIFFE injection. Commit 2 (`b130fc7`) shipped the three handler patches plus 6 new tests covering missing/mismatch cases (including no-side-effect assertions on mutating handlers) and added 13 SPIFFE injections to existing tests. Commit 3 (`56a2f03`) dropped the unused `nodes.spiffe_id` column (migration 020) and deleted dead `identity.TLSServerConfig` (which used `tlsconfig.AuthorizeAny()` but had no callers since Dev XV). The TLS listener continues to use `TLSServerConfigOptional` (see TODO 13/15); SPIFFE enforcement is at the HTTP layer by design. Two follow-on TODOs filed: see TODO 35 for the remaining three node-id-in-body handlers that did not get binding in this series, and the "half-implemented defenses" lesson in Workflow Discipline above.
+
+35. **SPIFFE peer ID binding for `handleHeartbeat`, `handleReportPrinters`, `handleGetJobs`** (filed Dev XXVIII, follow-on to TODO 34): the three remaining handlers that accept `node_id` in the request body (or query string, in `handleGetJobs`'s case) currently have no SPIFFE binding check. An agent holding any valid node SVID can submit heartbeats, printer reports, or job-poll requests on behalf of any other node. Scope is mechanical — same canonical guard as TODO 34's three job-route handlers, applied at the top of each handler after `node_id` is decoded: `if spiffeID, ok := identity.SPIFFEIDFromContext(r.Context()); !ok { 401 }` then `if spiffeID.Path() != "/node/"+req.NodeID { 403 }`. `handleGetJobs` reads `node_id` from `r.URL.Query()` rather than the body; otherwise identical. Estimated ~20 lines of handler changes plus 6 new tests (missing/mismatch per handler). Not in TODO 34's scope because that ticket targeted the job-route handlers specifically; consolidating the remaining three under one commit was the cleaner shape.
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -1271,3 +1314,31 @@ Two commits shipped. No production redeploy in this session — the gate is land
 **Workflow discipline lessons codified** (added to Workflow Discipline above): six lessons total. (1) Handoff documents must reconcile against CLAUDE.md before being written. (2) `gh api` endpoint paths must omit the leading slash on Windows/Git Bash. (3) `core.autocrlf=true` blob vs working-copy CRLF divergence: use `git show HEAD:<file>` to inspect actual stored bytes. (4) Prefer `gh api --jq` over piping to system jq in deploy scripts (gh bundles jq). (5) `set -e` + command substitution is shell-dependent; add explicit empty-checks on captured output. (6) Shell-script verification must run in minimal `sh -c` context, not interactive shell.
 
 **CI state at session close.** Both commits green. `3c7c2f2` CI run #26888560834 completed in 1m25s.
+
+### Deployment checkpoint — `56a2f03` (2026-06-15, Dev XXVIII)
+
+Three commits shipped, all green. TODO 34 closed (job-route SPIFFE binding); TODO 35 filed for the deferred binding work on heartbeat, report-printers, and get-jobs handlers. No production redeploy this session — Dev XXVI orchestrator changes (`9c8800e`, `5961178`) still pending Dockerfile rebuild deploy; that's a separate operational step.
+
+**TODO 34 closure** (`6641aef` → `b130fc7` → `56a2f03`): bound the peer SPIFFE identity to the node UUID extracted from `jobs.node_id` across `handleCompleteJob`, `handleStartedJob`, and `handleTelemetry`. Replaced the inert `if nodeSpiffeID != ""` gates (the column was never populated) with deterministic `spiffeID.Path() == "/node/" + jobs.node_id` checks. 401 for missing identity, 403 for mismatch, 404 for nonexistent job. Three commits across the series:
+
+- `6641aef` — Exported `identity.WithSPIFFEID(ctx, id)` as the test-side write counterpart to `SPIFFEIDFromContext`. Two-line addition; unblocks SPIFFE injection in tests without exposing the `contextKey` type.
+- `b130fc7` — Three handler patches in `internal/api/nodes.go` replacing the inert checks with strict deterministic construction; added `APIServer.handleTelemetry` method wrapper; updated 13 existing tests with `r = withNodeSPIFFE(r, nodeID)` injection; added 6 new tests (missing-401, mismatch-403 per handler) including side-effect-non-occurrence assertions on the mutating handlers; closed the deferred `TestHandleStartedJob_ForbiddenSPIFFE_403` placeholder.
+- `56a2f03` — Cleanup: migration 020 dropped `nodes.spiffe_id`; deleted dead `identity.TLSServerConfig` (orphaned in Dev XV when the server switched to `TLSServerConfigOptional`); added schema-compatibility note to `docs/backups.md` covering pre-TODO-34 dump restoration via the standard `migrate up` flow.
+
+**Two workflow discipline lessons codified** (added to Workflow Discipline above):
+
+1. *Half-implemented defenses are worse than absent ones.* Two canonical examples now in CLAUDE.md: `nodes.spiffe_id` (column conditional check where the column was never populated) and `identity.TLSServerConfig` (exported function with `tlsconfig.AuthorizeAny()` that had no callers). Both passed code review as security boundaries while providing zero security.
+
+2. *When dispatch output surprises, first check the dispatch.* Chat's first hypothesis when Code produces an unexpected result must be that the dispatch was malformed, not that Code overreached. Codified after the Stage A incident in commit 2 where Chat's spec referenced "Patch 1/2/3" blocks living above the For Code block, Code reasonably executed against what it could see, and Chat initially framed the divergent result as overreach before Jodson corrected the record.
+
+**Two findings worth noting for future sessions:**
+
+- *Reconnaissance discipline before each commit pays.* Commit 3 was originally specced as "tighten `tlsconfig.AuthorizeAny()` to a `/node/*`-only authorizer." Read-only reconnaissance during commit 3 planning revealed `identity.TLSServerConfig` (the function containing the `AuthorizeAny()` call) had zero callers — making the planned change a syntactically-correct no-op. Reconnaissance turned the commit from a misleading "security tightening" into the honest cleanup it needed to be (function deletion). The cost was one read-only dispatch; the saving was committing a no-op as a security fix.
+
+- *Per-handler discipline-dependent risk acknowledged.* The TODO 34 binding pattern is added at the top of each affected handler (after body decode, before any work). A future handler that takes `node_id` from the wire and forgets to call the canonical guard will silently skip the check. Mitigation: TODO 35 will codify the canonical guard at the top of every node-id-in-body handler in `nodes.go`, and CLAUDE.md now records the pattern explicitly so reviewers know what to check for. Long-term mitigation would be a middleware that decodes `node_id` and enforces the check uniformly, but that requires body buffering and is deferred until a fourth handler appears.
+
+**CI state at session close.** All three commits green: `6641aef` (1m32s), `b130fc7` (1m38s), `56a2f03` (1m33s). Working tree clean.
+
+**Operational notes:**
+- *Production deploy still pending.* `5961178` (Dev XXVI orchestrator with TODO 33 SPIRE workload entry registration) requires a Dockerfile rebuild deploy on NTARIHQ before TODO 34's binding is end-to-end testable in production. The handlers will build and deploy correctly with the existing image, but the per-node SVIDs that exercise the binding paths are produced by Dev XXVI's code. Sequencing: deploy Dev XXVI first, then end-to-end smoke (register → heartbeat → job → confirm SPIFFE check rejects a forged node_id).
+- *Sectigo EV certificate procurement.* No status change this session; awaiting Sectigo validation + SafeNet token shipping. Order placed late Dev XXVI per that session's handoff; no Sectigo-side activity observed.
