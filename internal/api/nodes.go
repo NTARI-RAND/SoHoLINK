@@ -388,6 +388,17 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			return
 		}
 
+		// See handleCompleteJob for the binding rationale.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+req.NodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
+			return
+		}
+
 		if err := registry.Heartbeat(req.NodeID); err != nil {
 			writeError(w, http.StatusNotFound, "node not found in registry")
 			return
@@ -537,6 +548,17 @@ func handleReportPrinters(db *store.DB) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "node_id is required")
 			return
 		}
+		// See handleCompleteJob for the binding rationale.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+req.NodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
+			return
+		}
+
 		for _, p := range req.Printers {
 			_, err := db.Pool.Exec(r.Context(), `
 				INSERT INTO node_printers (node_id, printer_id, printer_name)
@@ -561,6 +583,17 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 		nodeID := r.URL.Query().Get("node_id")
 		if nodeID == "" {
 			writeError(w, http.StatusBadRequest, "node_id query parameter is required")
+			return
+		}
+
+		// See handleCompleteJob for the binding rationale.
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+nodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
 			return
 		}
 

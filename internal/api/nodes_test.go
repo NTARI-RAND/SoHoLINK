@@ -91,6 +91,28 @@ func postJSON(t *testing.T, handler http.HandlerFunc, path string, body any, hea
 	return w
 }
 
+// postJSONAs is postJSON with a SPIFFE node identity injected into the request
+// context (spiffe://soholink.org/node/<nodeID>), for handlers that enforce
+// SPIFFE peer binding (heartbeat, report-printers).
+func postJSONAs(t *testing.T, handler http.HandlerFunc, path string, body any, nodeID string, headers ...map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	for _, hm := range headers {
+		for k, v := range hm {
+			r.Header.Set(k, v)
+		}
+	}
+	r = withNodeSPIFFE(r, nodeID)
+	w := httptest.NewRecorder()
+	handler(w, r)
+	return w
+}
+
 // testPrinterHash mirrors the agent-side PrinterHash algorithm so tests can
 // construct request bodies the server will accept or reject deterministically.
 func testPrinterHash(ids ...string) string {
@@ -241,9 +263,9 @@ func TestHandleHeartbeat_Valid(t *testing.T) {
 		"hardware_profile": map[string]any{"CPUCores": 2, "RAMMB": 4096},
 	}, map[string]string{"X-Register-Secret": "test-secret"})
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id": "30000000-0000-0000-0000-000000000003",
-	})
+	}, "30000000-0000-0000-0000-000000000003")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -267,9 +289,9 @@ func TestHandleHeartbeat_UnknownNode(t *testing.T) {
 	db := connectAPITestDB(t)
 	ps := newAPIServer(t, db)
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id": "ghost-node-999",
-	})
+	}, "ghost-node-999")
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
@@ -1007,11 +1029,11 @@ func TestHandleHeartbeat_VersionMatch_NoOptOut(t *testing.T) {
 	nodeID := "40000000-0000-0000-0000-000000000001"
 	registerTestNode(t, ps, pid, nodeID, nil)
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id":         nodeID,
 		"opt_out_version": 0,
 		"printer_hash":    "",
-	})
+	}, nodeID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1050,11 +1072,11 @@ func TestHandleHeartbeat_VersionDrift_PushesOptOut(t *testing.T) {
 		t.Fatalf("seed opt-out: %v", err)
 	}
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id":         nodeID,
 		"opt_out_version": 0,
 		"printer_hash":    "",
-	})
+	}, nodeID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1097,11 +1119,11 @@ func TestHandleHeartbeat_PrinterHashMatch_NoReportRequest(t *testing.T) {
 		{"id": "printer-B", "name": "Front Desk"},
 	})
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id":         nodeID,
 		"opt_out_version": 0,
 		"printer_hash":    testPrinterHash("printer-A", "printer-B"),
-	})
+	}, nodeID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1125,11 +1147,11 @@ func TestHandleHeartbeat_PrinterHashMismatch_RequestsReport(t *testing.T) {
 		{"id": "printer-A", "name": "Office Laser"},
 	})
 
-	w := postJSON(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
 		"node_id":         nodeID,
 		"opt_out_version": 0,
 		"printer_hash":    testPrinterHash("printer-A", "printer-NEW"),
-	})
+	}, nodeID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1234,13 +1256,13 @@ func TestHandleReportPrinters_UpsertsPreservingEnabled(t *testing.T) {
 		t.Fatalf("set enabled: %v", err)
 	}
 
-	w := postJSON(t, ps.handleReportPrinters, "/nodes/printers", map[string]any{
+	w := postJSONAs(t, ps.handleReportPrinters, "/nodes/printers", map[string]any{
 		"node_id": nodeID,
 		"printers": []map[string]string{
 			{"id": "p1", "name": "Updated Name"},
 			{"id": "p2", "name": "New Printer"},
 		},
-	})
+	}, nodeID)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -1300,6 +1322,7 @@ func TestHandleGetJobs_FlipsToDispatched(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	handleGetJobs(db)(w, r)
 
@@ -1349,6 +1372,7 @@ func TestHandleGetJobs_RejectsSelfPrintTraditional(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	handleGetJobs(db)(w, r)
 
@@ -1402,6 +1426,7 @@ func TestHandleGetJobs_RejectsSelfPrint3D(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	handleGetJobs(db)(w, r)
 
@@ -1456,6 +1481,7 @@ func TestHandleGetJobs_AllowsOtherOwnedPrint(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	r = withNodeSPIFFE(r, nodeID)
 	w := httptest.NewRecorder()
 	handleGetJobs(db)(w, r)
 
@@ -1867,6 +1893,186 @@ func TestHandleTelemetry_SPIFFEMismatch_403(t *testing.T) {
 	w := httptest.NewRecorder()
 	ps.handleTelemetry(w, r)
 
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// ── handleHeartbeat SPIFFE binding ───────────────────────────────────────────
+
+func TestHandleHeartbeat_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "heartbeat_no_spiffe@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'heartbeat-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	b, _ := json.Marshal(map[string]any{"node_id": nodeID})
+	r := httptest.NewRequest(http.MethodPost, "/nodes/heartbeat", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	// Intentionally do NOT inject SPIFFE — simulates router misconfiguration.
+	w := httptest.NewRecorder()
+	ps.handleHeartbeat(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+	var lastHB *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT last_heartbeat_at FROM nodes WHERE id = $1`, nodeID,
+	).Scan(&lastHB); err != nil {
+		t.Fatalf("query last_heartbeat_at: %v", err)
+	}
+	if lastHB != nil {
+		t.Errorf("expected last_heartbeat_at unchanged NULL, got %v", lastHB)
+	}
+}
+
+func TestHandleHeartbeat_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "heartbeat_mismatch@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'heartbeat-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	b, _ := json.Marshal(map[string]any{"node_id": nodeID})
+	r := httptest.NewRequest(http.MethodPost, "/nodes/heartbeat", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	ps.handleHeartbeat(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var lastHB *time.Time
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT last_heartbeat_at FROM nodes WHERE id = $1`, nodeID,
+	).Scan(&lastHB); err != nil {
+		t.Fatalf("query last_heartbeat_at: %v", err)
+	}
+	if lastHB != nil {
+		t.Errorf("expected last_heartbeat_at unchanged NULL, got %v", lastHB)
+	}
+}
+
+// ── handleReportPrinters SPIFFE binding ──────────────────────────────────────
+
+func TestHandleReportPrinters_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "printers_no_spiffe@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'printers-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	b, _ := json.Marshal(map[string]any{"node_id": nodeID, "printers": []any{}})
+	r := httptest.NewRequest(http.MethodPost, "/nodes/printers", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	// Intentionally do NOT inject SPIFFE.
+	w := httptest.NewRecorder()
+	ps.handleReportPrinters(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM node_printers WHERE node_id = $1`, nodeID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query node_printers: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no printers inserted, got %d", count)
+	}
+}
+
+func TestHandleReportPrinters_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	participantID := seedAPIParticipant(t, db, "printers_mismatch@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'printers-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	b, _ := json.Marshal(map[string]any{"node_id": nodeID, "printers": []any{}})
+	r := httptest.NewRequest(http.MethodPost, "/nodes/printers", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	ps.handleReportPrinters(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM node_printers WHERE node_id = $1`, nodeID,
+	).Scan(&count); err != nil {
+		t.Fatalf("query node_printers: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no printers inserted, got %d", count)
+	}
+}
+
+// ── handleGetJobs SPIFFE binding ─────────────────────────────────────────────
+
+func TestHandleGetJobs_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	participantID := seedAPIParticipant(t, db, "getjobs_no_spiffe@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'getjobs-no-spiffe', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	// Intentionally do NOT inject SPIFFE.
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleGetJobs_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	participantID := seedAPIParticipant(t, db, "getjobs_mismatch@test.com")
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code,
+		  hardware_profile, uptime_pct)
+		 VALUES ($1, 'getjobs-mismatch', 'online', 'A', 'US', '{"CPUCores":2,"RAMMB":4096}', 100.0)
+		 RETURNING id`, participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/nodes/jobs?node_id="+nodeID, nil)
+	r = withNodeSPIFFE(r, "00000000-0000-0000-0000-000000000099")
+	w := httptest.NewRecorder()
+	handleGetJobs(db)(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
