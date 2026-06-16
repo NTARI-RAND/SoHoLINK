@@ -198,6 +198,26 @@ XXVIII Stage A of TODO 34 commit 2, where Chat's spec referenced
 interpreted what it could see, and Chat initially framed the result
 as overreach before being corrected.
 
+**Scope formatting to the lines you changed; never `gofmt -w` a whole
+file to clean up your own additions.** Running `gofmt -w` to fix drift
+on freshly-added lines also silently reformats every other
+gofmt-non-canonical region in the file — unrelated struct-field
+alignment, pre-existing whitespace drift — and folds it into the diff.
+In a security or feature commit that collateral breaks atomicity: a
+reader doing `git blame` on an untouched declaration sees it "changed"
+by an unrelated commit, and the diff no longer reads as one coherent
+change. The added lines were already gofmt-clean; the file-level flag
+was pre-existing drift that is not this commit's to fix. Discipline:
+write added lines already formatted, verify them with `gofmt -d`,
+confirm the only suggested changes fall outside the added/edited
+hunks, and hand-fix the rare in-hunk miss rather than reaching for
+`gofmt -w`. Whole-file `gofmt -w` is the formatting equivalent of
+granting autonomous cleanup authority — the same anti-pattern the
+propose-audit-write loop exists to prevent. Codified after Dev XXIX
+TODO 35 commit 1, where a `gofmt -w` run to fix a Windows CRLF/indent
+artifact reformatted three unrelated structs and two test functions;
+the diff was reverted and re-applied without `gofmt -w`.
+
 ## Organization
 - **Project:** SoHoLINK
 - **Organization:** NTARI (Network Theory Applied Research Institute)
@@ -582,7 +602,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 
 34. **SPIFFE peer ID binding on job-route handlers — RESOLVED Dev XXVIII** (`6641aef` → `b130fc7` → `56a2f03`): `handleCompleteJob`, `handleStartedJob`, and `handleTelemetry` now bind the peer's SPIFFE ID to the node UUID extracted from `jobs.node_id`. The binding uses deterministic construction (`spiffeID.Path() == "/node/" + jobs.node_id`) rather than a per-node DB lookup, valid because `registerNodeSpireEntry` is the only SVID issuance site and always uses that exact format. 401 for missing identity, 403 for path mismatch, 404 for nonexistent job (lookup precedes identity check). Pre-fix: the three handlers gated on `if nodeSpiffeID != ""` after reading `nodes.spiffe_id`, which was never populated — making the checks entirely inert. Commit 1 (`6641aef`) exported `identity.WithSPIFFEID` to unblock test-side SPIFFE injection. Commit 2 (`b130fc7`) shipped the three handler patches plus 6 new tests covering missing/mismatch cases (including no-side-effect assertions on mutating handlers) and added 13 SPIFFE injections to existing tests. Commit 3 (`56a2f03`) dropped the unused `nodes.spiffe_id` column (migration 020) and deleted dead `identity.TLSServerConfig` (which used `tlsconfig.AuthorizeAny()` but had no callers since Dev XV). The TLS listener continues to use `TLSServerConfigOptional` (see TODO 13/15); SPIFFE enforcement is at the HTTP layer by design. Two follow-on TODOs filed: see TODO 35 for the remaining three node-id-in-body handlers that did not get binding in this series, and the "half-implemented defenses" lesson in Workflow Discipline above.
 
-35. **SPIFFE peer ID binding for `handleHeartbeat`, `handleReportPrinters`, `handleGetJobs`** (filed Dev XXVIII, follow-on to TODO 34): the three remaining handlers that accept `node_id` in the request body (or query string, in `handleGetJobs`'s case) currently have no SPIFFE binding check. An agent holding any valid node SVID can submit heartbeats, printer reports, or job-poll requests on behalf of any other node. Scope is mechanical — same canonical guard as TODO 34's three job-route handlers, applied at the top of each handler after `node_id` is decoded: `if spiffeID, ok := identity.SPIFFEIDFromContext(r.Context()); !ok { 401 }` then `if spiffeID.Path() != "/node/"+req.NodeID { 403 }`. `handleGetJobs` reads `node_id` from `r.URL.Query()` rather than the body; otherwise identical. Estimated ~20 lines of handler changes plus 6 new tests (missing/mismatch per handler). Not in TODO 34's scope because that ticket targeted the job-route handlers specifically; consolidating the remaining three under one commit was the cleaner shape.
+35. **SPIFFE peer ID binding for `handleHeartbeat`, `handleReportPrinters`, `handleGetJobs` — RESOLVED Dev XXIX** (`ca62261`): the three remaining node-id-in-body handlers now bind the peer's SPIFFE ID to the request's `node_id`, completing the coverage TODO 34 began on the job-route handlers. Guard is the canonical form, applied immediately after `node_id` is decoded and empty-checked, before any registry or DB call: `spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())` → 401 if `!ok`; then 403 if `spiffeID.Path() != "/node/"+<node_id>`. `handleHeartbeat` and `handleReportPrinters` key off `req.NodeID` from the body; `handleGetJobs` off the `nodeID` local read from `r.URL.Query()`. The 403 message is "SPIFFE identity does not match node" — node-scoped, not "job owner" as in the job-route handlers. Pre-fix: any agent holding any valid node SVID could submit heartbeats, printer reports, or job-poll requests on behalf of any other node. Single code commit (`ca62261`): three handler guards; 6 new tests (SPIFFEMissing_401 + SPIFFEMismatch_403 per handler, with no-side-effect assertions on the mutating handlers); a new `postJSONAs` test helper (`postJSON` plus a SPIFFE identity in request context); and 11 existing happy-path tests retrofitted with a matching identity so they pass the new guard — the same in-commit retrofit as TODO 34 commit 2. Production end-to-end validation still depends on the Dev XXVI orchestrator deploy (`5961178`): until that Dockerfile rebuild lands on NTARIHQ no agent obtains a per-node SVID, so the binding has nothing to validate against in production (same dependency noted for TODO 34).
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -1342,3 +1362,24 @@ Three commits shipped, all green. TODO 34 closed (job-route SPIFFE binding); TOD
 **Operational notes:**
 - *Production deploy still pending.* `5961178` (Dev XXVI orchestrator with TODO 33 SPIRE workload entry registration) requires a Dockerfile rebuild deploy on NTARIHQ before TODO 34's binding is end-to-end testable in production. The handlers will build and deploy correctly with the existing image, but the per-node SVIDs that exercise the binding paths are produced by Dev XXVI's code. Sequencing: deploy Dev XXVI first, then end-to-end smoke (register → heartbeat → job → confirm SPIFFE check rejects a forged node_id).
 - *Sectigo EV certificate procurement.* No status change this session; awaiting Sectigo validation + SafeNet token shipping. Order placed late Dev XXVI per that session's handoff; no Sectigo-side activity observed.
+
+### Deployment checkpoint — `ca62261` (2026-06-16, Dev XXIX)
+
+One code commit shipped, CI green (`ca62261`, run #27617933494, 1m33s). TODO 35 closed (SPIFFE binding on the three node-id-in-body handlers). No production redeploy this session — Dev XXVI orchestrator changes (`9c8800e`, `5961178`) remain pending the Dockerfile rebuild deploy on NTARIHQ, unchanged from Dev XXVIII.
+
+**TODO 35 closure** (`ca62261`): extended TODO 34's canonical SPIFFE guard to `handleHeartbeat`, `handleReportPrinters`, and `handleGetJobs`. Each binds the peer SPIFFE ID to the request's `node_id` (`req.NodeID` from the body for the first two; the `nodeID` local read from `r.URL.Query()` for `handleGetJobs`), 401 for missing identity, 403 for path mismatch, fired immediately after the existing empty-check and before any registry/DB work. 403 message is node-scoped ("SPIFFE identity does not match node"). Single code commit: three handler guards, 6 new tests (missing-401 + mismatch-403 per handler, with side-effect-non-occurrence assertions on the mutating handlers), a new `postJSONAs` test helper, and 11 existing happy-path tests retrofitted with a matching SPIFFE identity. CLAUDE.md docs closed separately from the code (this commit).
+
+**One workflow discipline lesson codified** (added to Workflow Discipline above):
+
+1. *Scope formatting to changed lines; never `gofmt -w` a whole file to clean your own additions.* A `gofmt -w` run to fix a Windows CRLF/indent artifact on the new lines also reformatted three unrelated structs and two test functions, folding pre-existing alignment drift into a security commit and breaking atomicity. The diff was reverted and re-applied without `gofmt -w`; the added lines were verified clean with `gofmt -d`.
+
+**Findings worth noting for future sessions:**
+
+- *The existing-test retrofit is part of the guard commit, not a follow-on.* Adding a SPIFFE guard to a handler immediately reds every pre-existing happy-path test that never injected an identity (11 here). Per TODO 34's precedent those injections ship in the same commit as the guard — a guard commit that reds the package is not shippable. The commit-1 spec initially under-scoped this; it was corrected before commit.
+- *str_replace anchoring on repeated test bodies needs uniquely-identifying spans.* The four `handleGetJobs` happy-path tests have byte-identical request-construction blocks (matching the new `_401` test too); each retrofit anchor had to widen to include the unique workload_type or participant variable. Mechanical repetitive edits are where anchor ambiguity compounds.
+
+**CI state at session close.** `ca62261` green (1m33s). Working tree clean after the code commit; this docs commit follows.
+
+**Operational notes:**
+- *Production deploy still pending (unchanged).* `5961178` (Dev XXVI orchestrator, TODO 33 SPIRE workload entry registration) still needs the Dockerfile rebuild deploy on NTARIHQ before the TODO 34 + TODO 35 bindings are end-to-end testable in production. Until then no agent obtains a per-node SVID and the guards have nothing to validate against. Sequencing unchanged: deploy Dev XXVI, then end-to-end smoke (register → heartbeat → job → forged-node_id rejection).
+- *Sectigo EV certificate procurement.* No status change this session.
