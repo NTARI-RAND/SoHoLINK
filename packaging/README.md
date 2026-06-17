@@ -168,7 +168,7 @@ productsign --sign "Developer ID Installer: Company Name" \
 ### Windows (MSI)
 Packages should be signed with code signing certificate:
 ```bash
-signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com installer.msi
+signtool sign /n "Network Theory Applied Research Institute Inc" /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent" installer.msi
 ```
 
 ## Release Checklist

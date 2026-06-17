@@ -1,17 +1,17 @@
-# sign-binary.ps1 — Sign SoHoLINK executables with the NTARI code signing certificate
+# sign-binary.ps1 — Sign SoHoLINK executables with the NTARI Sectigo EV certificate
 #
 # Usage:
 #   .\scripts\sign-binary.ps1                    # sign all binaries in bin/
 #   .\scripts\sign-binary.ps1 -BinaryPath .\bin\SoHoLINK.exe   # sign specific file
 #
-# For production, replace the self-signed cert with a CA-issued certificate:
-#   1. Purchase from DigiCert, Sectigo, or GlobalSign (~$300/year)
-#   2. Import the .pfx into Cert:\CurrentUser\My
-#   3. Update certs\thumbprint.txt with the new thumbprint
+# Prerequisites:
+#   - SafeNet Authentication Client (SAC) installed and USB token plugged in
+#   - Windows will prompt for the token PIN on each signing operation
+#   - The EV cert (Sectigo, thumbprint in certs\thumbprint.txt) must be in Cert:\CurrentUser\My
 param(
     [string]$BinaryPath = "",
     [string]$ThumbprintFile = "certs\thumbprint.txt",
-    [string]$TimestampServer = "http://timestamp.digicert.com"
+    [string]$TimestampServer = "http://timestamp.sectigo.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Stop"
 # Load thumbprint
 if (-not (Test-Path $ThumbprintFile)) {
     Write-Host "ERROR: No thumbprint file found at $ThumbprintFile" -ForegroundColor Red
-    Write-Host "Run the certificate generation first (see scripts/generate-cert.ps1)" -ForegroundColor Yellow
+    Write-Host "Expected EV cert thumbprint at $ThumbprintFile (see deploy/signing.md)" -ForegroundColor Yellow
     exit 1
 }
 
@@ -50,10 +50,11 @@ foreach ($file in $files) {
         -TimestampServer $TimestampServer `
         -HashAlgorithm SHA256
 
-    if ($result.Status -eq "Valid" -or $result.StatusMessage -match "chain.*root") {
-        Write-Host " OK ($($result.Status))" -ForegroundColor Green
+    if ($result.Status -eq "Valid") {
+        Write-Host " OK" -ForegroundColor Green
     } else {
-        Write-Host " $($result.Status): $($result.StatusMessage)" -ForegroundColor Yellow
+        Write-Host " FAILED — $($result.Status): $($result.StatusMessage)" -ForegroundColor Red
+        exit 1
     }
 }
 
