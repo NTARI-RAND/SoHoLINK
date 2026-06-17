@@ -130,6 +130,10 @@ if ($Sign) {
     Write-Host "==> EV-signing agent binary (token PIN prompt)..."
     & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent" $agentOut
     if ($LASTEXITCODE -ne 0) { throw "signtool failed on agent binary (exit $LASTEXITCODE)" }
+    Write-Host ""
+    Write-Host "==> EV-signing bundled SPIRE agent (token PIN prompt)..."
+    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK SPIRE Agent" $spireAgentOut
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed on SPIRE agent (exit $LASTEXITCODE)" }
 }
 
 # ── Step 2: build MSI with WiX ─────────────────────────────────────────────
