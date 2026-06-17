@@ -522,18 +522,19 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     not raw cert.pem contents. Defer to a focused follow-up session. Not blocking
     participant testing.
 
-19. **SignPath GitHub Actions code-signing integration** (NEW, Dev XVI):
-    Application submitted to SignPath Foundation 2026-05-08. Forward-looking
-    attribution language live on `/download` and `/privacy` pages. Once approved
-    (typical 1–2 week lead time per OSS project anecdotes), implement: (a)
-    `.github/workflows/sign-msi.yml` workflow that uploads MSI artifact to
-    SignPath and retrieves signed version; (b) update `installer/windows/build.ps1`
-    to integrate signing or add as separate step; (c) replace
-    `web/static/SoHoLINK-Setup.msi` with signed build; (d) flip Code Signing
-    card text on `download.html` and `privacy.html` from forward-looking
-    ("once verification is complete") to present-tense ("is digitally signed").
-    Removes the SmartScreen "Unknown publisher" warning that currently blocks
-    non-technical participants.
+19. **EV code signing — sign MSI and flip download/privacy page text** (Dev XXIX):
+    SignPath Foundation denied NTARI's application (May 2026, citing insufficient
+    external verification signals). Sectigo EV certificate now in hand:
+    thumbprint `8EE8F29DC1096452C2FF042C4549AE0E9E8921A1`, expires 2027-06-03,
+    private key on SafeNet USB hardware token (see `deploy/signing.md`).
+    Remaining work: (a) build a release MSI from current master, sign it via
+    `scripts/sign-binary.ps1` or `signtool /n "Network Theory Applied Research
+    Institute Inc"` with the token plugged in, and replace
+    `web/static/SoHoLINK-Setup.msi`; (b) flip Code Signing card text on
+    `download.html` and `privacy.html` from forward-looking ("once verification
+    is complete") to present-tense ("is digitally signed with an EV certificate").
+    CI signing is not feasible — the token PIN cannot be entered unattended;
+    signing is an operator step on NTARIHQ before each release push.
 
 20. **Sign-verify roundtrip check on `mustEd25519Key` startup** — RESOLVED Dev XVIII (`547374d`).
     `mustEd25519Key` performs a sign-then-verify probe ("soholink-key-self-test-v1")
@@ -854,7 +855,7 @@ RESOLVED, Dev XV).
 - **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`)
 - **DNS** — CNAME `soholink.org` → tunnel (proxied); CNAME `api.soholink.org` → tunnel (proxied), live
 - **Public pages** — `/`, `/login`, `/register`, `/join`, `/download`, `/privacy`, `/static/*` (auth-free)
-- **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; currently unsigned dev build, SignPath Foundation application pending — see TODO 19)
+- **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; currently unsigned dev build — sign and replace per TODO 19 before pilot)
 - **Backup paths** — `D:/SoHoLINK-backups/` (daily pg_dump, 90-day retention); `D:/SoHoLINK-backups/wal/` (WAL archive segments — forensic only, not PITR; see TODO 27)
 - **`docs/backups.md`** — backup architecture, restore procedures, WAL archive notes
 
