@@ -19,10 +19,27 @@
 param(
     [string]$RepoRoot  = (Resolve-Path "$PSScriptRoot\..\.." -ErrorAction Stop),
     [string]$Version   = "2.0.0",
-    [string]$OutDir    = "$PSScriptRoot"
+    [string]$OutDir    = "$PSScriptRoot",
+    [switch]$Sign
 )
 
 Set-StrictMode -Version Latest
+
+function Resolve-SignTool {
+    $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    $kitRoots = @("${env:ProgramFiles(x86)}\Windows Kits\10\bin", "${env:ProgramFiles}\Windows Kits\10\bin")
+    foreach ($root in $kitRoots) {
+        if (Test-Path $root) {
+            $hit = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like '*\x64\*' } |
+                Sort-Object FullName -Descending | Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+    }
+    throw "signtool.exe not found on PATH or under Windows Kits 10. Install the Windows SDK or add signtool to PATH."
+}
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "==> Building SoHoLINK Node Agent MSI v$Version"
@@ -105,6 +122,16 @@ try {
 }
 Write-Host "    Binary    : $agentOut"
 
+# Step 1b: EV-sign the agent binary so the installed Windows service is signed
+if ($Sign) {
+    $thumb = (Get-Content "$RepoRoot\certs\thumbprint.txt" -Raw).Trim()
+    $signtool = Resolve-SignTool
+    Write-Host ""
+    Write-Host "==> EV-signing agent binary (token PIN prompt)..."
+    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent" $agentOut
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed on agent binary (exit $LASTEXITCODE)" }
+}
+
 # ── Step 2: build MSI with WiX ─────────────────────────────────────────────
 $msiOut = Join-Path $OutDir "SoHoLINK-$Version.msi"
 Write-Host ""
@@ -119,6 +146,16 @@ try {
 }
 
 # ── Step 3: copy MSI to web/static for portal download ─────────────────────
+# Step 2b: EV-sign the MSI before publishing it
+if ($Sign) {
+    $thumb = (Get-Content "$RepoRoot\certs\thumbprint.txt" -Raw).Trim()
+    $signtool = Resolve-SignTool
+    Write-Host ""
+    Write-Host "==> EV-signing MSI (token PIN prompt)..."
+    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent Installer" $msiOut
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed on MSI (exit $LASTEXITCODE)" }
+}
+
 $staticOut = Join-Path $RepoRoot "web\static\SoHoLINK-Setup.msi"
 Copy-Item -Path $msiOut -Destination $staticOut -Force
 Write-Host "    Static    : $staticOut"
