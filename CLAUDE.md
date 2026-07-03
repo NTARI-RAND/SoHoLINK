@@ -1410,3 +1410,60 @@ SPIRE agent recovery + full stack redeploy. All containers healthy; orchestrator
 - *End-to-end smoke still needed.* No live nodes exist (total_nodes=1, last_hb=NULL). The register → heartbeat → job → forged-node_id 403 smoke requires a real agent install. Unblocked now that the orchestrator is SPIFFE-ready.
 - *Orphaned SPIRE entry* `294713e0` can be pruned at any time: `docker compose exec spire-server /opt/spire/bin/spire-server entry delete -socketPath /run/spire-server/private/api.sock -entryID 294713e0-1eb8-4003-8880-a38ea1b2bf9f` (use PowerShell, not Git Bash, to avoid MSYS path mangling).
 - *Sectigo EV certificate procurement.* No status change.
+
+### Federation track — three-repo topology seeded (Dev XXX)
+
+Federation work began: SoHoLINK gains a coordination protocol and a sibling
+frontend, without SoHoLINK itself being renamed or migrated. This is a
+documentation checkpoint only — no SoHoLINK code, config, migration, or deploy
+changed in this commit.
+
+**Topology (A): SoHoLINK stays the coordinator.** Two new private, AGPL-3.0
+repos were created and seeded on `main`:
+- `NTARI-RAND/sohocloud-protocol` — the shared "thin-waist" Go module (Go 1.22,
+  stdlib only): node recognition, capability listing, and the job-employment
+  lifecycle. Coordination only — NOT the JFA member economy. Signed messages use
+  a deterministic length-prefixed canonical encoding (not JSON); ed25519
+  throughout. Its `identity` package homes the exact `/node/<id>` SPIFFE binding
+  convention already live here (see TODO 34/35). `SPEC.md` is the normative
+  conformance spec. `anchor/` is a labeled, unbuilt stub for a future witnessed
+  employment-claim log (open problem #6).
+- `NTARI-RAND/Cloudy` — a greenfield Go frontend skeleton. Real: `internal/coord`,
+  a thin client over the protocol's reference httpjson transport. Stubbed as
+  separate JFA tracks: `internal/economy` (member credit), `internal/covenant`
+  (reputation), `internal/record` (dialog-sealed record).
+
+**Import-graph invariant (load-bearing — do not break):** nothing imports
+SoHoLINK or Cloudy; both import ONLY `sohocloud-protocol`, which is a dependency
+leaf (stdlib + intra-module only). This is enforced by the import graph, not by
+prose, and it is what prevents any coordinator — SoHoLINK included — from
+becoming a hub every consumer must route through (open problem #7). A future
+change that adds a dependency edge into SoHoLINK or Cloudy breaks this.
+
+**TODO 35 affirmed (not changed):** the six-handler SPIFFE binding closed in
+Dev XXIX (`ca62261`, live at `4ba5f21`) is the canonical source of the
+`/node/<id>` convention the protocol's `identity` package now mirrors.
+
+**Future SoHoLINK-side track (NOT done, not committed):** SoHoLINK implementing
+`coordinator.Coordinator` by generalizing its existing handlers, and publishing
+a signed `FeeDeclaration`. This is future work; it does not displace TODO 37
+(SPIRE control-plane exposure) or the stale-branch cleanup, which remain the
+live priorities.
+
+**Workflow correction — direct-push-to-`master` is dead.** `master` is now
+covered by the org ruleset "Org Baseline - Protect main" (deletion,
+non_fast_forward, required_linear_history, pull_request) plus repo-level
+code-scanning. All commits now require branch → PR → merge; the PR CI gate is
+2x `test`, `Analyze (go)`, and `CodeQL`. The "Working branch: master, direct
+push" convention elsewhere in this file is superseded.
+
+**Governance blocker for the ~70-dev ramp (flagged, unresolved):** the org
+baseline requires 1 approving review with `require_last_push_approval`, which
+DEADLOCKS the sole author — GitHub forbids self-approval — so every merge this
+session used a repo-admin `--admin` override. That means the review gate is
+currently bypassable by any repo-admin token. Before headcount arrives, this
+needs a deliberate governance pass (teams/permissions, required checks,
+CODEOWNERS, a considered bypass-actor policy) — not an expedient. Also open:
+PR #4 (`dco-inbound-outbound`) would, if merged, require `Signed-off-by`
+trailers, which conflicts with this project's no-trailers commit convention;
+reconcile before merging.
