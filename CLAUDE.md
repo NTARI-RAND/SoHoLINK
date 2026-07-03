@@ -522,19 +522,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
     not raw cert.pem contents. Defer to a focused follow-up session. Not blocking
     participant testing.
 
-19. **EV code signing — sign MSI and flip download/privacy page text** (Dev XXIX):
-    SignPath Foundation denied NTARI's application (May 2026, citing insufficient
-    external verification signals). Sectigo EV certificate now in hand:
-    thumbprint `8EE8F29DC1096452C2FF042C4549AE0E9E8921A1`, expires 2027-06-03,
-    private key on SafeNet USB hardware token (see `deploy/signing.md`).
-    Remaining work: (a) build a release MSI from current master, sign it via
-    `scripts/sign-binary.ps1` or `signtool /n "Network Theory Applied Research
-    Institute Inc"` with the token plugged in, and replace
-    `web/static/SoHoLINK-Setup.msi`; (b) flip Code Signing card text on
-    `download.html` and `privacy.html` from forward-looking ("once verification
-    is complete") to present-tense ("is digitally signed with an EV certificate").
-    CI signing is not feasible — the token PIN cannot be entered unattended;
-    signing is an operator step on NTARIHQ before each release push.
+19. **EV code signing — RESOLVED (artifacts); signed-service-start gate pending a live node.** Sectigo EV cert (thumbprint `8EE8F29DC1096452C2FF042C4549AE0E9E8921A1`, expires 2027-06-03, private key on SafeNet USB token) is wired into `installer/windows/build.ps1` behind `-Sign`: signs `soholink-agent.exe`, `spire-agent.exe`, and the MSI in sequence (commits `9b55e0e`, `7e8facc`). Download/privacy Code-Signing copy flipped to present-tense EV (commit `8c006e0`). A release MSI was built, EV-signed, deployed via `bash deploy/redeploy.sh`, and verified live against the Sectigo chain (live download byte-for-byte identical to the signed artifact; leaf thumbprint `8EE8F29D…`). Installed on NTARIHQ: both `soholink-agent.exe` and `spire-agent.exe` report Authenticode `Valid`; UAC elevation shows the verified publisher name. SignPath Foundation was denied (May 2026); EV is the path. Token signing is an operator-only step (PIN cannot be entered unattended in CI). **Still open:** the signed services have not been started on a live node — that gate is blocked by TODO 37 (SPIRE control-plane exposure). Note: `signtool` is provided on NTARIHQ via the NuGet `microsoft.windows.sdk.buildtools` package at `%USERPROFILE%\.signtool\` (User PATH extended); the Windows SDK is not installed.
 
 20. **Sign-verify roundtrip check on `mustEd25519Key` startup** — RESOLVED Dev XVIII (`547374d`).
     `mustEd25519Key` performs a sign-then-verify probe ("soholink-key-self-test-v1")
@@ -607,6 +595,14 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 35. **SPIFFE peer ID binding for `handleHeartbeat`, `handleReportPrinters`, `handleGetJobs` — RESOLVED Dev XXIX** (`ca62261`): the three remaining node-id-in-body handlers now bind the peer's SPIFFE ID to the request's `node_id`, completing the coverage TODO 34 began on the job-route handlers. Guard is the canonical form, applied immediately after `node_id` is decoded and empty-checked, before any registry or DB call: `spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())` → 401 if `!ok`; then 403 if `spiffeID.Path() != "/node/"+<node_id>`. `handleHeartbeat` and `handleReportPrinters` key off `req.NodeID` from the body; `handleGetJobs` off the `nodeID` local read from `r.URL.Query()`. The 403 message is "SPIFFE identity does not match node" — node-scoped, not "job owner" as in the job-route handlers. Pre-fix: any agent holding any valid node SVID could submit heartbeats, printer reports, or job-poll requests on behalf of any other node. Single code commit (`ca62261`): three handler guards; 6 new tests (SPIFFEMissing_401 + SPIFFEMismatch_403 per handler, with no-side-effect assertions on the mutating handlers); a new `postJSONAs` test helper (`postJSON` plus a SPIFFE identity in request context); and 11 existing happy-path tests retrofitted with a matching identity so they pass the new guard — the same in-commit retrofit as TODO 34 commit 2. Deployed to production in Dev XXIX (2026-06-16): orchestrator rebuilt from `4ba5f21` via `bash deploy/redeploy.sh`, reports `{"identity":"ready","status":"ok"}`, migration 020 applied; all six SPIFFE guards (TODO 34 + 35) are now live in production. End-to-end validation — a node attesting, then a forged `node_id` rejected 403 — is still pending, since no live nodes exist yet. See the Dev XXIX prod deploy checkpoint.
 
 36. **SPIRE agent `join_token` attestation does not survive SVID expiry** (filed Dev XXIX): `join_token` is one-time-use — on attestation the token is consumed and the SVID is cached in `spire_agent_data`. If the SVID expires and the agent restarts, it tries to re-attest with the already-consumed token and crash-loops indefinitely ("join token does not exist or has already been used"). Recovery: `spire-server token generate` → update `SPIRE_AGENT_JOIN_TOKEN` in `.env` → `docker compose up -d --force-recreate spire-agent` → re-run `bash deploy/register-entries.sh` (the orchestrator workload entry `parentID` encodes the token value; old entry becomes orphaned). The durable fix is switching to a persistent attestation method (`x509pop` for a dedicated host) that survives restarts without a one-time token. Deferred; the rotation procedure above is the interim mitigation.
+
+37. **SPIRE control-plane exposure (`spire.soholink.org:8081`) — IMMEDIATE; blocks all node bring-up.** `spire.soholink.org` is NXDOMAIN and port 8081 is not externally routed, so a node's bundled SPIRE agent cannot attest and `cmd/agent/main.go`'s `waitForSPIRE` fatals after 90s. `spire-server` already publishes `8081:8081` in `docker-compose.yml`. Decision (Dev XXX): expose via **Cloudflare tunnel (gRPC/TCP route) for now** — Spectrum's setup blocks inbound; revisit a direct DNS + port-forward after the pending modem/router swap. Verify a possible host-port collision first: `spire-server` publishes host `8081` while `configs/default.yaml` sets `portal_address: 0.0.0.0:8081`. Gates TODO 19's signed-service-start gate and the "node broadcasts hardware capabilities to the DB over the site" test, plus NTARI1 and Shenandoah node bring-up.
+
+38. **master README build badge points at dead legacy repo — IMMEDIATE (docs).** README line 5 build-status badge URL still references `NetworkTheoryAppliedResearchInstitute/soholink` (archived legacy repo). Repoint to the `NTARI-RAND/SoHoLINK` Actions badge.
+
+39. **Surface installer download from the dashboard.** The signed MSI is reachable only from the public `/download` page; add a download affordance on the authenticated dashboard.
+
+40. **Add SPDX license headers to Go sources.** No `.go` file carries an `SPDX-License-Identifier: AGPL-3.0-or-later` header. Planned in `docs/legacy/PLAN.md` (Task 13.3) and ROADMAP but never executed. Project is uniformly AGPL-3.0 (canonical `LICENSE.txt`).
 
 ## Critical API Notes
 These have caused bugs before — read before touching related code:
@@ -855,7 +851,7 @@ RESOLVED, Dev XV).
 - **Cloudflare Tunnel** — `soholink-prod` (`bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4`)
 - **DNS** — CNAME `soholink.org` → tunnel (proxied); CNAME `api.soholink.org` → tunnel (proxied), live
 - **Public pages** — `/`, `/login`, `/register`, `/join`, `/download`, `/privacy`, `/static/*` (auth-free)
-- **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; currently unsigned dev build — sign and replace per TODO 19 before pilot)
+- **MSI installer** — live at `https://soholink.org/static/SoHoLINK-Setup.msi` (~16 MB; EV-signed — Sectigo cert issued to Network Theory Applied Research Institute Inc; see TODO 19)
 - **Backup paths** — `D:/SoHoLINK-backups/` (daily pg_dump, 90-day retention); `D:/SoHoLINK-backups/wal/` (WAL archive segments — forensic only, not PITR; see TODO 27)
 - **`docs/backups.md`** — backup architecture, restore procedures, WAL archive notes
 
