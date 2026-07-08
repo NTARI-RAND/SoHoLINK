@@ -13,6 +13,7 @@
 package notify
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/mail"
 	"net/smtp"
@@ -105,8 +106,18 @@ func buildRFC5322(from string, msg Message) []byte {
 	b.WriteString("Subject: " + stripHeader(msg.Subject) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	// Base64-encode the body so untrusted body content (e.g. admin-composed
+	// governance messages) is transport-encoded and cannot inject into the SMTP
+	// message stream. Lines wrapped at 76 chars per RFC 2045.
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
 	b.WriteString("\r\n")
-	b.WriteString(msg.Body)
+	enc := base64.StdEncoding.EncodeToString([]byte(msg.Body))
+	for len(enc) > 76 {
+		b.WriteString(enc[:76])
+		b.WriteString("\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc)
 	b.WriteString("\r\n")
 	return []byte(b.String())
 }
