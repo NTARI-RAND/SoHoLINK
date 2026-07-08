@@ -3,7 +3,7 @@ module github.com/NetworkTheoryAppliedResearchInstitute/soholink
 go 1.25.0
 
 require (
-	github.com/NTARI-RAND/sohocloud-protocol v0.0.0-00010101000000-000000000000
+	github.com/NTARI-RAND/sohocloud-protocol v0.1.0
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
@@ -18,11 +18,10 @@ require (
 	golang.org/x/sys v0.42.0
 )
 
-// sohocloud-protocol is a sibling working tree under Development/Substrate,
-// not yet published to a module proxy. The replace pins it to the local
-// checkout so SoHoLINK builds against the operator identity layer (Layer C)
-// in lockstep with the protocol source.
-replace github.com/NTARI-RAND/sohocloud-protocol => ../sohocloud-protocol
+// sohocloud-protocol is published at github.com/NTARI-RAND/sohocloud-protocol
+// (public, AGPL-3.0). Local protocol development uses a gitignored go.work
+// (`go work use ../sohocloud-protocol`) rather than a committed replace, so CI
+// and fresh clones resolve the tagged module.
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
