@@ -1,0 +1,140 @@
+{{define "content"}}
+<div class="container" style="max-width:820px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance &middot; local-only</div>
+      <h2>Messaging</h2>
+    </div>
+  </div>
+
+  <p style="margin-bottom:1.5rem;">
+    Compose one message and send it to operators, members, or both. Delivery uses the
+    same zero-cost <code>net/smtp</code> path as the onboarding email 2FA. Recipients
+    are deduplicated across audiences; the send result reports how many addresses were
+    attempted, how many succeeded, and which (if any) failed.
+  </p>
+
+  <!-- Members transitional note -->
+  <div class="card" style="border-left:3px solid var(--accent);margin-bottom:2rem;">
+    <div class="card-eyebrow">Audience note</div>
+    <p style="margin:0;">
+      <strong style="color:var(--text);">Operators</strong> are the coordinator's own
+      counterparties. <strong style="color:var(--text);">Members</strong> are
+      <em>transitional</em> &mdash; Cloudy-owned records still hosted here pending the
+      frontend migration. The member audience (and its recipient list) moves to Cloudy
+      with them.
+    </p>
+  </div>
+
+  <div class="section-label">Compose</div>
+  <div class="card" style="margin-bottom:2rem;">
+    <form id="msg-form" style="margin:0;">
+      <div class="form-group">
+        <label for="subject">Subject</label>
+        <input type="text" id="subject" name="subject" maxlength="200" required>
+      </div>
+      <div class="form-group">
+        <label for="body">Body</label>
+        <textarea id="body" name="body" rows="8" required
+                  style="width:100%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:0.875rem;padding:0.6rem 0.8rem;border-radius:var(--r);outline:none;resize:vertical;"></textarea>
+      </div>
+
+      <label>Audience</label>
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin:0.4rem 0 1.25rem;">
+        <label style="display:flex;align-items:center;gap:0.5rem;text-transform:none;letter-spacing:normal;font-size:0.85rem;color:var(--text);cursor:pointer;margin:0;">
+          <input type="checkbox" id="aud-operators" name="operators" style="width:auto;" checked>
+          Operators
+        </label>
+        <label style="display:flex;align-items:center;gap:0.5rem;text-transform:none;letter-spacing:normal;font-size:0.85rem;color:var(--text);cursor:pointer;margin:0;">
+          <input type="checkbox" id="aud-members" name="members" style="width:auto;">
+          Members <span style="color:var(--muted);font-size:0.75rem;">(transitional)</span>
+        </label>
+      </div>
+      <p style="margin:-0.75rem 0 1.25rem;font-size:0.75rem;color:var(--muted);">
+        Select at least one audience. If both are selected, an address in both lists is
+        contacted once.
+      </p>
+
+      <button type="submit" class="btn btn-primary" id="msg-submit">Send message</button>
+      <div id="msg-result" style="margin-top:1rem;display:none;"></div>
+    </form>
+  </div>
+
+  <!-- Send result detail table (populated by JS on send) -->
+  <div id="msg-detail" class="table-wrap" style="margin-bottom:1.5rem;display:none;">
+    <table>
+      <tbody>
+        <tr><td style="width:11rem;color:var(--accent);">Recipients attempted</td><td id="detail-recipients" style="color:var(--muted);"></td></tr>
+        <tr><td style="color:var(--accent);">Sent successfully</td><td id="detail-sent" style="color:var(--ok);"></td></tr>
+        <tr><td style="color:var(--accent);">Failed</td><td id="detail-failed" style="color:var(--muted);"></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById("msg-form");
+  if (!form) return;
+  var result = document.getElementById("msg-result");
+  var submit = document.getElementById("msg-submit");
+  var detail = document.getElementById("msg-detail");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var operators = document.getElementById("aud-operators").checked;
+    var members = document.getElementById("aud-members").checked;
+    result.style.display = "block";
+    detail.style.display = "none";
+    if (!operators && !members) {
+      result.style.color = "var(--danger)";
+      result.textContent = "Select at least one audience.";
+      return;
+    }
+    submit.disabled = true;
+    result.style.color = "var(--muted)";
+    result.textContent = "Sending…";
+    var payload = {
+      subject: form.subject.value.trim(),
+      body: form.body.value.trim(),
+      operators: operators,
+      members: members
+    };
+    fetch("/admin/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (resp) {
+      return resp.json().then(function (body) { return { ok: resp.ok, body: body }; });
+    }).then(function (r) {
+      submit.disabled = false;
+      if (r.ok) {
+        result.style.color = "var(--ok)";
+        result.textContent = "Sent to " + r.body.sent + " of " + r.body.recipients + " recipients.";
+        document.getElementById("detail-recipients").textContent = r.body.recipients;
+        document.getElementById("detail-sent").textContent = r.body.sent;
+        var failed = r.body.failed || [];
+        var failedCell = document.getElementById("detail-failed");
+        if (failed.length === 0) {
+          failedCell.textContent = "none";
+          failedCell.style.color = "var(--ok)";
+        } else {
+          failedCell.textContent = failed.join(", ");
+          failedCell.style.color = "var(--danger)";
+        }
+        detail.style.display = "block";
+      } else {
+        result.style.color = "var(--danger)";
+        result.textContent = "Rejected: " + (r.body.error || "could not send");
+      }
+    }).catch(function () {
+      submit.disabled = false;
+      result.style.color = "var(--danger)";
+      result.textContent = "Network error — could not reach the governance surface.";
+    });
+  });
+})();
+</script>
+{{end}}
+{{template "layout" .}}

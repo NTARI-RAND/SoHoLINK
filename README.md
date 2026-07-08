@@ -2,7 +2,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.25.7-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE.txt)
-[![Build](https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/actions/workflows/build.yml/badge.svg)](https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/actions/workflows/build.yml)
+[![CI](https://github.com/NTARI-RAND/SoHoLINK/actions/workflows/ci.yml/badge.svg)](https://github.com/NTARI-RAND/SoHoLINK/actions/workflows/ci.yml)
 
 **Aggregate the idle compute power in your home or office. Earn real payments for sharing what you already own.**
 
@@ -46,7 +46,7 @@ SoHoLINK is a federated compute marketplace for Small Office/Home Office (SOHO) 
 
 ### Download a Release (Recommended)
 
-Go to [Releases](https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/releases) and download the installer for your platform:
+Go to [Releases](https://github.com/NTARI-RAND/SoHoLINK/releases) and download the installer for your platform:
 
 - **Windows:** `SoHoLINK-Setup.exe` (NSIS installer — no runtime dependencies)
 - **macOS:** `SoHoLINK-*.pkg` (universal binary — Intel + Apple Silicon)
@@ -58,7 +58,7 @@ Go to [Releases](https://github.com/NetworkTheoryAppliedResearchInstitute/soholi
 # Prerequisites: Go 1.24.6, GCC/MinGW (for GUI), git
 
 # Clone
-git clone https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+git clone https://github.com/NTARI-RAND/SoHoLINK
 cd soholink
 
 # Build headless CLI (no CGO required)

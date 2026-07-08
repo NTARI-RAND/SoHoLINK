@@ -25,10 +25,17 @@
 .PARAMETER Release
     Run a real GoReleaser release (requires a git tag v*). Default: snapshot.
 
+.PARAMETER NoSign
+    Skip EV code signing of the Windows .exe/.msi artifacts in dist\.
+    Without this flag, signing runs after the build but downgrades to a
+    warning when the Sectigo token/cert or signtool is unavailable, so CI
+    and dev machines without the token still build (see deploy/signing.md).
+
 .EXAMPLE
     .\scripts\build-all.ps1
     .\scripts\build-all.ps1 -SkipTests
     .\scripts\build-all.ps1 -Release
+    .\scripts\build-all.ps1 -NoSign
 
 .NOTES
     Must be run from the repository root, or from the scripts\ subdirectory
@@ -37,7 +44,8 @@
 param(
     [string] $Version    = "",
     [switch] $SkipTests  = $false,
-    [switch] $Release    = $false
+    [switch] $Release    = $false,
+    [switch] $NoSign     = $false
 )
 
 Set-StrictMode -Version Latest
@@ -262,7 +270,33 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 6 — Summary
+# STEP 6 — EV-sign Windows artifacts
+# ════════════════════════════════════════════════════════════════════════════
+Write-Header "EV code signing"
+
+if ($NoSign) {
+    Write-Warn "Signing skipped (-NoSign flag)."
+} else {
+    . (Join-Path $PSScriptRoot "codesign.ps1")
+    $signables = @(Get-ChildItem -Path (Join-Path $RepoRoot "dist") -Recurse -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Extension -in @(".exe", ".msi") })
+    if ($signables.Count -eq 0) {
+        Write-Warn "No .exe/.msi artifacts found in dist\ — nothing to sign."
+    } else {
+        Write-Step "Signing $($signables.Count) artifact(s) with the Sectigo EV certificate..."
+        $signed = Invoke-CodeSign -Path $signables.FullName -Description "SoHoLINK" `
+            -ThumbprintFile (Join-Path $RepoRoot "certs\thumbprint.txt")
+        if ($signed) {
+            Write-Ok "$($signables.Count) artifact(s) EV-signed."
+            if (Test-Path (Join-Path $RepoRoot "dist\soholink_${Version}_checksums.txt")) {
+                Write-Warn "GoReleaser checksums were computed before signing — regenerate them for any signed artifact they cover."
+            }
+        }
+    }
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# STEP 7 — Summary
 # ════════════════════════════════════════════════════════════════════════════
 Write-Header "Build complete!"
 Write-Host ""

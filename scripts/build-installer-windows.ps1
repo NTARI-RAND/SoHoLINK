@@ -3,7 +3,8 @@
 
 param(
     [string]$Version = "0.1.0",
-    [switch]$SkipGoDownload = $false
+    [switch]$SkipGoDownload = $false,
+    [switch]$NoSign = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -102,6 +103,23 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Host "    ✓ soholink-wizard-cli.exe built successfully" -ForegroundColor Green
+
+# EV-sign the binaries before they are staged and zipped (skipped with -NoSign,
+# or with a warning when the Sectigo token/cert or signtool is unavailable —
+# see deploy/signing.md).
+if ($NoSign) {
+    Write-Host "    Signing skipped (-NoSign)" -ForegroundColor Yellow
+} else {
+    Write-Host "    EV-signing binaries..." -ForegroundColor Cyan
+    . (Join-Path $PSScriptRoot "codesign.ps1")
+    $BinariesToSign = @("fedaaa.exe", "soholink-wizard.exe", "soholink-wizard-cli.exe") |
+        ForEach-Object { Join-Path $BuildDir $_ }
+    $Signed = Invoke-CodeSign -Path $BinariesToSign -Description "SoHoLINK" `
+        -ThumbprintFile (Join-Path $ProjectRoot "certs\thumbprint.txt")
+    if ($Signed) {
+        Write-Host "    ✓ Binaries EV-signed" -ForegroundColor Green
+    }
+}
 
 # Create installer staging directory
 Write-Host "[5/8] Staging installer files..." -ForegroundColor Yellow

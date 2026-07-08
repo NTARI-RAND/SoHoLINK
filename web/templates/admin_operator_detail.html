@@ -1,0 +1,116 @@
+{{define "content"}}
+<div class="container" style="max-width:900px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance &middot; operator detail</div>
+      <h2>{{.Name}}</h2>
+    </div>
+    <div style="text-align:right;">
+      <code style="color:var(--muted);font-size:0.85rem;display:block;">{{.OperatorID}}</code>
+      {{if eq .OnboardingState "active"}}<span class="badge" style="color:var(--ok);">active</span>
+      {{else if eq .OnboardingState "verified"}}<span class="badge badge-idle">verified</span>
+      {{else}}<span class="badge badge-offline">{{.OnboardingState}}</span>{{end}}
+      {{if eq .Status "revoked"}}<span class="badge" style="color:var(--danger);">revoked</span>{{end}}
+    </div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Email verified</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .EmailVerified}}color:var(--ok);{{else}}color:var(--muted);{{end}}">{{if .EmailVerified}}yes{{else}}no{{end}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Conformance</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .ConformancePassed}}color:var(--ok);{{else}}color:var(--muted);{{end}}">{{if .ConformancePassed}}passed{{else}}pending{{end}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Keyset match</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .KeysetMatch}}color:var(--ok);{{else}}color:var(--warn);{{end}}">{{if .KeysetMatch}}yes{{else}}no{{end}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Registered keys</div>
+      <div class="stat-value">{{.KeyCount}} / 7</div>
+    </div>
+  </div>
+
+  <div class="section-label">Registered public keys</div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead><tr><th>Index</th><th>Public key</th><th>State</th></tr></thead>
+      <tbody>
+        {{range .Keys}}
+        <tr>
+          <td>{{.Index}}</td>
+          <td><code style="font-size:0.75rem;">{{.PubKeyTrunc}}</code></td>
+          <td>{{.State}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-label">Latest conformance run</div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead><tr><th>Suite / challenge</th><th>Result</th><th>Detail</th></tr></thead>
+      <tbody>
+        {{if .RunResults}}
+        {{range .RunResults}}
+        <tr>
+          <td><code style="font-size:0.75rem;">{{.Label}}</code></td>
+          <td>{{if .Passed}}<span class="badge" style="color:var(--ok);">pass</span>{{else}}<span class="badge" style="color:var(--danger);">fail</span>{{end}}</td>
+          <td style="color:var(--muted);font-size:0.8rem;">{{.Detail}}</td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1.5rem;">No conformance run recorded.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Admission -->
+  <div class="section-label">Admission</div>
+  <div class="card" style="margin-bottom:2rem;">
+    <h4 style="margin:0 0 0.5rem;">Activate operator</h4>
+    <p style="margin:0 0 1rem;font-size:0.85rem;">
+      Activation is automatic: passing BOTH mechanical gates (email verified AND
+      conformance passed against the current key set) auto-activates the operator
+      &mdash; there is no human in the entry path (design &sect;3). The governance
+      surface admits nothing manually; it only disconnects/revokes below.
+    </p>
+    <p style="margin:0;font-size:0.75rem;color:var(--muted);">
+      {{if eq .OnboardingState "active"}}This operator is active.
+      {{else if .CanActivate}}Both gates are green; auto-activation will flip this
+      operator to active on the next gate-close event.
+      {{else}}Preconditions not yet met &mdash; awaiting email verification and/or a
+      conformance pass bound to the current key set.{{end}}
+    </p>
+  </div>
+
+  <!-- Danger zone: revoke -->
+  <div class="section-label" style="color:var(--danger);border-color:var(--danger);">Danger zone</div>
+  <div class="card" style="border-color:var(--danger);margin-bottom:2rem;">
+    <h4 style="margin:0 0 0.5rem;color:var(--danger);">Revoke operator</h4>
+    <p style="margin:0 0 1rem;font-size:0.85rem;">
+      <strong style="color:var(--text);">High blast radius</strong> &mdash; revoking
+      denies every member fronted by this operator immediately. This is the kill
+      switch.
+    </p>
+    <form method="POST" action="/admin/operators/{{.OperatorID}}/revoke" style="margin:0;"
+          onsubmit="return confirm('Revoke {{.OperatorID}}? This denies every fronted member immediately.');">
+      <div class="form-group" style="margin-bottom:1rem;">
+        <label for="confirm-slug">Type the operator slug to confirm</label>
+        <input type="text" id="confirm-slug" name="confirm_slug" required placeholder="{{.OperatorID}}"
+               style="font-family:var(--mono);max-width:320px;">
+      </div>
+      <button type="submit" class="btn" style="background:var(--danger);color:var(--bg);border-color:var(--danger);">Revoke operator</button>
+    </form>
+  </div>
+
+  <p><a href="/admin/operators" style="font-size:0.8rem;">&#8592; Back to queue</a></p>
+
+</div>
+{{end}}
+{{template "layout" .}}

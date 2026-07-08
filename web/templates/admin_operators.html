@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="container">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance</div>
+      <h2>Operator queue</h2>
+    </div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value">{{.PendingCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Verified &amp; passed</div>
+      <div class="stat-value cyan">{{.ReadyCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Active</div>
+      <div class="stat-value ok">{{.ActiveCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Revoked</div>
+      <div class="stat-value" style="color:var(--danger);">{{.RevokedCount}}</div>
+    </div>
+  </div>
+
+  <div class="section-label">All operators</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Operator</th><th>Name</th><th>State</th>
+          <th>Email</th><th>Conformance</th><th>Registered</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .Operators}}
+        {{range .Operators}}
+        <tr>
+          <td><code style="font-size:0.8rem;">{{.OperatorID}}</code></td>
+          <td>{{.Name}}</td>
+          <td>
+            {{if eq .OnboardingState "active"}}<span class="badge" style="color:var(--ok);">active</span>
+            {{else if eq .OnboardingState "verified"}}<span class="badge badge-idle">verified</span>
+            {{else}}<span class="badge badge-offline">{{.OnboardingState}}</span>{{end}}
+            {{if eq .Status "revoked"}}<span class="badge" style="color:var(--danger);">revoked</span>{{end}}
+          </td>
+          <td>{{if .EmailVerified}}<span style="color:var(--ok);">&#10003;</span>{{else}}<span style="color:var(--muted);">&mdash;</span>{{end}}</td>
+          <td>{{if .ConformancePassed}}<span style="color:var(--ok);">passed</span>{{else}}<span style="color:var(--muted);">pending</span>{{end}}</td>
+          <td>{{.KeyCount}} / 7</td>
+          <td><a href="/admin/operators/{{.OperatorID}}" style="font-size:0.8rem;">Review &rarr;</a></td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="7" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">No operators yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{{end}}
+{{template "layout" .}}

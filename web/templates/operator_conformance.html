@@ -1,0 +1,199 @@
+{{define "content"}}
+<div class="container" style="max-width:900px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Operator onboarding &middot; Step 4 of 5</div>
+      <h2>Prove conformance</h2>
+    </div>
+    <code style="color:var(--muted);font-size:0.85rem;">{{.OperatorID}}</code>
+  </div>
+
+  <p style="margin-bottom:1.5rem;">
+    SoHoLINK issues fresh, single-use challenges and grades your responses against
+    its own computed oracles &mdash; the public vectors are never the grader. Three
+    suites must pass: canonical signing, live transmission, and key rotation/expiry.
+  </p>
+
+  <div id="conf-error" style="display:none;background:rgba(239,68,68,0.08);border:1px solid var(--danger);border-radius:var(--r);padding:0.75rem 1rem;margin-bottom:1.25rem;">
+    <p style="color:var(--danger);margin:0;font-size:0.825rem;"></p>
+  </div>
+
+  <!-- Summary -->
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Checks passed</div>
+      <div class="stat-value" id="stat-passed">&mdash;</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Run status</div>
+      <div class="stat-value" id="stat-status" style="font-size:1.4rem;">not started</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Run id</div>
+      <div class="stat-value" id="stat-runid" style="font-size:0.95rem;color:var(--muted);word-break:break-all;">&mdash;</div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:2rem;">
+    <button id="start-run" type="button" class="btn btn-primary">Start a new run</button>
+  </div>
+
+  <!-- Suite A -->
+  <div class="section-label">Suite A &middot; Canonical bytes &amp; signing</div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead><tr><th>Message type</th><th>Result</th><th>Detail</th></tr></thead>
+      <tbody id="suite-a-body">
+        <tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1.5rem 0.9rem;">Start a run to issue challenges.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Suite B -->
+  <div class="section-label">Suite B &middot; Signatures &amp; 2-of-7 transmission</div>
+  <div class="table-wrap" style="margin-bottom:0.5rem;">
+    <table>
+      <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+      <tbody id="suite-b-body">
+        <tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1.5rem 0.9rem;">Start a run to issue challenges.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:0.75rem;color:var(--muted);margin-bottom:2rem;">
+    Verification capability is proven structurally &mdash; SoHoLINK runs the real
+    verify path against your transmission. There are no self-reported verdicts.
+  </p>
+
+  <!-- Suite C -->
+  <div class="section-label">Suite C &middot; Key expiry &amp; lazy swap</div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <thead><tr><th>Threshold</th><th>Swap fired</th><th>Detail</th></tr></thead>
+      <tbody id="suite-c-body">
+        <tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1.5rem 0.9rem;">Graded server-side on submit.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Run by hand (no-JS fallback) -->
+  <details style="margin-bottom:2rem;border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.25rem;">
+    <summary style="cursor:pointer;color:var(--accent);font-size:0.85rem;letter-spacing:0.05em;">Run by hand (no JavaScript / 3G phone)</summary>
+    <p style="font-size:0.8rem;margin:1rem 0 0.75rem;">
+      Copy the challenges below into <code>operator-conformance</code>, then paste the
+      results JSON and submit. Same handler as the buttons above.
+    </p>
+    <div class="form-group">
+      <label for="challenges-json">Challenges (from Start a run)</label>
+      <textarea id="challenges-json" rows="6" readonly
+                style="width:100%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:0.75rem;padding:0.6rem 0.8rem;border-radius:var(--r);"></textarea>
+    </div>
+    <div class="form-group">
+      <label for="results-json">Paste results JSON</label>
+      <textarea id="results-json" rows="8" placeholder='{"suite_a":[...],"suite_b":[...]}'
+                style="width:100%;background:var(--surface-alt);border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:0.75rem;padding:0.6rem 0.8rem;border-radius:var(--r);"></textarea>
+    </div>
+    <button id="submit-manual" type="button" class="btn btn-outline btn-sm">Submit pasted results</button>
+  </details>
+
+  <!-- Pass outcome -->
+  <div id="conf-pass" style="display:none;">
+    <div class="card" style="border-color:var(--ok);margin-bottom:1.5rem;">
+      <div class="card-eyebrow" style="color:var(--ok);">Conformance passed</div>
+      <p id="pass-detail" style="margin:0;font-size:0.85rem;"></p>
+    </div>
+    <a href="/operators/{{.OperatorID}}" class="btn btn-primary">Go to your dashboard &rarr;</a>
+  </div>
+
+</div>
+
+<script>
+  (function () {
+    var operatorId = {{.OperatorID}};
+    var errBox = document.getElementById('conf-error');
+    var runId = null;
+    function showErr(msg) {
+      errBox.querySelector('p').textContent = msg;
+      errBox.style.display = 'block';
+      window.scrollTo(0, 0);
+    }
+    function badge(pass) {
+      return pass
+        ? '<span class="badge" style="color:var(--ok);">pass</span>'
+        : '<span class="badge" style="color:var(--danger);">fail</span>';
+    }
+    function renderResults(data) {
+      var results = data.results || [];
+      var a = document.getElementById('suite-a-body');
+      var b = document.getElementById('suite-b-body');
+      var c = document.getElementById('suite-c-body');
+      a.innerHTML = ''; b.innerHTML = ''; c.innerHTML = '';
+      var passed = 0;
+      results.forEach(function (r) {
+        if (r.passed) { passed++; }
+        var row = '<tr><td><code style="font-size:0.75rem;">' + (r.challenge_id || r.suite || '—') +
+          '</code></td><td>' + badge(r.passed) + '</td><td style="color:var(--muted);font-size:0.8rem;">' +
+          (r.detail || '') + '</td></tr>';
+        if (r.suite === 'A') { a.insertAdjacentHTML('beforeend', row); }
+        else if (r.suite === 'B') { b.insertAdjacentHTML('beforeend', row); }
+        else { c.insertAdjacentHTML('beforeend', row); }
+      });
+      if (!a.children.length) { a.innerHTML = '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1rem;">no rows</td></tr>'; }
+      if (!b.children.length) { b.innerHTML = '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1rem;">no rows</td></tr>'; }
+      if (!c.children.length) { c.innerHTML = '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1rem;">no rows</td></tr>'; }
+      document.getElementById('stat-passed').textContent = passed + ' / ' + results.length;
+      var statStatus = document.getElementById('stat-status');
+      statStatus.textContent = data.passed ? 'passed' : 'failed';
+      statStatus.style.color = data.passed ? 'var(--ok)' : 'var(--danger)';
+      if (data.passed) {
+        var pd = document.getElementById('pass-detail');
+        pd.textContent = data.activated
+          ? 'All suites green and contact verified — your operator is now active. Your registered keys authenticate to SoHoLINK.'
+          : 'All suites green. Once your contact email is also verified, your operator activates automatically.';
+        document.getElementById('conf-pass').style.display = 'block';
+      }
+    }
+    function submitResults(payload) {
+      errBox.style.display = 'none';
+      fetch('/operators/' + encodeURIComponent(operatorId) + '/conformance/' + encodeURIComponent(runId) + '/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      }).then(function (r) {
+        if (!r.ok) { showErr(r.data.error || 'Submission failed.'); return; }
+        renderResults(r.data);
+      }).catch(function () { showErr('Network error. Please retry.'); });
+    }
+    document.getElementById('start-run').addEventListener('click', function () {
+      errBox.style.display = 'none';
+      fetch('/operators/' + encodeURIComponent(operatorId) + '/conformance/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      }).then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      }).then(function (r) {
+        if (!r.ok) { showErr(r.data.error || 'Could not start run.'); return; }
+        runId = r.data.run_id;
+        document.getElementById('stat-runid').textContent = runId;
+        document.getElementById('stat-status').textContent = 'running';
+        document.getElementById('challenges-json').value = JSON.stringify({
+          challenges_a: r.data.challenges_a, challenges_b: r.data.challenges_b
+        }, null, 2);
+        document.getElementById('suite-a-body').innerHTML =
+          '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:1rem;">Challenges issued. Sign with operator-conformance, then submit.</td></tr>';
+      }).catch(function () { showErr('Network error. Please retry.'); });
+    });
+    document.getElementById('submit-manual').addEventListener('click', function () {
+      if (!runId) { showErr('Start a run first.'); return; }
+      var raw = document.getElementById('results-json').value.trim();
+      var payload;
+      try { payload = JSON.parse(raw); } catch (e) { showErr('Results JSON is not valid.'); return; }
+      submitResults(payload);
+    });
+  })();
+</script>
+{{end}}
+{{template "layout" .}}

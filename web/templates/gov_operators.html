@@ -1,0 +1,101 @@
+{{define "content"}}
+<div class="container">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance &middot; local-only</div>
+      <h2>Operators</h2>
+    </div>
+  </div>
+
+  <p style="margin-bottom:1.5rem;">
+    Every frontend platform enrolled with this coordinator. From here you can
+    <strong style="color:var(--text);">disconnect</strong> an operator (revoke its
+    status and hard-revoke its active keys) or <strong style="color:var(--text);">revoke</strong>
+    it outright. Both are high-blast-radius kill switches &mdash; once applied,
+    <code>GetActiveKeyMap</code> returns nothing for the operator and every member it
+    fronts is denied immediately.
+  </p>
+
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Total</div>
+      <div class="stat-value">{{.TotalCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Active</div>
+      <div class="stat-value ok">{{.ActiveCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value cyan">{{.PendingCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Revoked</div>
+      <div class="stat-value" style="color:var(--danger);">{{.RevokedCount}}</div>
+    </div>
+  </div>
+
+  <div class="section-label">All operators</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Operator</th><th>Name</th><th>State</th><th>Status</th>
+          <th>Keys</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{if .Operators}}
+        {{range .Operators}}
+        <tr>
+          <td><code style="font-size:0.8rem;">{{.OperatorID}}</code></td>
+          <td>{{.Name}}</td>
+          <td>
+            {{if eq .OnboardingState "active"}}<span class="badge" style="color:var(--ok);">active</span>
+            {{else if eq .OnboardingState "verified"}}<span class="badge badge-idle">verified</span>
+            {{else}}<span class="badge badge-offline">{{.OnboardingState}}</span>{{end}}
+          </td>
+          <td>
+            {{if eq .Status "revoked"}}<span class="badge" style="color:var(--danger);">revoked</span>
+            {{else}}<span class="badge" style="color:var(--ok);">live</span>{{end}}
+          </td>
+          <td>{{.ActiveKeyCount}} / 7</td>
+          <td>
+            {{if ne .Status "revoked"}}
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+              <!-- Disconnect: status=revoked AND active keys revoked -->
+              <form method="POST" action="/admin/operators/{{.OperatorID}}/disconnect" style="margin:0;"
+                    onsubmit="return confirm('Disconnect {{.OperatorID}}? This revokes its status and its active keys, denying every fronted member immediately.');">
+                <button type="submit" class="btn btn-sm btn-outline">Disconnect</button>
+              </form>
+              <!-- Revoke: status=revoked -->
+              <form method="POST" action="/admin/operators/{{.OperatorID}}/revoke" style="margin:0;"
+                    onsubmit="return confirm('Revoke {{.OperatorID}}? This denies every fronted member immediately. This is the kill switch.');">
+                <button type="submit" class="btn btn-sm" style="background:var(--danger);color:var(--bg);border-color:var(--danger);">Revoke</button>
+              </form>
+            </div>
+            {{else}}
+            <span style="color:var(--muted);font-size:0.8rem;">&mdash;</span>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="6" style="color:var(--muted);text-align:center;padding:2rem 0.9rem;">No operators enrolled yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:1rem;font-size:0.75rem;color:var(--muted);">
+    <strong style="color:var(--text);">Disconnect</strong> vs
+    <strong style="color:var(--text);">Revoke</strong>: both flip status to
+    <code>revoked</code>. Disconnect additionally revokes the operator's active keys
+    so the change is reflected in the key registry (belt-and-suspenders). Either is
+    sufficient to deny the operator; both are idempotent.
+  </p>
+
+</div>
+{{end}}
+{{template "layout" .}}

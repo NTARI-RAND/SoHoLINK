@@ -1,0 +1,117 @@
+{{define "content"}}
+<div class="container" style="max-width:820px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Operator onboarding &middot; Step 2 of 5</div>
+      <h2>Register keys</h2>
+    </div>
+    <code style="color:var(--muted);font-size:0.85rem;">{{.OperatorID}}</code>
+  </div>
+
+  <div class="card" style="margin-bottom:1.75rem;background:var(--surface-alt);">
+    <div class="card-eyebrow">Operator holds the keys</div>
+    <p style="margin:0;font-size:0.85rem;">
+      You generate all 7 keypairs locally with <code>operator-keygen</code> and
+      register only the <strong style="color:var(--text);">public</strong> keys here.
+      SoHoLINK never sees a private key. Registering (or re-registering) clears any
+      prior conformance pass &mdash; the pass is bound to this exact key set.
+    </p>
+  </div>
+
+  <div id="keys-error" style="display:none;background:rgba(239,68,68,0.08);border:1px solid var(--danger);border-radius:var(--r);padding:0.75rem 1rem;margin-bottom:1.25rem;">
+    <p style="color:var(--danger);margin:0;font-size:0.825rem;"></p>
+  </div>
+
+  <div id="keys-form-wrap">
+    <div class="section-label">Public keys &mdash; index order (0&ndash;6)</div>
+    <form id="keys-form">
+      <input type="hidden" id="algo" value="ed25519">
+      <div class="form-group">
+        <label for="key0">Key 0</label>
+        <input type="text" id="key0" required placeholder="base64 of raw 32-byte ed25519 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key1">Key 1</label>
+        <input type="text" id="key1" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key2">Key 2</label>
+        <input type="text" id="key2" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key3">Key 3</label>
+        <input type="text" id="key3" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key4">Key 4</label>
+        <input type="text" id="key4" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key5">Key 5</label>
+        <input type="text" id="key5" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <div class="form-group">
+        <label for="key6">Key 6</label>
+        <input type="text" id="key6" required placeholder="base64 public key" style="font-family:var(--mono);font-size:0.8rem;">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;">
+        Register 7 keys &rarr;
+      </button>
+    </form>
+  </div>
+
+  <div id="keys-done" style="display:none;">
+    <div class="table-wrap" style="margin-bottom:1.5rem;">
+      <table>
+        <thead><tr><th>Index</th><th>Public key</th><th>Status</th></tr></thead>
+        <tbody id="keys-table-body"></tbody>
+      </table>
+    </div>
+    <a href="/operators/{{.OperatorID}}/verify" class="btn btn-primary">Continue to contact verification &rarr;</a>
+  </div>
+
+</div>
+
+<script>
+  (function () {
+    var operatorId = {{.OperatorID}};
+    var form = document.getElementById('keys-form');
+    var errBox = document.getElementById('keys-error');
+    var formWrap = document.getElementById('keys-form-wrap');
+    var doneBox = document.getElementById('keys-done');
+    var tbody = document.getElementById('keys-table-body');
+    function showErr(msg) {
+      errBox.querySelector('p').textContent = msg;
+      errBox.style.display = 'block';
+      window.scrollTo(0, 0);
+    }
+    function trunc(s) { return s.length > 20 ? s.slice(0, 12) + '…' + s.slice(-6) : s; }
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      errBox.style.display = 'none';
+      var keys = [];
+      for (var i = 0; i < 7; i++) { keys.push(document.getElementById('key' + i).value.trim()); }
+      fetch('/operators/' + encodeURIComponent(operatorId) + '/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ algo: 'ed25519', public_keys: keys })
+      }).then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      }).then(function (r) {
+        if (!r.ok) { showErr(r.data.error || 'Key registration failed.'); return; }
+        for (var i = 0; i < 7; i++) {
+          var tr = document.createElement('tr');
+          tr.innerHTML = '<td>' + i + '</td><td><code style="font-size:0.75rem;">' +
+            trunc(keys[i]) + '</code></td>' +
+            '<td><span class="badge" style="color:var(--ok);">registered</span></td>';
+          tbody.appendChild(tr);
+        }
+        formWrap.style.display = 'none';
+        doneBox.style.display = 'block';
+      }).catch(function () { showErr('Network error. Please retry.'); });
+    });
+  })();
+</script>
+{{end}}
+{{template "layout" .}}

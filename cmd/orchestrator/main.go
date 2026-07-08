@@ -17,6 +17,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/scheduler"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -42,10 +43,10 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	dbURL        := mustEnv("DATABASE_URL")
-	tokenSecret  := mustHex("ORCHESTRATOR_TOKEN_SECRET")
-	apiAddr      := mustEnv("API_ADDR")
-	metricsAddr  := mustEnv("METRICS_ADDR")
+	dbURL := mustEnv("DATABASE_URL")
+	tokenSecret := mustHex("ORCHESTRATOR_TOKEN_SECRET")
+	apiAddr := mustEnv("API_ADDR")
+	metricsAddr := mustEnv("METRICS_ADDR")
 	internalAddr := mustEnv("INTERNAL_ADDR")
 	spiffeSocket := mustEnv("SPIFFE_ENDPOINT_SOCKET")
 
@@ -87,12 +88,26 @@ func main() {
 	printConfirmEnabled, _ := strconv.ParseBool(os.Getenv("PRINT_CONFIRMATION_ENABLED"))
 
 	registry := orchestrator.NewNodeRegistry()
-	orch     := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
+	orch := orchestrator.New(db, registry, tokenSecret, scheduler.Schedule, allowlistPath, printConfirmEnabled, 4*time.Hour)
+
+	// Demand-sounding telemetry (step 2): async, fire-and-forget, fail-open.
+	// The sink drains until ctx is cancelled; the rung ladder is loaded once
+	// (fail-open — a load error leaves an empty ladder that degrades to
+	// no_capacity classification with a zero footprint). The capacity sampler
+	// periodically snapshots the heartbeat-refreshed registry, keeping the
+	// heartbeat hot path free of telemetry DB writes.
+	demandSink := sounding.NewSink(ctx, db, sounding.DefaultConfig())
+	ladder, err := sounding.LoadLadder(ctx, db)
+	if err != nil {
+		slog.Warn("demand-sounding: rung ladder load failed; classification degraded", "error", err)
+	}
+	orch.AttachDemandSounding(demandSink, ladder)
+	sounding.StartCapacitySampler(ctx, registry.CapacityInputs, demandSink, time.Minute)
 
 	orchestrator.StartEvictionLoop(ctx, registry, 5*time.Minute)
 	orch.StartDeclineRerouteLoop(ctx)
 
-	srv         := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
+	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
 	internalSrv := api.NewInternal(orch, internalAddr)
 
 	go func() {

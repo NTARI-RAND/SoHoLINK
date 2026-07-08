@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
@@ -77,6 +78,24 @@ type Orchestrator struct {
 	allowlistPath       string
 	printConfirmEnabled bool
 	confirmationWindow  time.Duration
+
+	// Demand-sounding telemetry (step 2). OBSERVATION ONLY: both are optional
+	// and default to their zero values, so an Orchestrator built by New without
+	// AttachDemandSounding records nothing and its placement behavior is
+	// byte-for-byte unchanged. sink is nil-checked before every use; a nil sink
+	// and a zero ladder are both safe. See instrument.go.
+	sink   sounding.Recorder
+	ladder sounding.Ladder
+}
+
+// AttachDemandSounding wires the demand-sounding telemetry sink and rung ladder
+// onto the orchestrator. It is separate from New (rather than a constructor
+// parameter) so that existing callers and tests keep the New signature and run
+// with telemetry disabled. Call once at startup, before serving traffic; it is
+// not safe to call concurrently with SubmitJob.
+func (o *Orchestrator) AttachDemandSounding(sink sounding.Recorder, ladder sounding.Ladder) {
+	o.sink = sink
+	o.ladder = ladder
 }
 
 // New constructs an Orchestrator. schedule is called during SubmitJob to rank
@@ -165,6 +184,10 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		ExcludeConsumerParticipantID: req.ConsumerID,
 	})
 	if err != nil {
+		// Placement rejection — the purest unmet-demand signal. Record it
+		// fire-and-forget AFTER the decision, then return the placement error
+		// unchanged. Telemetry never alters the error or blocks the return.
+		o.recordRejection(ctx, req)
 		return SubmitJobResponse{}, fmt.Errorf("find nodes: %w", err)
 	}
 
@@ -279,6 +302,11 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		return SubmitJobResponse{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
+	// Placement succeeded and is durably committed — record the placed job's
+	// shape fire-and-forget. Runs only on the committed path so the record
+	// reflects a real, persisted job_id.
+	o.recordPlacement(ctx, req, jobID)
+
 	return SubmitJobResponse{
 		JobID:                   jobID,
 		NodeID:                  node.NodeID,
@@ -330,13 +358,13 @@ func canonicalJobSpecHash(req SubmitJobRequest) ([]byte, error) {
 // produces no row update.
 func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) error {
 	var (
-		workloadType         string
-		cpuCores             int
-		ramMB                int
-		storageGB            int
-		gpuRequired          bool
-		countryConstraint    string
-		specHash             []byte
+		workloadType          string
+		cpuCores              int
+		ramMB                 int
+		storageGB             int
+		gpuRequired           bool
+		countryConstraint     string
+		specHash              []byte
 		consumerParticipantID string
 	)
 	err := o.db.Pool.QueryRow(ctx,

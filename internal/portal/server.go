@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
@@ -46,8 +46,8 @@ type PortalServer struct {
 	orch          jobSubmitter
 	baseURL       string
 	templatePaths []string
-	limiter        *LoginRateLimiter
-	webhookSecret  string
+	limiter       *LoginRateLimiter
+	webhookSecret string
 }
 
 // onboardingData is the template data for provider_onboarding.html.
@@ -263,11 +263,40 @@ type optOutPostRequest struct {
 	Printers []optOutPrinterDTO `json:"printers"`
 }
 
+// Option customizes a PortalServer at construction. Options are applied before
+// routes are registered so they can influence route wiring (e.g. mounting the
+// public operator console, which re-parents GET / to the operator landing).
+type Option func(*portalOptions)
+
+// portalOptions accumulates the effect of the functional options.
+type portalOptions struct {
+	// operatorRoutes, when non-nil, registers the PUBLIC operator-console routes
+	// (GET / operator landing, /operators/apply, /operators/{id}/*, /fees, and the
+	// onboarding POST routes) onto the portal mux. When set, the portal does NOT
+	// register its own GET / member index — the operator console's GET /{$} owns
+	// the root per design §11 (member routes stay live under their own paths).
+	operatorRoutes func(mux *http.ServeMux)
+}
+
+// WithOperatorConsole mounts the public operator console onto the portal mux.
+// register is typically (*api.OnboardingServer).RegisterRoutes, which wires the
+// reshaped landing (GET /{$}), /operators/apply, the /operators/{id}/* funnel,
+// /fees, and the onboarding POST/JSON routes. Supplying this re-parents the root
+// to the operator landing; every member route (/login, /dashboard, /marketplace,
+// …) remains registered and live on the same mux (design §11, non-destructive).
+func WithOperatorConsole(register func(mux *http.ServeMux)) Option {
+	return func(o *portalOptions) { o.operatorRoutes = register }
+}
+
 // New constructs a PortalServer. It walks templatesDir recursively to collect
 // all .html file paths (not parsed yet — see renderTemplate), registers routes,
 // and builds the http.Server. metricsAddr is the address for the plain HTTP
 // metrics server (e.g. ":9090") — not wrapped with session auth.
-func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch jobSubmitter, metricsAddr string, webhookSecret string) (*PortalServer, error) {
+func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir string, paymentClient *payment.Client, baseURL string, orch jobSubmitter, metricsAddr string, webhookSecret string, opts ...Option) (*PortalServer, error) {
+	var options portalOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	var paths []string
 	if err := filepath.WalkDir(templatesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -299,7 +328,17 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 	mux := http.NewServeMux()
 
 	// Public routes.
-	mux.HandleFunc("GET /", ps.handleIndex)
+	// When the operator console is mounted (design §11), it owns the root via its
+	// own GET /{$} (operator landing) and also serves /fees + the /operators/*
+	// funnel. In that case the portal does NOT register its own GET / member index
+	// so the two do not collide on the root pattern. Every member route below stays
+	// registered and live regardless. The member index remains reachable at /portal.
+	if options.operatorRoutes != nil {
+		options.operatorRoutes(mux)
+		mux.HandleFunc("GET /portal", ps.handleIndex)
+	} else {
+		mux.HandleFunc("GET /", ps.handleIndex)
+	}
 	mux.HandleFunc("GET /join", ps.handleJoinPage)
 	mux.HandleFunc("GET /download", ps.handleDownloadPage)
 	mux.HandleFunc("GET /privacy", ps.handlePrivacyPage)
@@ -389,11 +428,13 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 // the shared-set redefinition problem: every page defines {{define "content"}},
 // which would collide if all files were parsed into one set at startup.
 func (ps *PortalServer) renderTemplate(w http.ResponseWriter, page string, data any) {
-	var layoutPath, pagePath string
+	var layoutPath, pagePath, bannerPath string
 	for _, p := range ps.templatePaths {
 		switch filepath.Base(p) {
 		case "layout.html":
 			layoutPath = p
+		case "transitional_banner.html":
+			bannerPath = p
 		case page:
 			pagePath = p
 		}
@@ -403,7 +444,15 @@ func (ps *PortalServer) renderTemplate(w http.ResponseWriter, page string, data 
 		return
 	}
 
-	tmpl, err := template.ParseFiles(layoutPath, pagePath)
+	// The transitional banner partial is parsed into every set so member pages
+	// can invoke {{template "transitional_banner" .}}; operator/console pages
+	// simply do not call it. Base filenames stay unique (the ParseFiles
+	// requirement), and an unused define in a set is harmless.
+	files := []string{layoutPath, pagePath}
+	if bannerPath != "" {
+		files = append(files, bannerPath)
+	}
+	tmpl, err := template.ParseFiles(files...)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -503,7 +552,7 @@ func (ps *PortalServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email    := strings.TrimSpace(r.FormValue("email"))
+	email := strings.TrimSpace(r.FormValue("email"))
 	password := r.FormValue("password")
 
 	if email == "" || password == "" {
@@ -584,7 +633,7 @@ func (ps *PortalServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	email    := strings.TrimSpace(r.FormValue("email"))
+	email := strings.TrimSpace(r.FormValue("email"))
 	password := r.FormValue("password")
 	sohoName := strings.TrimSpace(r.FormValue("soho_name"))
 
@@ -1412,8 +1461,8 @@ func (ps *PortalServer) handleDisputeReview(w http.ResponseWriter, r *http.Reque
 func (ps *PortalServer) handleProviderOnboardingPage(w http.ResponseWriter, r *http.Request) {
 	claims, _ := ClaimsFromContext(r.Context())
 
-	var ispTier        string
-	var disclosureAt   *time.Time
+	var ispTier string
+	var disclosureAt *time.Time
 	var stripeComplete bool
 	err := ps.db.Pool.QueryRow(r.Context(),
 		`SELECT COALESCE(isp_tier, ''), disclosure_accepted_at, stripe_onboarding_complete
@@ -1446,7 +1495,7 @@ func (ps *PortalServer) handleProviderOnboarding(w http.ResponseWriter, r *http.
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	ispTier    := r.FormValue("isp_tier")
+	ispTier := r.FormValue("isp_tier")
 	disclosure := r.FormValue("disclosure_accepted")
 
 	validTiers := map[string]bool{"business": true, "residential": true, "cellular": true}
@@ -1645,9 +1694,9 @@ func (ps *PortalServer) handleAddProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	nodeID     := r.FormValue("node_id")
-	name       := strings.TrimSpace(r.FormValue("name"))
-	isDefault  := r.FormValue("is_default") == "true"
+	nodeID := r.FormValue("node_id")
+	name := strings.TrimSpace(r.FormValue("name"))
+	isDefault := r.FormValue("is_default") == "true"
 	cpuEnabled := r.FormValue("cpu_enabled") == "true"
 
 	if nodeID == "" {

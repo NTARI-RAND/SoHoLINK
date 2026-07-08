@@ -1,14 +1,26 @@
 # SoHoLINK v2 — Claude Code Context
 
 ## What This Project Is
-SoHoLINK is a participatory distributed compute platform. Participants contribute
-idle personal devices — SOHO servers, phones, Smart TVs, laptops — as compute nodes
-and earn fiat dollars. Other participants buy compute, storage, and CDN capacity on
-demand. NTARI operates the coordination layer: matching, scheduling, metering, and
-dispute arbitration.
+SoHoLINK is the COORDINATOR of the Substrate compute economy (NTARI decision,
+2026-07-04). Its job is orchestration: node recognition via capability listings,
+matching and scheduling, the employment lifecycle, fee declarations, fiat
+settlement, dispute handling — plus FEDERATION of frontends. Members contribute
+idle personal machines — SOHO servers, phones, Smart TVs, laptops — as compute
+nodes through a frontend platform (Cloudy) and earn fiat dollars; other members
+buy compute, storage, print, and CDN capacity on demand. SoHoLINK never touches
+member hardware, and long-term models no persons: its counterparties are
+frontends and nodes.
 
-No tokens, no wallets. Pure fiat via Stripe Connect.
-Participants own and control their hardware. NTARI never touches the hardware.
+Transitional reality: the node agent (`internal/agent`, `cmd/agent`), the member
+portal (`internal/portal`, `cmd/portal`, `web/`), the `participants` table, and
+the MSI installer are Cloudy-owned capabilities currently hosted in this
+coordinator repo, pending migration. They keep working here; do not pretend the
+move has happened, and do not describe them as SoHoLINK's long-term role. See
+"Architectural Philosophy" and the MEMBER/PARTICIPANT/NODE glossary below.
+
+No tokens, no wallets. Pure fiat via Stripe Connect — kept strictly separate
+from Cloudy's member-issued credit (economy-layer invariant).
+Members own and control their hardware. The coordinator never touches it.
 
 This is a ground-up v2 rebuild. The old build is on the `legacy-v1` branch.
 Do not reference it. Do not continue or fix it.
@@ -244,11 +256,29 @@ the diff was reverted and re-applied without `gofmt -w`.
 | CI/CD | GitHub Actions |
 
 ## Architectural Philosophy — Janus Facing Application
-SoHoLINK is a Janus Facing Application (JFA) as defined by NTARI document P3-011.
-Reference: https://www.ntari.org/post/janusfacingapplications
+SoHoLINK was built as a Janus Facing Application (JFA) as defined by NTARI document
+P3-011. Reference: https://www.ntari.org/post/janusfacingapplications
 
-Key principles implemented here:
-- Single participant identity — one account, simultaneous contributor/buyer roles
+Under the resolved Substrate architecture (NTARI, 2026-07-04), the JFA member
+economy is a FRONTEND concern, and the frontend is Cloudy. Cloudy owns the
+member's whole world: the JFA member economy (`internal/economy` member-issued
+credit, `internal/covenant` LBTAS reputation, `internal/record` dialog-sealed
+record — built as libraries in the Cloudy repo), the NODE AGENT (hardware
+detection, resource profiles, capability-listing generation, heartbeat, job
+executor, local opt-out/allowlist enforcement, telemetry, the member-machine
+installer, eventually the mobile agent), and the MEMBER PORTAL
+(register/login/dashboard/job submission/opt-out UI). SoHoLINK is the
+COORDINATOR: orchestration, employment lifecycle, settlement, disputes, and
+federation of frontends. The shared vocabulary between them is
+`sohocloud-protocol` (the thin waist, unchanged): coordination only — node
+recognition, capability listing, employment lifecycle, fees. Persons never
+appear on the wire; frontends speak the node-side surface
+(SubmitListing/Heartbeat/PollJobs/Decline/ReportJob/Fees) on behalf of member
+machines, and coordinators implement the Coordinator interface.
+
+JFA principles that remain load-bearing in this repo:
+- Single participant identity (P3-011) — one account, simultaneous
+  contributor/buyer roles; never split into producer/consumer identities
 - No information asymmetry — pricing, metering, and earnings visible to all participants
 - Governance layer architecturally separated — admin portal runs on a separate local-only
   port (8090), never exposed publicly, not hidden behind role flags on the public portal
@@ -257,14 +287,88 @@ Key principles implemented here:
 The `participants` table (migration 011) replaces the separate `providers`/`consumers`
 tables as the concrete implementation of unified identity. There are no "providers" or
 "consumers" in the codebase — only participants who may contribute nodes, submit jobs,
-or both.
+or both. Under the resolved architecture, coordinator-side person-records — the
+`participants` table and portal accounts — are TRANSITIONAL surfaces from
+SoHoLINK's dual frontend+coordinator era: they are Cloudy-owned capabilities
+hosted here until the frontend migration, kept honest by this labeling. The
+agent, portal, and installer in this repo carry the same status.
+
+### Glossary — MEMBER / PARTICIPANT / NODE
+Use these words consistently in all docs and prose:
+
+- **MEMBER** — a person, always relative to a frontend/platform. Identity
+  (platform-scoped MemberID), credit, LBTAS standing, sealed records, PII
+  (erasable, member-local), and contributed machines are membership facts.
+  Membership is covenant language — mutual obligation to a particular platform;
+  the same human is a different member on every platform by cryptographic
+  construction.
+- **PARTICIPANT** — a role, not an entity: a member acting in the coordinated
+  economy (contributing nodes and/or submitting jobs). This is P3-011's unified
+  identity — never split into producer/consumer identities. Coordinator-side
+  person-records (SoHoLINK's `participants` table and portal accounts) are
+  transitional surfaces from the dual frontend+coordinator era.
+- **NODE** — a machine a member contributes, identified by NodeID with the
+  SPIFFE binding `/node/<id>` (protocol identity package; the convention live
+  here since TODO 34/35).
+
+The surface formerly called the "participant portal" is henceforth Cloudy's
+MEMBER PORTAL.
+
+### Federation & frontend identity (design target)
+The trust model between frontends, coordinators, and coordinator peers is
+modeled on the Agrinet <-> fruitful reference implementation (NTARI decision;
+reference code: `Development/Economy/Agrinet backend/lib/operatorKeys.js`,
+`backend/middleware/operatorAuth.js`, migration `20260703_phase5_operators.js`).
+Three distinct layers — do not conflate them:
+
+1. **Workload identity (node <-> coordinator): UNCHANGED.** SPIFFE SVID under
+   `/node/<id>`, coordinator-side authorization exactly per the protocol SPEC.
+   This is machine identity; it is built and live (TODO 34/35).
+2. **Frontend <-> coordinator ("frontend-as-operator"): DESIGN TARGET.** The
+   frontend enrolls as an OPERATOR with the coordinator — an `operators` +
+   `operator_keys` registry — and holds a rotating Ed25519 key set: 7 keys,
+   each transmission signed with 2, canonical message
+   `v1:operator_id:ts:nonce:seq:idx0:idx1`, replay bounded by a 5-minute
+   timestamp window plus a nonce cache. In Agrinet this is built with
+   enforcement deferred; for the Substrate it is the design target for how
+   Cloudy authenticates to SoHoLINK. Not implemented here yet.
+3. **Coordinator <-> coordinator / instance federation: DESIGN TARGET, with
+   the reference's gaps named.** Registry-enrolled peers (URL-identified,
+   node_registry pattern); authenticated export/import sync with incremental
+   `since` cursors (interim auth: shared secret; target: operator-signed
+   transmissions); last-write-wins as the acknowledged interim conflict
+   stance; and WITNESSED CHECKPOINTS — the record/anchor
+   Certificate-Transparency model already reserved in Cloudy's
+   `internal/record` and the protocol's `anchor/` stub — as the named target
+   for cross-operator non-equivocation.
+
+Anti-patterns the Substrate must NOT inherit silently from the reference:
+a static never-rotated shared key; no TLS/cert verification between peers;
+silent last-write-wins overwrites with no audit trail; provenance fields
+(`origin_node`) dropped on import.
+
+**Open question (deliberately unanswered):** the fiat settlement counterparty
+under the new spec — does the coordinator settle directly with the member's
+payout identity (presented via the frontend), or with the frontend, which then
+settles its members through the member economy? Either way it remains
+fiat-side and must never be conflated with member credit (economy-layer
+invariant).
 
 ## Repository Structure (current state)
 ```
 cmd/
   agent/          ← Node agent daemon: main.go, service_windows.go, install_windows.go
-  orchestrator/   ← Control plane entry point (stub)
-  portal/         ← Web portal entry point (stub)
+                     (Cloudy-owned capability, transitionally hosted here)
+  orchestrator/   ← Production orchestrator main: env validation, migrations, SPIFFE
+                     source (degraded mode on failure), public API + internal submit
+                     listener + metrics, eviction & decline-reroute loops
+  portal/         ← Production portal main: env validation (incl. Ed25519 session-key
+                     roundtrip), migrations, Stripe client, orchclient, uptime scorer,
+                     payout releaser, metrics (Cloudy-owned capability, transitionally
+                     hosted here)
+  seed/           ← Dev/load-test seeder: migrations + 10 seed providers with Class A
+                     nodes/resource profiles + 10 seed consumers (bcrypt password
+                     "changeme"); reads DATABASE_URL — never point it at production
 internal/
   agent/          ← Hardware detection, resource profiles, heartbeat,
                      executor (with allowlist enforcement, hardened HostConfig,
@@ -284,7 +388,7 @@ internal/
   payment/        ← Stripe Connect: client, onboarding, charge, payout, webhook
   portal/         ← Portal HTTP server, session middleware, all handler implementations
   scheduler/      ← Scoring-based job placement (classScore + freshnessScore + capacityScore)
-  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–019
+  store/          ← PostgreSQL pool, golang-migrate runner, migrations 001–020
   network/        ← WireGuard bootstrapper (stub)
 web/
   templates/      ← layout.html, index.html, login.html, register.html,
@@ -327,6 +431,7 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 017 | `017_job_node_declines` | `job_node_declines` table: tracks which nodes have declined each job; composite PK `(job_id, node_id)`, both FKs `ON DELETE CASCADE`. Used by `RerouteDeclinedJob` to populate `ExcludedNodeIDs` in `FindMatch`, preventing re-dispatch to a node that already declined. |
 | 018 | `018_job_lifecycle_statuses` | Extends `job_status` enum with `dispatched`, `awaiting_pickup`, `picked_up`, `delivered`. Adds columns `picked_up_at`, `delivered_at`, `exit_code`, `failure_cause` on `jobs`. Enum down migration is one-way (Postgres limitation, documented in down SQL). |
 | 019 | `019_awaiting_pickup_anchor` | `awaiting_pickup_at TIMESTAMPTZ` on `jobs`. Timestamp set when print job transitions `running → awaiting_pickup`; used as the anchor for the 7-day no-show and dispute windows. |
+| 020 | `020_drop_nodes_spiffe_id` | Drops `nodes.spiffe_id`. The column (from 001) was never populated; pre-TODO-34 handlers gated SPIFFE checks on `COALESCE(spiffe_id,'') != ''`, which was always false — inert. TODO 34 replaced that with deterministic construction from `jobs.node_id`; the column had no remaining consumer. Down migration re-adds `spiffe_id TEXT UNIQUE` (always NULL in practice, so nothing to restore). |
 
 To apply all migrations: run the Phase 1 integration test with TEST_DATABASE_URL set:
 ```
@@ -346,7 +451,13 @@ golang-migrate is idempotent — safe to run repeatedly.
   `de2c091` → `9fa58ba`.
 - Signed artifacts placed under `deploy/` must be paired with a `-text` rule
   in `.gitattributes` so Git never converts line endings (signatures are
-  computed over raw file bytes).
+  computed over raw file bytes). This covers Authenticode/EV-signed binaries
+  (`.exe`/`.msi`) the same as signed JSON: the build scripts
+  (`scripts/build-all.ps1`, `scripts/build-gui.ps1`,
+  `scripts/build-installer-windows.ps1`, `installer/windows/build.ps1`)
+  EV-sign their outputs by default via `scripts/codesign.ps1`, so any such
+  artifact committed under `deploy/` needs its own `-text` rule before the
+  commit that adds it.
 
 ## Test Coverage (current state — all green in CI)
 | Package | File | Tests |
@@ -596,7 +707,7 @@ These are acknowledged gaps, not bugs — do not silently fix them without discu
 
 36. **SPIRE agent `join_token` attestation does not survive SVID expiry** (filed Dev XXIX): `join_token` is one-time-use — on attestation the token is consumed and the SVID is cached in `spire_agent_data`. If the SVID expires and the agent restarts, it tries to re-attest with the already-consumed token and crash-loops indefinitely ("join token does not exist or has already been used"). Recovery: `spire-server token generate` → update `SPIRE_AGENT_JOIN_TOKEN` in `.env` → `docker compose up -d --force-recreate spire-agent` → re-run `bash deploy/register-entries.sh` (the orchestrator workload entry `parentID` encodes the token value; old entry becomes orphaned). The durable fix is switching to a persistent attestation method (`x509pop` for a dedicated host) that survives restarts without a one-time token. Deferred; the rotation procedure above is the interim mitigation.
 
-37. **SPIRE control-plane exposure (`spire.soholink.org:8081`) — IMMEDIATE; blocks all node bring-up.** `spire.soholink.org` is NXDOMAIN and port 8081 is not externally routed, so a node's bundled SPIRE agent cannot attest and `cmd/agent/main.go`'s `waitForSPIRE` fatals after 90s. `spire-server` already publishes `8081:8081` in `docker-compose.yml`. Decision (Dev XXX): expose via **Cloudflare tunnel (gRPC/TCP route) for now** — Spectrum's setup blocks inbound; revisit a direct DNS + port-forward after the pending modem/router swap. Verify a possible host-port collision first: `spire-server` publishes host `8081` while `configs/default.yaml` sets `portal_address: 0.0.0.0:8081`. Gates TODO 19's signed-service-start gate and the "node broadcasts hardware capabilities to the DB over the site" test, plus NTARI1 and Shenandoah node bring-up.
+37. **SPIRE control-plane exposure (`spire.soholink.org:8081`) — IMMEDIATE; blocks all node bring-up.** `spire.soholink.org` is NXDOMAIN and port 8081 is not externally routed, so a node's bundled SPIRE agent cannot attest and `cmd/agent/main.go`'s `waitForSPIRE` fatals after 90s. `spire-server` already publishes `8081:8081` in `docker-compose.yml`. Decision (Dev XXX): expose via **Cloudflare tunnel (gRPC/TCP route) for now** — Spectrum's setup blocks inbound; revisit a direct DNS + port-forward after the pending modem/router swap. Verify a possible host-port collision first: `spire-server` publishes host `8081` while `configs/default.yaml` sets `portal_address: 0.0.0.0:8081`. Gates TODO 19's signed-service-start gate and the "node broadcasts hardware capabilities to the DB over the site" test, plus NTARI1 and Shenandoah node bring-up. **Addendum 2026-07-08 (Jodson decision B8):** SPIRE is RETAINED — kept "in case we put Cloudy on a satellite" (a remote/off-LAN deployment needs cross-network workload identity). Under the Cloudy-as-operator model members attest to Cloudy (the frontend), not directly to SoHoLINK's SPIRE, so PUBLIC internet exposure of `:8081` is no longer IMMEDIATE — LAN-only is the current default, and public exposure is deferred until a satellite/remote Cloudy actually needs it. The host-port-collision check and the exposure mechanism above still apply if/when that day comes.
 
 38. **master README build badge points at dead legacy repo — IMMEDIATE (docs).** README line 5 build-status badge URL still references `NetworkTheoryAppliedResearchInstitute/soholink` (archived legacy repo). Repoint to the `NTARI-RAND/SoHoLINK` Actions badge.
 
@@ -788,7 +899,7 @@ These have caused bugs before — read before touching related code:
 - JSON struct tags always snake_case
 - `RequireAuth(sm, handler)` — auth wraps all protected routes; staff-only routes additionally check `is_staff` from DB
 - `context.Background()` in deferred cleanups that must outlive the request context
-- Signed artifacts (allowlists, signed JSON, etc.) must be marked `-text` in `.gitattributes` so Git never converts line endings — signatures are computed over raw file bytes and any LF↔CRLF translation breaks verification (see `deploy/allowlist/*.json` in `.gitattributes`).
+- Signed artifacts (allowlists, signed JSON, EV-signed `.exe`/`.msi` binaries) must be marked `-text` in `.gitattributes` so Git never converts line endings — signatures are computed over raw file bytes and any LF↔CRLF translation breaks verification (see `deploy/allowlist/*.json` in `.gitattributes`); anything signed that lands under `deploy/` needs a `-text` rule. Since 2026-07-04 the Windows build scripts EV-sign their `.exe`/`.msi` outputs by default (shared helper `scripts/codesign.ps1`; skip with `-NoSign`, auto-skip with a warning when the Sectigo token/cert or signtool is absent; `installer/windows/build.ps1 -Sign` requires signing for release builds).
 - Any function that loads an asymmetric private key from env (e.g. `mustEd25519Key`) must perform a sign-then-verify roundtrip on a constant probe message before returning. Catches the failure mode where the byte length is valid but the embedded public-key half doesn't correspond to the seed.
 
 ## Key Design Decisions
@@ -1428,10 +1539,12 @@ repos were created and seeded on `main`:
   convention already live here (see TODO 34/35). `SPEC.md` is the normative
   conformance spec. `anchor/` is a labeled, unbuilt stub for a future witnessed
   employment-claim log (open problem #6).
-- `NTARI-RAND/Cloudy` — a greenfield Go frontend skeleton. Real: `internal/coord`,
-  a thin client over the protocol's reference httpjson transport. Stubbed as
-  separate JFA tracks: `internal/economy` (member credit), `internal/covenant`
-  (reputation), `internal/record` (dialog-sealed record).
+- `NTARI-RAND/Cloudy` — the Go frontend. `internal/coord` is a thin client over
+  the protocol's reference httpjson transport. The three JFA member-economy
+  tracks are BUILT with test suites — NOT stubs: `internal/economy` (member
+  credit), `internal/covenant` (LBTAS reputation), `internal/record`
+  (dialog-sealed record). (Corrected 2026-07-08: the seed note read "stubbed";
+  they were implemented in the 2026-07-03/04 substrate build.)
 
 **Import-graph invariant (load-bearing — do not break):** nothing imports
 SoHoLINK or Cloudy; both import ONLY `sohocloud-protocol`, which is a dependency
@@ -1444,11 +1557,13 @@ change that adds a dependency edge into SoHoLINK or Cloudy breaks this.
 Dev XXIX (`ca62261`, live at `4ba5f21`) is the canonical source of the
 `/node/<id>` convention the protocol's `identity` package now mirrors.
 
-**Future SoHoLINK-side track (NOT done, not committed):** SoHoLINK implementing
-`coordinator.Coordinator` by generalizing its existing handlers, and publishing
-a signed `FeeDeclaration`. This is future work; it does not displace TODO 37
-(SPIRE control-plane exposure) or the stale-branch cleanup, which remain the
-live priorities.
+**SoHoLINK-side protocol integration (APPROVED 2026-07-08, not yet built):**
+SoHoLINK will implement `coordinator.Coordinator` (serving the protocol `/v0`
+httpjson wire by generalizing its existing handlers) and sign+publish a
+`FeeDeclaration` on `/v0/fees`. Jodson approved both this session (B4 "integrate
+the protocol", B7 "do it"). This is the main Cloudy-integration milestone,
+sequenced AFTER: (1) versioning the sohocloud-protocol + Cloudy repos, and
+(2) committing the operator model. See the 2026-07-08 Cloudy-readiness audit.
 
 **Workflow correction — direct-push-to-`master` is dead.** `master` is now
 covered by the org ruleset "Org Baseline - Protect main" (deletion,

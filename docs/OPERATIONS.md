@@ -1,536 +1,179 @@
-# Operations Guide
+# Operations Guide — SoHoLINK v2 (Coordinator)
 
-## Startup and Shutdown
+This document describes how to operate the SoHoLINK v2 production stack as it
+actually runs today. SoHoLINK is the COORDINATOR of the Substrate compute
+economy: node recognition via capability listings, matching and scheduling,
+the employment lifecycle, fee declarations, fiat settlement, dispute handling,
+and federation of frontends. It never touches member hardware.
 
-### Starting the Service
+Honest transitional note: this stack also runs the member portal and serves
+the node-agent installer. Those are Cloudy-owned capabilities (member portal,
+node agent, installer) transitionally hosted in the coordinator repo pending
+migration to the Cloudy frontend. They are documented here because an operator
+of this stack runs them today — not because they are the coordinator's
+long-term role. See CLAUDE.md "Architectural Philosophy" and the
+MEMBER/PARTICIPANT/NODE glossary for the vocabulary used below.
 
-```bash
-# Foreground (for debugging)
-./fedaaa start
+## The Stack
 
-# Background (Linux)
-./fedaaa start &
+Production is a single-host Docker Compose deployment (`docker-compose.yml`,
+8 services), fronted by a Cloudflare Tunnel. `.env` (gitignored; template at
+`.env.example`) supplies secrets to every service via `env_file`.
 
-# Check status
-./fedaaa status
-```
+| Service | Image / build | Role | Exposure |
+|---|---|---|---|
+| `postgres` | `timescale/timescaledb:latest-pg16` | System of record. WAL archiving on (`archive_command` copies segments to `D:/SoHoLINK-backups/wal`) | `127.0.0.1:5432` only |
+| `pg-backup` | `./deploy/pg-backup` (Alpine + postgresql16-client) | Daily `pg_dump` to `D:/SoHoLINK-backups/`, 90-day retention | none |
+| `spire-server` | `ghcr.io/spiffe/spire-server:1.9.6` | Trust domain `spiffe://soholink.org`; issues SVIDs | host port `8081` (not externally routed — see blockers) |
+| `spire-agent` | `ghcr.io/spiffe/spire-agent:1.9.6` | Workload API socket for the orchestrator; `pid: "host"`, `join_token` attestation | none |
+| `orchestrator` | `Dockerfile.orchestrator` | The coordinator binary: public API `:8082`, Docker-internal submit listener `:8083`, metrics | `api.soholink.org` via tunnel |
+| `portal` | `Dockerfile.portal` | Member portal (transitional, Cloudy-owned): HTML UI, Stripe, payout releaser, uptime scorer | `soholink.org` via nginx + tunnel |
+| `nginx` | `nginx:alpine` | Reverse proxy to `portal:8080` | via tunnel |
+| `cloudflared` | `cloudflare/cloudflared` | Tunnel `soholink-prod` (`bb7b7f0d-...`) | egress only |
 
-### Graceful Shutdown
-
-The server handles `SIGINT` (Ctrl+C) and `SIGTERM` gracefully:
-
-1. Stops accepting new RADIUS requests
-2. Waits for in-flight requests to complete
-3. Flushes accounting logs
-4. Completes final Merkle batch
-5. Closes database connection
-
-### Systemd Management (Linux)
-
-```bash
-# Start
-sudo systemctl start soholink
-
-# Stop
-sudo systemctl stop soholink
-
-# Restart
-sudo systemctl restart soholink
-
-# View logs
-sudo journalctl -u soholink -f
-```
-
-## User Management
-
-### Add User
-
-```bash
-./fedaaa users add alice
-./fedaaa users add bob --role premium
-./fedaaa users add admin --role admin
-```
-
-Roles are arbitrary strings used in policy evaluation.
-
-### List Users
-
-```bash
-./fedaaa users list
-```
-
-Output:
-```
-+----------+----------------------------+-------+--------+---------------------+
-| USERNAME | DID                        | ROLE  | STATUS | CREATED             |
-+----------+----------------------------+-------+--------+---------------------+
-| alice    | did:key:z6MkhaXgBZDvot...  | basic | active | 2026-02-05 10:30:00 |
-| bob      | did:key:z6MkpTHR8VNsBx...  | premium| active | 2026-02-05 10:31:00 |
-| carol    | did:key:z6MkvZ5yKMU7Zi...  | basic | REVOKED| 2026-02-05 10:32:00 |
-+----------+----------------------------+-------+--------+---------------------+
-
-Total: 3 users
-```
-
-### Revoke User
-
-```bash
-./fedaaa users revoke alice --reason "left organization"
-```
-
-Revocation takes effect **immediately** - the user cannot authenticate even with a valid token.
-
-### User Private Keys
-
-User private keys are stored in `<data-dir>/keys/<username>.pem`:
+Startup ordering is encoded in `depends_on`: orchestrator waits for a healthy
+`spire-agent`; portal waits for a healthy orchestrator. `D:/` must be attached
+before `docker compose up` (pg-backup and WAL bind mounts).
 
 ```
-/var/lib/soholink/keys/
-  alice.pem
-  bob.pem
+docker compose up -d          # bring up the stack
+docker compose ps             # container health at a glance
+docker compose logs -f orchestrator
 ```
 
-**Security:** Keys are created with 0600 permissions (owner read/write only).
+Deploys go through `deploy/redeploy.sh`, which gates on GitHub CI check-runs
+for the exact HEAD SHA before rebuilding the orchestrator and portal images.
+Do not bypass the gate.
 
-## Log Files
+## Environment requirements per binary
 
-### Accounting Logs
+All binaries fail fast (`log.Fatalf`) on a missing required variable. Source
+of truth: each `cmd/<name>/main.go`.
 
-Location: `<data-dir>/accounting/`
+### `cmd/orchestrator` (the coordinator)
 
-```
-/var/lib/soholink/accounting/
-  2026-02-05.jsonl      # Today's events
-  2026-02-04.jsonl      # Yesterday's events
-  2026-02-03.jsonl.gz   # Older (compressed)
-```
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes | pgx connection string |
+| `ORCHESTRATOR_TOKEN_SECRET` | yes | hex; HMAC secret for job tokens |
+| `API_ADDR` | yes | public API listener (prod `:8082`) |
+| `METRICS_ADDR` | yes | Prometheus listener |
+| `INTERNAL_ADDR` | yes | Docker-internal submit listener (prod `:8083`, set in compose) |
+| `SPIFFE_ENDPOINT_SOCKET` | yes | SPIRE Workload API (`unix:///run/spire/sockets/agent.sock`) |
+| `ALLOWLIST_PATH` | no | defaults to `/etc/soholink/allowlist.json` |
+| `PRINT_CONFIRMATION_ENABLED` | no | bool; keep off in production until B4 is fully deployed |
 
-### Viewing Logs
+If the SPIRE Workload API is unreachable at startup (5-second bounded attempt),
+the orchestrator continues in **degraded mode**: plain HTTP, SPIFFE-protected
+routes return 503, `/health` reports `"identity":"unavailable"`. Healthy state
+is `{"identity":"ready","status":"ok"}`.
 
-```bash
-# View recent events
-./fedaaa logs
+### `cmd/portal` (member portal — transitional, Cloudy-owned)
 
-# Follow in real-time
-./fedaaa logs --follow
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes | |
+| `SESSION_PRIVATE_KEY` | yes | Ed25519, 128 hex chars; sign-verify roundtrip probed at startup |
+| `STRIPE_SECRET_KEY` | yes | fiat settlement — never conflate with member credit |
+| `STRIPE_WEBHOOK_SECRET` | yes | |
+| `PORTAL_ADDR` | yes | prod `:8080` |
+| `PORTAL_BASE_URL` | yes | `https://soholink.org` |
+| `PORTAL_TEMPLATES_DIR` | yes | `/app/web/templates` in the image |
+| `METRICS_ADDR` | yes | |
+| `ORCHESTRATOR_INTERNAL_URL` | yes | `http://orchestrator:8083` (set in compose) |
 
-# Filter by event type
-./fedaaa logs --type auth_success
-./fedaaa logs --type auth_denied
+The portal also runs the uptime scorer and the payout releaser as background
+loops — settlement mechanics that belong to the coordinator role even though
+they currently live in the portal binary.
 
-# Filter by user
-./fedaaa logs --user alice
+### `cmd/agent` (node agent — Cloudy-owned, transitionally hosted here)
 
-# View specific date
-./fedaaa logs --date 2026-02-04
+| Variable | Required | Notes |
+|---|---|---|
+| `AGENT_CONTROL_PLANE_ADDR` | yes | coordinator API address |
+| `SPIFFE_ENDPOINT_SOCKET` | yes | node-local SPIRE agent socket |
+| `AGENT_REGISTER_TOKEN`, `AGENT_COUNTRY_CODE` | first-run claim flow | single-use portal token |
+| `AGENT_REGION` | no | |
+| `AGENT_PROVIDER_ID`, `AGENT_NODE_CLASS`, `AGENT_TOKEN_SECRET` | legacy/programmatic registration path | normal installs use the claim flow + `agent.conf` |
 
-# Last N events
-./fedaaa logs --last 50
-```
+### `cmd/seed` (dev/load-test only)
 
-### Log Event Schema
+Reads `DATABASE_URL`, runs migrations, then inserts 10 seed providers (with
+Class A nodes and resource profiles) and 10 seed consumers with bcrypt password
+`changeme`. **Never point it at production.**
 
-```json
-{
-  "timestamp": "2026-02-05T10:30:00.123Z",
-  "event_type": "auth_success",
-  "user_did": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
-  "username": "alice",
-  "nas_address": "192.168.1.1:32456",
-  "nas_port": "",
-  "decision": "allow",
-  "reason": "authenticated",
-  "latency_us": 2500
-}
-```
+## Migrations
 
-### Log Rotation
+Migrations (`internal/store/migrations/`, currently 001–020) run automatically
+at orchestrator, portal, and seed startup via `store.RunMigrations`.
+golang-migrate is idempotent — safe to run repeatedly.
 
-- **Daily rotation** at midnight UTC
-- **Compression** after 7 days (configurable)
-- Files are never deleted automatically
-
-## Merkle Batch Verification
-
-### View Latest Batch
-
-```bash
-./fedaaa status
-```
-
-Output includes:
-```
-Latest Merkle Batch:
-  Timestamp:   2026-02-05T11:00:00Z
-  Source:      2026-02-05.jsonl
-  Root Hash:   a1b2c3d4e5f6...
-  Leaf Count:  1500
-  Tree Height: 11
-```
-
-### Batch Files
-
-Location: `<data-dir>/merkle/`
+To apply them explicitly against a test database:
 
 ```
-/var/lib/soholink/merkle/
-  2026-02-05T10.batch.json
-  2026-02-05T11.batch.json
+TEST_DATABASE_URL="postgres://postgres:changeme@localhost:5432/soholink_test?sslmode=disable" \
+  go test -tags integration -v -run TestPhase1EndToEnd ./test/integration/
 ```
 
-### Verify Event Inclusion
-
-```bash
-# Generate proof for specific event
-./fedaaa merkle proof --event-index 42 --batch 2026-02-05T11.batch.json
-
-# Verify proof
-./fedaaa merkle verify --leaf-hash <hash> --proof <proof> --root <root>
-```
-
-## Policy Management
-
-### List Policies
-
-```bash
-./fedaaa policy list
-```
-
-Output:
-```
-+---------------+------------------------------------------------------------------+
-| FILE          | SHA3-256 HASH                                                    |
-+---------------+------------------------------------------------------------------+
-| default.rego  | a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef12345678 |
-| custom.rego   | fedcba0987654321fedcba0987654321fedcba0987654321fedcba09876543 |
-+---------------+------------------------------------------------------------------+
-```
-
-### Test Policy
-
-```bash
-# Test with sample input
-./fedaaa policy test --user alice --did "did:key:z6Mk..." --role basic --authenticated
-
-# Output:
-# Result: ALLOW
-# Deny Reasons: []
-```
-
-### Hot-Reload Policies
-
-Policies are loaded from the policy directory. To update:
-
-1. Edit or add `.rego` files in the policy directory
-2. The engine reloads automatically on next evaluation
-
-Note: In production, restart the service for reliability:
-```bash
-sudo systemctl restart soholink
-```
-
-### Custom Policy Example
-
-Create `/etc/soholink/policies/time-based.rego`:
-
-```rego
-package soholink.authz
-
-import rego.v1
-
-# Allow premium users 24/7
-allow if {
-    input.role == "premium"
-    input.authenticated == true
-}
-
-# Allow basic users only during business hours (8am-6pm)
-allow if {
-    input.role == "basic"
-    input.authenticated == true
-    hour := time.clock(time.now_ns())[0]
-    hour >= 8
-    hour < 18
-}
-
-# Deny with reason for off-hours access
-deny_reasons contains reason if {
-    input.role == "basic"
-    input.authenticated == true
-    hour := time.clock(time.now_ns())[0]
-    not (hour >= 8; hour < 18)
-    reason := "basic users allowed only 8am-6pm"
-}
-```
-
-## Troubleshooting
-
-### RADIUS Connection Refused
-
-**Symptom:**
-```
-radclient: Failed to connect: Connection refused
-```
-
-**Causes:**
-1. Server not running
-2. Wrong port
-3. Firewall blocking UDP
-
-**Solutions:**
-```bash
-# Check if server is running
-./fedaaa status
-
-# Check if port is listening
-sudo ss -tulpn | grep 1812
-
-# Check firewall (Linux)
-sudo iptables -L -n | grep 1812
-sudo ufw status
-```
-
-### Authentication Failures
-
-**Invalid Signature:**
-```
-auth: denied user 'alice': invalid_signature: Ed25519 signature verification failed
-```
-
-The token was signed with the wrong key. Regenerate:
-```bash
-# The user's token must match their stored public key
-# If the key was regenerated, create a new user or re-add
-./fedaaa users revoke alice --reason "key rotation"
-./fedaaa users add alice
-```
-
-**Username Mismatch:**
-```
-auth: denied user 'bob': username_mismatch: credential was not issued for this username
-```
-
-The token was created for a different username. Tokens are bound to the specific user.
-
-**Credential Expired:**
-```
-auth: denied user 'alice': credential_expired: expired 3700 seconds ago
-```
-
-Token exceeded TTL. Generate a new token.
-
-**Credential Future:**
-```
-auth: denied user 'alice': credential_future: timestamp is 400 seconds in the future
-```
-
-Client clock is too far ahead. Check NTP synchronization.
-
-**Nonce Replay:**
-```
-auth: denied user 'alice': nonce_replay: credential token has already been used
-```
-
-Token was already used. Generate a new token for each authentication.
-
-**User Revoked:**
-```
-auth: denied user 'alice': user_revoked: user 'alice' has been revoked
-```
-
-User was revoked. To restore:
-```bash
-# Currently must re-add the user (with new keypair)
-./fedaaa users add alice
-```
-
-### Policy Denials
-
-**Symptom:** Auth succeeds but policy denies.
-
-```
-auth: denied user 'alice': policy: authorization denied
-```
-
-**Debug:**
-```bash
-# Test policy with user's attributes
-./fedaaa policy test --user alice --did "did:key:z6Mk..." --role basic --authenticated
-
-# Check policy files
-./fedaaa policy list
-cat /etc/soholink/policies/*.rego
-```
-
-### Database Issues
-
-**Database Locked:**
-```
-Error: database is locked
-```
-
-Only one process can access SQLite at a time. Stop other instances.
-
-**Database Corrupted:**
-```
-Error: database disk image is malformed
-```
-
-Restore from backup or reinitialize:
-```bash
-# Backup current (if partially readable)
-cp /var/lib/soholink/soholink.db /var/lib/soholink/soholink.db.bak
-
-# Reinitialize (LOSES ALL DATA)
-rm /var/lib/soholink/soholink.db
-./fedaaa install
-```
-
-## Monitoring
-
-### Health Check
-
-```bash
-# Quick status check (suitable for monitoring)
-./fedaaa status --json
-```
-
-Output:
-```json
-{
-  "node_did": "did:key:z6Mk...",
-  "status": "healthy",
-  "radius_auth_port": 1812,
-  "radius_acct_port": 1813,
-  "user_count": 42,
-  "active_user_count": 40,
-  "revoked_user_count": 2,
-  "latest_merkle_root": "a1b2c3d4...",
-  "policy_count": 2
-}
-```
-
-### Metrics to Monitor
-
-| Metric | Warning | Critical |
-|--------|---------|----------|
-| Auth success rate | < 95% | < 90% |
-| Auth latency p99 | > 100ms | > 500ms |
-| Nonce cache size | > 100K | > 500K |
-| Disk usage | > 80% | > 95% |
-| Clock skew | > 2 min | > 4 min |
-
-### NTP Requirement
-
-**Critical:** Clock skew tolerance is 5 minutes. Ensure NTP is configured:
-
-```bash
-# Check time sync status (Linux)
-timedatectl status
-
-# Enable NTP
-sudo timedatectl set-ntp true
-
-# Check NTP servers
-chronyc sources -v
-```
-
-## Backup and Recovery
-
-### What to Backup
-
-1. **Database:** `/var/lib/soholink/soholink.db`
-2. **Node Key:** `/var/lib/soholink/node_key.pem`
-3. **User Keys:** `/var/lib/soholink/keys/*.pem`
-4. **Config:** `/etc/soholink/config.yaml`
-5. **Policies:** `/etc/soholink/policies/*.rego`
-6. **Accounting Logs:** `/var/lib/soholink/accounting/*.jsonl*`
-7. **Merkle Batches:** `/var/lib/soholink/merkle/*.batch.json`
-
-### Backup Script
-
-```bash
-#!/bin/bash
-BACKUP_DIR="/backups/soholink/$(date +%Y%m%d)"
-DATA_DIR="/var/lib/soholink"
-CONFIG_DIR="/etc/soholink"
-
-mkdir -p "$BACKUP_DIR"
-
-# Stop service for consistent backup
-sudo systemctl stop soholink
-
-# Database (most critical)
-cp "$DATA_DIR/soholink.db" "$BACKUP_DIR/"
-
-# Keys
-cp -r "$DATA_DIR/keys" "$BACKUP_DIR/"
-cp "$DATA_DIR/node_key.pem" "$BACKUP_DIR/"
-
-# Config and policies
-cp -r "$CONFIG_DIR" "$BACKUP_DIR/config"
-
-# Accounting logs (optional, can be large)
-tar -czf "$BACKUP_DIR/accounting.tar.gz" -C "$DATA_DIR" accounting/
-
-# Restart service
-sudo systemctl start soholink
-
-echo "Backup completed: $BACKUP_DIR"
-```
-
-### Restore Procedure
-
-```bash
-#!/bin/bash
-BACKUP_DIR="/backups/soholink/20260205"
-DATA_DIR="/var/lib/soholink"
-CONFIG_DIR="/etc/soholink"
-
-# Stop service
-sudo systemctl stop soholink
-
-# Restore database
-cp "$BACKUP_DIR/soholink.db" "$DATA_DIR/"
-
-# Restore keys
-cp -r "$BACKUP_DIR/keys" "$DATA_DIR/"
-cp "$BACKUP_DIR/node_key.pem" "$DATA_DIR/"
-
-# Restore config
-cp -r "$BACKUP_DIR/config/"* "$CONFIG_DIR/"
-
-# Fix permissions
-chmod 600 "$DATA_DIR/node_key.pem"
-chmod 600 "$DATA_DIR/keys/"*.pem
-
-# Start service
-sudo systemctl start soholink
-```
-
-## Capacity Planning
-
-### Resource Requirements
-
-| Metric | Minimum | Recommended |
-|--------|---------|-------------|
-| CPU | 1 core | 2 cores |
-| RAM | 256 MB | 512 MB |
-| Disk | 1 GB | 10 GB |
-
-### Scaling Limits
-
-| Parameter | Tested Limit | Notes |
-|-----------|--------------|-------|
-| Users | 100,000 | SQLite indexed |
-| Auth/sec | 1,000 | Single node |
-| Nonce cache | 1M entries | Pruned daily |
-| Log events/day | 10M | Rotated daily |
-
-### Disk Growth
-
-- Database: ~1 KB per user
-- Accounting: ~200 bytes per event
-- Merkle: ~1 KB per batch
-
-Example: 1000 auths/day = ~200 KB/day = ~73 MB/year (before compression)
+Integration tests read `TEST_DATABASE_URL`, never `DATABASE_URL` — this
+separation is load-bearing (see the Dev XXIV data-loss incident record in
+CLAUDE.md). Destructive fixtures refuse to run unless the connected database
+name contains `"test"`.
+
+## Allowlist signing
+
+The signed allowlist is the root of trust for what container images agents may
+run; agents fail closed without a verifiable one. The full operator runbook —
+keypair bootstrap, signing, deployment, rotation, loss recovery — is
+`docs/operations/allowlist-signing.md`. The orchestrator serves the signed file
+at `GET /allowlist` from `ALLOWLIST_PATH` (compose mounts `./deploy/allowlist`
+at `/etc/soholink`).
+
+## Health and monitoring
+
+| Surface | Where | Notes |
+|---|---|---|
+| `GET /health` | orchestrator public API (no SPIFFE required) | 200 with `{"identity":"ready"\|"unavailable","status":"ok"}` — check `identity`, not just the status code |
+| `GET /metrics` | orchestrator and portal, each on its `METRICS_ADDR` | Prometheus format |
+| Compose healthchecks | `docker compose ps` | spire-server, spire-agent, orchestrator, portal all have healthchecks |
+
+External check: `curl https://api.soholink.org/health`. A 200 with
+`"identity":"unavailable"` means the stack is up but SPIFFE-protected routes
+are returning 503 — usually the SPIRE agent (see blockers below).
+
+## Known operational blockers
+
+1. **SPIRE agent join-token single-use behavior (TODO 36).** `join_token`
+   attestation is one-time: the token is consumed at first attestation and the
+   SVID is cached. If the SVID expires and the agent restarts, re-attestation
+   with the consumed token crash-loops and the orchestrator drops to degraded
+   mode. Recovery: `spire-server token generate` → update
+   `SPIRE_AGENT_JOIN_TOKEN` in `.env` →
+   `docker compose up -d --force-recreate spire-agent` → re-run
+   `bash deploy/register-entries.sh` (the orchestrator workload entry's
+   parentID encodes the token). Durable fix is a persistent attestation method
+   (`x509pop`); the rotation procedure is the interim mitigation.
+2. **External SPIRE reachability (TODO 37) — blocks all node bring-up.**
+   `spire.soholink.org` is NXDOMAIN and port 8081 is not externally routed, so
+   a member machine's bundled SPIRE agent cannot attest;
+   `cmd/agent`'s `waitForSPIRE` fatals after 90s. Until the control plane is
+   exposed (decision: Cloudflare tunnel gRPC/TCP route for now), no external
+   node can join, which also gates the signed-service-start verification
+   (TODO 19) and the Shenandoah pilot.
+
+## Backups
+
+Daily logical `pg_dump` (pg-backup sidecar) plus WAL segment archiving, both
+under `D:/SoHoLINK-backups/`. WAL alone is not PITR — a binary base backup is
+still an open TODO. Architecture, restore procedures, and honest limitations:
+`docs/backups.md`. Backups are currently host-local only (off-host replication
+is TODO 29).
+
+## Legacy v1 (fedaaa)
+
+The v1 system this document previously described — the `fedaaa` binary, its
+RADIUS/DID authentication, SQLite store, Merkle-batched accounting logs, and
+OPA policy engine — is **retired**. Its documentation has been removed, and
+the v1 binaries still present at the repo root are deliberately unsigned. Do
+not operate, extend, or document them. The old build lives on the `legacy-v1`
+branch for archaeology only.

@@ -1,10 +1,13 @@
 # build-gui.ps1
-# Builds soholink.exe with GUI tag and version ldflags.
-# Usage: .\scripts\build-gui.ps1 [-Version "0.1.1"] [-Commit "537b76f"] [-BuildDate "2026-03-06"]
+# Builds soholink.exe with GUI tag and version ldflags, then EV-signs it
+# (signing is skipped with -NoSign, or with a warning when the Sectigo
+# token/cert or signtool is unavailable — see deploy/signing.md).
+# Usage: .\scripts\build-gui.ps1 [-Version "0.1.1"] [-Commit "537b76f"] [-BuildDate "2026-03-06"] [-NoSign]
 param(
     [string]$Version   = "0.1.1",
     [string]$Commit    = "537b76f",
-    [string]$BuildDate = "2026-03-06"
+    [string]$BuildDate = "2026-03-06",
+    [switch]$NoSign
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,3 +28,12 @@ if ($LASTEXITCODE -ne 0) {
 
 $size = [math]::Round((Get-Item "$projectRoot\soholink.exe").Length / 1MB, 1)
 Write-Host "soholink.exe built OK ($size MB)" -ForegroundColor Green
+
+if ($NoSign) {
+    Write-Host "Signing skipped (-NoSign)." -ForegroundColor Yellow
+} else {
+    . "$PSScriptRoot\codesign.ps1"
+    $signed = Invoke-CodeSign -Path "$projectRoot\soholink.exe" -Description "SoHoLINK" `
+        -ThumbprintFile (Join-Path $projectRoot "certs\thumbprint.txt")
+    if ($signed) { Write-Host "soholink.exe EV-signed OK" -ForegroundColor Green }
+}

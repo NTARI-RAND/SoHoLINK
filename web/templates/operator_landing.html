@@ -1,0 +1,52 @@
+{{define "content"}}
+<section class="hero">
+  <div class="container">
+    <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.18em;color:var(--accent);margin-bottom:1rem;">Substrate coordinator</div>
+    <h1>The Substrate coordinator.<br><span class="hl">Onboard your platform.</span></h1>
+    <div class="hero-sub">
+      <p>SoHoLINK coordinates the Substrate compute economy &mdash; node recognition,
+         the employment lifecycle, settlement, and federation of frontends. Operator
+         platforms enroll here; members belong to the platforms.</p>
+    </div>
+    <div class="hero-actions">
+      <a href="/operators/apply" class="btn btn-primary">Become an operator</a>
+      <a href="/fees" class="btn btn-outline">View fee terms</a>
+    </div>
+  </div>
+</section>
+
+<div class="container" style="padding-top:0.5rem;">
+  <div class="section-label">What SoHoLINK is</div>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-eyebrow">Operators</div>
+      <h3>Platforms enroll as operators</h3>
+      <p>A frontend platform (Cloudy, Fruitful) enrolls as an operator, registers
+         a 7-key signing set, proves conformance, and authenticates to SoHoLINK on
+         behalf of its members' machines. Open signup &mdash; no invite required.</p>
+    </div>
+    <div class="card">
+      <div class="card-eyebrow">Coordination</div>
+      <h3>The employment lifecycle</h3>
+      <p>Capability listings, matching and scheduling, the job lifecycle, signed
+         fee declarations, and fiat settlement. SoHoLINK never touches member
+         hardware; its counterparties are frontends and nodes.</p>
+    </div>
+    <div class="card">
+      <div class="card-eyebrow">Federation &middot; design target</div>
+      <h3>A commons, not a hub</h3>
+      <p>Registry-enrolled coordinator peers with operator-signed sync and
+         witnessed checkpoints. The thin-waist protocol is a dependency leaf, so no
+         coordinator becomes a hub every platform must route through.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem;background:var(--surface-alt);">
+    <p style="margin:0;font-size:0.8rem;color:var(--muted);">
+      Contributing a device or running a member account? The member portal is moving
+      to Cloudy. <a href="/login">Go to the member portal &#8594;</a>
+    </p>
+  </div>
+</div>
+{{end}}
+{{template "layout" .}}

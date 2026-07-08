@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/types"
 )
 
@@ -58,12 +59,12 @@ type MatchRequest struct {
 	// / printing) are excluded from the result. The agent-side opt-out store
 	// remains the canonical enforcement gate; this filter is defense-in-depth.
 	// WorkloadType="" disables opt-out filtering (legacy callers / tests).
-	WorkloadType      types.MarketplaceWorkloadType
-	CountryConstraint string   // empty = any country
-	CPUCores          int
-	RAMMB             int
-	GPURequired       bool
-	StorageGB         int
+	WorkloadType                 types.MarketplaceWorkloadType
+	CountryConstraint            string // empty = any country
+	CPUCores                     int
+	RAMMB                        int
+	GPURequired                  bool
+	StorageGB                    int
 	ExcludedNodeIDs              []string // nodes that have already declined this job
 	ExcludeConsumerParticipantID string   // C5: for print workloads only, exclude nodes owned by this participant. Prevents self-print (platform extraction on a transaction the participant could perform unaided is predatory by the platform operator). Compute/storage self-use is legitimate, so this field is interpreted only on print workload types.
 }
@@ -194,6 +195,39 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 		return nil, fmt.Errorf("no available nodes match request")
 	}
 	return candidates, nil
+}
+
+// CapacityInputs returns a point-in-time supply snapshot of every ONLINE node,
+// shaped for demand-sounding aggregation (sounding.AggregateCapacity). It is a
+// read-only helper for the capacity sampler; it does NOT touch matching or
+// placement. Units mirror operator_capacity_snapshots: VCPUs from CPUCores,
+// MemMB from RAMMB, DiskMB from StorageGB (×1024).
+//
+// OperatorID is set to sounding.OperatorUnknown: nodes carry a ParticipantID,
+// not an operator_id, and the node→operator mapping (frontend-as-operator) is
+// not yet wired. When it lands, populate OperatorID here.
+func (r *NodeRegistry) CapacityInputs() []sounding.NodeCapacityInput {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]sounding.NodeCapacityInput, 0, len(r.nodes))
+	for _, node := range r.nodes {
+		if node.Status != "online" {
+			continue
+		}
+		out = append(out, sounding.NodeCapacityInput{
+			OperatorID:        sounding.OperatorUnknown,
+			NodeClass:         node.NodeClass,
+			VCPUs:             node.HardwareProfile.CPUCores,
+			MemMB:             int64(node.HardwareProfile.RAMMB),
+			DiskMB:            int64(node.HardwareProfile.StorageGB) * 1024,
+			OptOutCompute:     node.OptOutCompute,
+			OptOutStorage:     node.OptOutStorage,
+			OptOutPrinting:    node.OptOutPrinting,
+			HasEnabledPrinter: node.HasEnabledPrinter,
+		})
+	}
+	return out
 }
 
 // StartEvictionLoop runs a background goroutine that evicts nodes whose last
