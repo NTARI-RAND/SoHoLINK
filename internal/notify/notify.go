@@ -14,6 +14,7 @@ package notify
 
 import (
 	"fmt"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"sync"
@@ -67,6 +68,14 @@ func NewSMTPNotifier(cfg SMTPConfig) *SMTPNotifier {
 // line.
 func (n *SMTPNotifier) Send(msg Message) error {
 	addr := net_join(n.cfg.Host, n.cfg.Port)
+	// Validate the recipient is a single well-formed address before it reaches
+	// either the SMTP RCPT or the To: header. Open operator signup means msg.To
+	// is untrusted; this rejects CR/LF header-injection payloads. Fail closed.
+	parsed, err := mail.ParseAddress(msg.To)
+	if err != nil {
+		return fmt.Errorf("notify: invalid recipient address %q: %w", msg.To, err)
+	}
+	msg.To = parsed.Address
 	var auth smtp.Auth
 	if n.cfg.Username != "" {
 		auth = smtp.PlainAuth("", n.cfg.Username, n.cfg.Password, n.cfg.Host)
@@ -91,15 +100,22 @@ func net_join(host, port string) string {
 // buildRFC5322 renders a minimal plain-text email. CRLF line endings per RFC.
 func buildRFC5322(from string, msg Message) []byte {
 	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + msg.To + "\r\n")
-	b.WriteString("Subject: " + msg.Subject + "\r\n")
+	b.WriteString("From: " + stripHeader(from) + "\r\n")
+	b.WriteString("To: " + stripHeader(msg.To) + "\r\n")
+	b.WriteString("Subject: " + stripHeader(msg.Subject) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(msg.Body)
 	b.WriteString("\r\n")
 	return []byte(b.String())
+}
+
+// stripHeader removes CR and LF so an untrusted value placed on a header line
+// cannot inject additional RFC 5322 headers (header/CRLF injection). Recipient
+// addresses are additionally validated with mail.ParseAddress in Send.
+func stripHeader(v string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(v)
 }
 
 // LogNotifier is the dev/test transport. It never dials a mail server; it

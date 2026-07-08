@@ -102,9 +102,22 @@
         if (!r.ok) { showErr(r.data.error || 'Key registration failed.'); return; }
         for (var i = 0; i < 7; i++) {
           var tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + i + '</td><td><code style="font-size:0.75rem;">' +
-            trunc(keys[i]) + '</code></td>' +
-            '<td><span class="badge" style="color:var(--ok);">registered</span></td>';
+          var tdIdx = document.createElement('td');
+          tdIdx.textContent = String(i);
+          var tdKey = document.createElement('td');
+          var code = document.createElement('code');
+          code.style.fontSize = '0.75rem';
+          code.textContent = trunc(keys[i]); // textContent auto-escapes — no innerHTML XSS
+          tdKey.appendChild(code);
+          var tdStatus = document.createElement('td');
+          var badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.style.color = 'var(--ok)';
+          badge.textContent = 'registered';
+          tdStatus.appendChild(badge);
+          tr.appendChild(tdIdx);
+          tr.appendChild(tdKey);
+          tr.appendChild(tdStatus);
           tbody.appendChild(tr);
         }
         formWrap.style.display = 'none';
