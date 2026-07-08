@@ -1,0 +1,248 @@
+{{define "barChart"}}
+{{$c := .}}
+{{if .Empty}}
+  <div class="chart-empty">No data in this window.</div>
+{{else}}
+<svg viewBox="0 0 {{.W}} {{.H}}" preserveAspectRatio="xMidYMid meet" role="img" class="chart-svg">
+  {{range .Grid}}
+    <line x1="{{$c.AxisX}}" y1="{{.Y}}" x2="{{$c.W}}" y2="{{.Y}}" class="chart-grid"/>
+    <text x="{{$c.AxisX}}" y="{{.Y}}" dx="-6" dy="3" text-anchor="end" class="chart-ylab">{{.Label}}</text>
+  {{end}}
+  {{range .Bars}}
+    <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" fill="{{.Hue}}" rx="1"><title>{{.Label}}: {{.Value}}</title></rect>
+  {{end}}
+  {{range .XLabels}}
+    <text x="{{.X}}" y="{{.Y}}" text-anchor="middle" class="chart-xlab">{{.S}}</text>
+  {{end}}
+</svg>
+{{end}}
+{{end}}
+
+{{define "stackChart"}}
+{{$c := .}}
+{{if .Empty}}
+  <div class="chart-empty">No data in this window.</div>
+{{else}}
+<svg viewBox="0 0 {{.W}} {{.H}}" preserveAspectRatio="xMidYMid meet" role="img" class="chart-svg">
+  {{range .Grid}}
+    <line x1="{{$c.AxisX}}" y1="{{.Y}}" x2="{{$c.W}}" y2="{{.Y}}" class="chart-grid"/>
+    <text x="{{$c.AxisX}}" y="{{.Y}}" dx="-6" dy="3" text-anchor="end" class="chart-ylab">{{.Label}}</text>
+  {{end}}
+  {{range .Segs}}
+    <rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" fill="{{.Hue}}"/>
+  {{end}}
+  {{range .XLabels}}
+    <text x="{{.X}}" y="{{.Y}}" text-anchor="middle" class="chart-xlab">{{.S}}</text>
+  {{end}}
+</svg>
+{{end}}
+{{end}}
+
+{{define "lineChart"}}
+{{$c := .}}
+{{if .Empty}}
+  <div class="chart-empty">No data in this window.</div>
+{{else}}
+<svg viewBox="0 0 {{.W}} {{.H}}" preserveAspectRatio="xMidYMid meet" role="img" class="chart-svg">
+  {{range .Grid}}
+    <line x1="{{$c.AxisX}}" y1="{{.Y}}" x2="{{$c.W}}" y2="{{.Y}}" class="chart-grid"/>
+    <text x="{{$c.AxisX}}" y="{{.Y}}" dx="-6" dy="3" text-anchor="end" class="chart-ylab">{{.Label}}</text>
+  {{end}}
+  {{range .Series}}
+    <polyline points="{{.Points}}" fill="none" stroke="{{.Hue}}" stroke-width="2"/>
+    {{range .Dots}}<circle cx="{{.X}}" cy="{{.Y}}" r="3" fill="{{.Hue}}"/>{{end}}
+  {{end}}
+  {{range .XLabels}}
+    <text x="{{.X}}" y="{{.Y}}" text-anchor="middle" class="chart-xlab">{{.S}}</text>
+  {{end}}
+</svg>
+{{end}}
+{{end}}
+
+{{define "content"}}
+<style>
+  .chart-svg { width:100%; height:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--r); }
+  .chart-grid { stroke:var(--border); stroke-width:1; }
+  .chart-ylab { fill:var(--muted); font-family:var(--mono); font-size:10px; font-variant-numeric:tabular-nums; }
+  .chart-xlab { fill:var(--muted); font-family:var(--mono); font-size:10px; font-variant-numeric:tabular-nums; }
+  .chart-empty { padding:2rem 1rem; text-align:center; color:var(--muted); background:var(--surface); border:1px solid var(--border); border-radius:var(--r); font-size:0.8rem; }
+  .chart-row { display:grid; grid-template-columns:minmax(320px,1fr) minmax(240px,0.85fr); gap:1.25rem; align-items:start; margin-bottom:1.75rem; }
+  @media (max-width:760px){ .chart-row { grid-template-columns:1fr; } }
+  .chart-title { font-family:var(--display); font-size:0.95rem; letter-spacing:0.04em; margin-bottom:0.15rem; }
+  .chart-sub { font-size:0.72rem; color:var(--muted); margin-bottom:0.6rem; }
+  .chart-legend { display:flex; flex-wrap:wrap; gap:0.75rem; margin:0.5rem 0 0.25rem; }
+  .legend-item { display:inline-flex; align-items:center; gap:0.35rem; font-size:0.7rem; color:var(--muted); }
+  .legend-swatch { width:11px; height:11px; border-radius:2px; display:inline-block; }
+  .num { font-family:var(--mono); font-variant-numeric:tabular-nums; text-align:right; }
+  .weather-note { font-size:0.78rem; color:var(--muted); border-left:2px solid var(--accent); padding:0.35rem 0 0.35rem 0.85rem; margin:0.75rem 0 1.75rem; }
+  .rung-storm td { color:var(--accent); }
+</style>
+
+<div class="container">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance &middot; Demand sounding</div>
+      <h2>Sounding</h2>
+    </div>
+    <form method="get" action="/admin/sounding" style="display:flex;align-items:flex-end;gap:0.6rem;">
+      <div style="min-width:220px;">
+        <label for="operator">Operator</label>
+        <select id="operator" name="operator">
+          {{range .Operators}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-outline btn-sm">View</button>
+    </form>
+  </div>
+
+  <p class="weather-note">
+    A demand <strong>sounding</strong> reads the atmosphere for a storm forming before it exists.
+    Jobs towering against the top available rung's ceiling are <strong>CAPE</strong> &mdash; convective energy building;
+    a sustained run of them is <strong>congestus</strong>, the stage just before a thunderhead, and the signal to ship the
+    <strong>storm tier</strong> (the <code>coming_soon</code> rung below). Showing <strong>{{.WindowLabel}}</strong> for
+    <strong>{{.SelectedOpLabel}}</strong>. The placement-rejection log is the live demand proxy.
+  </p>
+
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Jobs sounded</div>
+      <div class="stat-value">{{.Totals.Jobs}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Placed</div>
+      <div class="stat-value ok">{{.PlacedPct}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Against ceiling (CAPE)</div>
+      <div class="stat-value cyan">{{.Totals.AgainstCeiling}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Rejections</div>
+      <div class="stat-value" style="color:var(--danger);">{{.Totals.Rejections}}</div>
+    </div>
+  </div>
+
+  <!-- ── Rung ladder (weather stages; incl. coming_soon storm tier) ────────── -->
+  <div class="section-label">Rung ladder</div>
+  <div class="table-wrap" style="margin-bottom:1.75rem;">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Stage</th><th>vCPU ceiling</th><th>Mem (MB)</th><th>Disk (MB)</th><th>State</th></tr>
+      </thead>
+      <tbody>
+        {{if .Rungs}}
+        {{range .Rungs}}
+        <tr{{if .ComingSoon}} class="rung-storm"{{end}}>
+          <td class="num">{{.Order}}</td>
+          <td>{{.Name}}</td>
+          <td class="num">{{.CPUCeiling}}</td>
+          <td class="num">{{.MemCeiling}}</td>
+          <td class="num">{{.DiskCeiling}}</td>
+          <td>
+            {{if .ComingSoon}}<span class="badge" style="color:var(--accent);">coming soon &middot; storm</span>
+            {{else}}<span class="badge badge-online">available</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="6" style="color:var(--muted);text-align:center;padding:1.5rem;">No rung ladder configured.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{/*
+    DEFERRED: explicit "register interest" click on the coming_soon storm tier.
+    A member-facing interest button (fake-door) would POST an intent row so demand
+    for the unbuilt storm tier could be measured directly. It is NOT implemented
+    here: interest capture is a Cloudy (frontend) surface, and until it lands the
+    placement-rejection log above (reason=too_big, wanted_rung=storm) is the live,
+    honest demand proxy for the storm tier. Stub only — no route, no handler.
+  */}}
+
+  <!-- ── Chart 1: job-shape distribution across the rung ceilings ──────────── -->
+  <div class="section-label">Job-shape distribution vs rung ceilings</div>
+  <div class="chart-row">
+    <div>
+      <div class="chart-title">Where demand sits on the ladder</div>
+      <div class="chart-sub">Submitted jobs bucketed by the rung they fit; <code>unplaced</code> = no rung recorded.</div>
+      {{template "barChart" .Dist}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Rung</th><th style="text-align:right;">Jobs</th></tr></thead>
+        <tbody>
+          {{range .DistRows}}<tr><td>{{.Rung}}</td><td class="num">{{.Count}}</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Chart 2: jobs against the top ceiling over time (CAPE) ────────────── -->
+  <div class="section-label">Jobs against the top ceiling over time</div>
+  <div class="chart-row">
+    <div>
+      <div class="chart-title">Convective energy (CAPE)</div>
+      <div class="chart-sub">Per day: jobs whose footprint reached or exceeded the top available ceiling.</div>
+      {{template "barChart" .Congestus}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Day</th><th style="text-align:right;">Total</th><th style="text-align:right;">Against</th></tr></thead>
+        <tbody>
+          {{range .CongestusRows}}<tr><td>{{.Bucket}}</td><td class="num">{{.Total}}</td><td class="num">{{.AgainstCeiling}}</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Chart 3: rejections by reason over time (categorical) ─────────────── -->
+  <div class="section-label">Rejections by reason over time</div>
+  <div class="chart-legend">
+    {{range .RejectionLegend}}<span class="legend-item"><span class="legend-swatch" style="background:{{.Hue}}"></span>{{.Label}}</span>{{end}}
+  </div>
+  <div class="chart-row">
+    <div>
+      <div class="chart-title">Unmet demand, by cause</div>
+      <div class="chart-sub">Stacked per day; hue order is fixed and categorical (not a status colour).</div>
+      {{template "stackChart" .Rejections}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Day</th>{{range .RejectionLegend}}<th style="text-align:right;">{{.Label}}</th>{{end}}<th style="text-align:right;">Total</th></tr>
+        </thead>
+        <tbody>
+          {{range .RejectionRows}}
+          <tr><td>{{.Bucket}}</td>{{range .Counts}}<td class="num">{{.}}</td>{{end}}<td class="num">{{.Total}}</td></tr>
+          {{end}}
+          <tr><td style="color:var(--muted);">Total</td>{{range .RejectionTotals}}<td class="num" style="color:var(--muted);">{{.}}</td>{{end}}<td class="num" style="color:var(--muted);">{{.Totals.Rejections}}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Chart 4: capacity vs demand over time (one axis: vCPU) ────────────── -->
+  <div class="section-label">Capacity vs demand over time</div>
+  <div class="chart-legend">
+    {{range .CapDemand.Legend}}<span class="legend-item"><span class="legend-swatch" style="background:{{.Hue}}"></span>{{.Label}}</span>{{end}}
+  </div>
+  <div class="chart-row">
+    <div>
+      <div class="chart-title">One axis: vCPU</div>
+      <div class="chart-sub">Avg requested vCPU per job (demand) against avg available compute vCPU per node group (capacity).</div>
+      {{template "lineChart" .CapDemand}}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Day</th><th style="text-align:right;">Demand</th><th style="text-align:right;">Capacity</th></tr></thead>
+        <tbody>
+          {{range .CapDemandRows}}<tr><td>{{.Bucket}}</td><td class="num">{{.Demand}}</td><td class="num">{{.Capacity}}</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{{end}}
+{{template "layout" .}}

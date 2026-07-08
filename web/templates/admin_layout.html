@@ -1,0 +1,40 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoHoLINK Governance</title>
+  <link rel="stylesheet" href="/static/css/portal.css">
+</head>
+<body>
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/admin/operators" class="nav-brand">SoHoLINK</a>
+      <ul class="nav-links">
+        <li><a href="/admin/operators">Operators</a></li>
+        <li><a href="/admin/sounding">Sounding</a></li>
+        <li><a href="/admin/fees">Fees</a></li>
+        <li><a href="/admin/messaging">Messaging</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div style="background:rgba(0,180,216,0.06);border-bottom:1px solid var(--border);">
+      <div class="container" style="padding:0.5rem 1.5rem;">
+        <span style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--accent);">Local-only governance surface &middot; :8090</span>
+      </div>
+    </div>
+    {{block "content" .}}{{end}}
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <span>SoHoLINK Governance &mdash; loopback only</span>
+      <span>&copy; 2026 NTARI</span>
+    </div>
+  </footer>
+</body>
+</html>
+{{end}}

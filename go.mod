@@ -3,16 +3,26 @@ module github.com/NetworkTheoryAppliedResearchInstitute/soholink
 go 1.25.0
 
 require (
+	github.com/NTARI-RAND/sohocloud-protocol v0.0.0-00010101000000-000000000000
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.1
+	github.com/moby/docker-image-spec v1.3.1
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/spiffe/go-spiffe/v2 v2.6.0
 	github.com/stripe/stripe-go/v82 v82.5.1
 	golang.org/x/crypto v0.49.0
+	golang.org/x/sys v0.42.0
 )
+
+// sohocloud-protocol is a sibling working tree under Development/Substrate,
+// not yet published to a module proxy. The replace pins it to the local
+// checkout so SoHoLINK builds against the operator identity layer (Layer C)
+// in lockstep with the protocol source.
+replace github.com/NTARI-RAND/sohocloud-protocol => ../sohocloud-protocol
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -35,11 +45,9 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -60,7 +68,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect

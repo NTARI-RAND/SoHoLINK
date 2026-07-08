@@ -23,15 +23,20 @@
         <img src="/static/soholink logo.png" alt="SoHoLINK" style="height:36px;width:auto;vertical-align:middle;">
       </a>
       <ul class="nav-links">
-        <li><a href="/">Home</a></li>
         {{if .IsAuthenticated}}
+        <!-- Member session active: keep the transitional member nav so no member
+             route is orphaned (member portal stays live during migration). -->
+        <li><a href="/">Coordinator</a></li>
         <li><a href="/dashboard">Dashboard</a></li>
         <li><a href="/consumer/marketplace">Marketplace</a></li>
         <li><a href="/logout" style="color:var(--muted);">Logout</a></li>
         {{else}}
-        <li><a href="/consumer/marketplace">Marketplace</a></li>
-        <li><a href="/login">Login</a></li>
-        <li><a href="/register" class="btn btn-primary" style="padding:0.35rem 0.9rem;font-size:0.8rem;">Sign Up</a></li>
+        <!-- Operator-facing primary nav (design §11 re-parent). The member portal
+             is demoted to a single muted link; every member route stays live. -->
+        <li><a href="/">Coordinator</a></li>
+        <li><a href="/operators/apply">Become an operator</a></li>
+        <li><a href="/fees">Fee terms</a></li>
+        <li><a href="/login" style="color:var(--muted);">Member portal</a></li>
         {{end}}
       </ul>
     </div>

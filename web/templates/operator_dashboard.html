@@ -1,0 +1,140 @@
+{{define "content"}}
+<div class="container">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Operator console</div>
+      <h2>{{.Name}}</h2>
+    </div>
+    <div style="text-align:right;">
+      <code style="color:var(--muted);font-size:0.85rem;display:block;">{{.OperatorID}}</code>
+      {{if eq .OnboardingState "active"}}
+        <span class="badge" style="color:var(--ok);">active</span>
+      {{else if eq .OnboardingState "verified"}}
+        <span class="badge badge-idle">awaiting admission</span>
+      {{else}}
+        <span class="badge badge-offline">{{.OnboardingState}}</span>
+      {{end}}
+      {{if eq .Status "revoked"}}<span class="badge" style="color:var(--danger);">revoked</span>{{end}}
+    </div>
+  </div>
+
+  {{if ne .OnboardingState "active"}}
+  <!-- ── Pre-activation recap ─────────────────────────────────────── -->
+  <div class="card" style="border-color:var(--accent);margin-bottom:2rem;text-align:center;padding:2.5rem 1.5rem;">
+    <div class="card-eyebrow" style="justify-content:center;">Awaiting admission</div>
+    <h3 style="margin:0.5rem 0;">Your gates are being finalized</h3>
+    <p style="margin:0 auto;max-width:520px;font-size:0.85rem;">
+      Once your contact email is verified and all three conformance suites are
+      green against your current key set, your operator activates automatically and
+      your keys begin authenticating to SoHoLINK.
+    </p>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Email verified</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .EmailVerified}}color:var(--ok);{{else}}color:var(--muted);{{end}}">{{if .EmailVerified}}yes{{else}}no{{end}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Conformance</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .ConformancePassed}}color:var(--ok);{{else}}color:var(--muted);{{end}}">{{if .ConformancePassed}}passed{{else}}pending{{end}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Keys registered</div>
+      <div class="stat-value">{{.KeyCount}}<span style="color:var(--muted);font-size:0.9rem;"> / 7</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+    {{if not .EmailVerified}}<a href="/operators/{{.OperatorID}}/verify" class="btn btn-outline btn-sm">Verify contact &rarr;</a>{{end}}
+    {{if not .ConformancePassed}}<a href="/operators/{{.OperatorID}}/conformance" class="btn btn-outline btn-sm">Run conformance &rarr;</a>{{end}}
+  </div>
+
+  {{else}}
+  <!-- ── Active dashboard ─────────────────────────────────────────── -->
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Active keys</div>
+      <div class="stat-value cyan">{{.ActiveKeyCount}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Onboarding</div>
+      <div class="stat-value ok" style="font-size:1.4rem;">active</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Conformance</div>
+      <div class="stat-value" style="font-size:1.4rem;color:var(--ok);">passed</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Transmissions / 24h</div>
+      <div class="stat-value">{{.Transmissions24h}}</div>
+    </div>
+  </div>
+
+  <div class="section-label">Signing keys</div>
+  <div class="table-wrap" style="margin-bottom:0.5rem;">
+    <table>
+      <thead><tr><th>Index</th><th>Public key</th><th>Status</th><th>Usage</th><th>Expires at (threshold)</th></tr></thead>
+      <tbody>
+        {{range .Keys}}
+        <tr>
+          <td>{{.Index}}</td>
+          <td><code style="font-size:0.75rem;">{{.PubKeyTrunc}}</code></td>
+          <td>
+            {{if eq .State "active"}}<span class="badge" style="color:var(--ok);">active</span>
+            {{else if eq .State "expired"}}<span class="badge badge-offline">expired</span>
+            {{else if eq .State "revoked"}}<span class="badge" style="color:var(--danger);">revoked</span>
+            {{else}}<span class="badge badge-offline">{{.State}}</span>{{end}}
+          </td>
+          <td>{{.UsageCount}}<span style="color:var(--muted);"> / {{.Threshold}}</span></td>
+          <td>
+            {{if .NearThreshold}}<span class="badge badge-idle">{{.UsageCount}} / {{.Threshold}} &mdash; near expiry</span>
+            {{else}}<span style="color:var(--muted);font-size:0.8rem;">{{.Threshold}} uses</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:0.75rem;color:var(--muted);margin-bottom:2rem;">
+    Rotation is operator-driven and signed &mdash; SoHoLINK admits, expires, and
+    records; it never holds your private keys.
+  </p>
+
+  <div class="section-label">Lifecycle</div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <tbody>
+        <tr><td style="width:9rem;color:var(--accent);">Created</td><td style="color:var(--muted);">{{.CreatedAt}}</td></tr>
+        <tr><td style="color:var(--accent);">Verified</td><td style="color:var(--muted);">{{.VerifiedAt}}</td></tr>
+        <tr><td style="color:var(--accent);">Conformance passed</td><td style="color:var(--muted);">{{.ConformancePassedAt}}</td></tr>
+        <tr><td style="color:var(--accent);">Activated</td><td style="color:var(--muted);">{{.ActivatedAt}}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-label">Fee terms</div>
+  <div class="table-wrap" style="margin-bottom:1rem;">
+    <table>
+      <thead><tr><th>Contributor share</th><th>Platform fee</th><th>Effective</th><th>Seq</th></tr></thead>
+      <tbody>
+        {{if .FeeSet}}
+        <tr>
+          <td>{{.ContributorShareBps}} bps</td>
+          <td>{{.PlatformFeeBps}} bps</td>
+          <td style="color:var(--muted);">{{.FeeEffectiveAt}}</td>
+          <td>{{.FeeSeq}}</td>
+        </tr>
+        {{else}}
+        <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:1.5rem;">No fee declaration published yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <a href="/fees" style="font-size:0.8rem;">View the full signed fee terms &#8594;</a>
+  {{end}}
+
+</div>
+{{end}}
+{{template "layout" .}}

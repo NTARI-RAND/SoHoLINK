@@ -5,42 +5,46 @@
 
 .DESCRIPTION
     1. Cross-compiles the agent binary for windows/amd64
-    2. Runs `wix build` to produce SoHoLINK.msi
+    2. EV-signs the agent + bundled SPIRE agent binaries
+    3. Runs `wix build` to produce SoHoLINK.msi, then EV-signs the MSI
+
+    Signing runs by default and downgrades to a warning when the Sectigo
+    token/cert or signtool is unavailable, so CI and dev machines without
+    the token still build (unsigned). Pass -Sign to REQUIRE signing (the
+    build hard-fails if it cannot sign — use for release builds), or
+    -NoSign to skip signing entirely. See deploy/signing.md.
 
 .REQUIREMENTS
     - Go 1.24+ on PATH
     - WiX Toolset v4 (wix) on PATH: https://wixtoolset.org/
+    - For signing: SafeNet USB token plugged in + signtool available
+      (PATH, %USERPROFILE%\.signtool, or Windows Kits 10)
     - Run from the repository root or pass -RepoRoot
 
 .EXAMPLE
     .\installer\windows\build.ps1
     .\installer\windows\build.ps1 -Version 2.1.0
+    .\installer\windows\build.ps1 -Version 2.1.0 -Sign    # release: signing required
+    .\installer\windows\build.ps1 -NoSign                 # explicit unsigned build
 #>
 param(
     [string]$RepoRoot  = (Resolve-Path "$PSScriptRoot\..\.." -ErrorAction Stop),
     [string]$Version   = "2.0.0",
     [string]$OutDir    = "$PSScriptRoot",
-    [switch]$Sign
+    [switch]$Sign,
+    [switch]$NoSign
 )
 
 Set-StrictMode -Version Latest
 
-function Resolve-SignTool {
-    $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($onPath) { return $onPath.Source }
-    $kitRoots = @("${env:ProgramFiles(x86)}\Windows Kits\10\bin", "${env:ProgramFiles}\Windows Kits\10\bin")
-    foreach ($root in $kitRoots) {
-        if (Test-Path $root) {
-            $hit = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -like '*\x64\*' } |
-                Sort-Object FullName -Descending | Select-Object -First 1
-            if ($hit) { return $hit.FullName }
-        }
-    }
-    throw "signtool.exe not found on PATH or under Windows Kits 10. Install the Windows SDK or add signtool to PATH."
+$ErrorActionPreference = "Stop"
+
+if ($Sign -and $NoSign) {
+    throw "-Sign and -NoSign are mutually exclusive"
 }
 
-$ErrorActionPreference = "Stop"
+# Shared EV-signing helpers (Resolve-SignTool + Invoke-CodeSign)
+. (Join-Path $RepoRoot "scripts\codesign.ps1")
 
 Write-Host "==> Building SoHoLINK Node Agent MSI v$Version"
 Write-Host "    Repo root : $RepoRoot"
@@ -122,18 +126,23 @@ try {
 }
 Write-Host "    Binary    : $agentOut"
 
-# Step 1b: EV-sign the agent binary so the installed Windows service is signed
-if ($Sign) {
-    $thumb = (Get-Content "$RepoRoot\certs\thumbprint.txt" -Raw).Trim()
-    $signtool = Resolve-SignTool
+# Step 1b: EV-sign the agent binaries so the installed Windows service is
+# signed. Runs by default; -NoSign skips, -Sign hard-fails when unavailable.
+$signed = $false
+if (-not $NoSign) {
     Write-Host ""
-    Write-Host "==> EV-signing agent binary (token PIN prompt)..."
-    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent" $agentOut
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed on agent binary (exit $LASTEXITCODE)" }
+    Write-Host "==> EV-signing agent binary..."
+    $signed = Invoke-CodeSign -Path $agentOut -Description "SoHoLINK Agent" `
+        -ThumbprintFile "$RepoRoot\certs\thumbprint.txt" -Require:$Sign
+    if ($signed) {
+        Write-Host ""
+        Write-Host "==> EV-signing bundled SPIRE agent..."
+        $null = Invoke-CodeSign -Path $spireAgentOut -Description "SoHoLINK SPIRE Agent" `
+            -ThumbprintFile "$RepoRoot\certs\thumbprint.txt" -Require:$Sign
+    }
+} else {
     Write-Host ""
-    Write-Host "==> EV-signing bundled SPIRE agent (token PIN prompt)..."
-    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK SPIRE Agent" $spireAgentOut
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed on SPIRE agent (exit $LASTEXITCODE)" }
+    Write-Host "==> Signing skipped (-NoSign)."
 }
 
 # ── Step 2: build MSI with WiX ─────────────────────────────────────────────
@@ -150,14 +159,13 @@ try {
 }
 
 # ── Step 3: copy MSI to web/static for portal download ─────────────────────
-# Step 2b: EV-sign the MSI before publishing it
-if ($Sign) {
-    $thumb = (Get-Content "$RepoRoot\certs\thumbprint.txt" -Raw).Trim()
-    $signtool = Resolve-SignTool
+# Step 2b: EV-sign the MSI before publishing it. Gated on $signed so a build
+# whose binaries were skipped (no token) does not emit a second skip warning.
+if (-not $NoSign -and $signed) {
     Write-Host ""
-    Write-Host "==> EV-signing MSI (token PIN prompt)..."
-    & $signtool sign /sha1 $thumb /tr http://timestamp.sectigo.com /td SHA256 /fd SHA256 /d "SoHoLINK Agent Installer" $msiOut
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed on MSI (exit $LASTEXITCODE)" }
+    Write-Host "==> EV-signing MSI..."
+    $null = Invoke-CodeSign -Path $msiOut -Description "SoHoLINK Agent Installer" `
+        -ThumbprintFile "$RepoRoot\certs\thumbprint.txt" -Require:$Sign
 }
 
 $staticOut = Join-Path $RepoRoot "web\static\SoHoLINK-Setup.msi"

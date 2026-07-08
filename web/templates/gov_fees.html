@@ -1,0 +1,178 @@
+{{define "content"}}
+<div class="container" style="max-width:900px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Governance &middot; local-only</div>
+      <h2>Fee declaration</h2>
+    </div>
+    <code style="color:var(--muted);font-size:0.85rem;">{{.CoordinatorID}}</code>
+  </div>
+
+  <p style="margin-bottom:1.5rem;">
+    Compose and sign a new <code>FeeDeclaration</code>. The coordinator signing key
+    lives only in this process and is only ever used here, on the loopback surface.
+    The signed declaration becomes the public <code>/fees</code> read &mdash; there is
+    no information asymmetry.
+  </p>
+
+  <!-- Non-retroactive rule surfaced up front -->
+  <div class="card" style="border-left:3px solid var(--warn);margin-bottom:2rem;">
+    <div class="card-eyebrow" style="color:var(--warn);">Non-retroactive rule &middot; SPEC &sect;5.3</div>
+    <p style="margin:0;">
+      A change is always a <strong style="color:var(--text);">new</strong> declaration.
+      The new <code>Seq</code> must strictly exceed the current sequence, and the new
+      <code>Effective at</code> must be strictly later than the current effective
+      instant. Terms never change for work already offered &mdash; a publish that
+      violates either rule is rejected with a conflict.
+    </p>
+  </div>
+
+  <!-- Current declaration -->
+  <div class="section-label">Current declaration</div>
+  {{if .Current}}
+  <div class="stat-grid">
+    <div class="stat-cell">
+      <div class="stat-label">Contributor share</div>
+      <div class="stat-value cyan">{{.Current.ContributorShareBps}}<span style="font-size:0.9rem;color:var(--muted);"> bps</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Platform fee</div>
+      <div class="stat-value">{{.Current.PlatformFeeBps}}<span style="font-size:0.9rem;color:var(--muted);"> bps</span></div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Sequence</div>
+      <div class="stat-value">{{.Current.Seq}}</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-label">Balanced</div>
+      <div class="stat-value" style="font-size:1.4rem;{{if .Current.Balanced}}color:var(--ok);{{else}}color:var(--warn);{{end}}">{{if .Current.Balanced}}yes{{else}}no{{end}}</div>
+    </div>
+  </div>
+  <div class="table-wrap" style="margin-bottom:2rem;">
+    <table>
+      <tbody>
+        <tr><td style="width:11rem;color:var(--accent);">Effective at</td><td style="color:var(--muted);">{{.Current.EffectiveAt}}</td></tr>
+        <tr><td style="color:var(--accent);">Signature</td><td><code style="font-size:0.72rem;word-break:break-all;">{{.Current.Signature}}</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="card" style="margin-bottom:2rem;color:var(--muted);">
+    No fee declaration has been published yet. The first declaration for this
+    coordinator has no predecessor and is accepted with any sequence and effective
+    instant.
+  </div>
+  {{end}}
+
+  <!-- Compose + sign a new declaration -->
+  <div class="section-label">Publish a new declaration</div>
+  <div class="card" style="margin-bottom:2rem;">
+    <form id="fee-form" style="margin:0;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+        <div class="form-group">
+          <label for="contributor-bps">Contributor share (bps)</label>
+          <input type="number" id="contributor-bps" name="contributor_share_bps" min="0" max="10000"
+                 value="{{if .Current}}{{.Current.ContributorShareBps}}{{else}}6500{{end}}" required>
+        </div>
+        <div class="form-group">
+          <label for="platform-bps">Platform fee (bps)</label>
+          <input type="number" id="platform-bps" name="platform_fee_bps" min="0" max="10000"
+                 value="{{if .Current}}{{.Current.PlatformFeeBps}}{{else}}3500{{end}}" required>
+        </div>
+      </div>
+      <p style="margin:-0.5rem 0 1.25rem;font-size:0.75rem;color:var(--muted);">
+        Basis points are hundredths of a percent; a balanced split sums to 10000.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+        <div class="form-group">
+          <label for="seq">Sequence</label>
+          <input type="number" id="seq" name="seq" min="0"
+                 value="{{.NextSeq}}" required>
+        </div>
+        <div class="form-group">
+          <label for="effective-at">Effective at (RFC3339)</label>
+          <input type="text" id="effective-at" name="effective_at"
+                 placeholder="2026-08-01T00:00:00Z" required>
+        </div>
+      </div>
+      <p style="margin:-0.5rem 0 1.25rem;font-size:0.75rem;color:var(--muted);">
+        Sequence is pre-filled to the next monotonic value. Effective-at must be
+        strictly later than the current declaration.
+      </p>
+      <button type="submit" class="btn btn-primary" id="fee-submit">Sign &amp; publish</button>
+      <div id="fee-result" style="margin-top:1rem;display:none;"></div>
+    </form>
+  </div>
+
+  <!-- History -->
+  <div class="section-label">Declaration history</div>
+  <div class="table-wrap" style="margin-bottom:1.5rem;">
+    <table>
+      <thead>
+        <tr><th>Seq</th><th>Contributor</th><th>Platform</th><th>Balanced</th><th>Effective at</th></tr>
+      </thead>
+      <tbody>
+        {{if .History}}
+        {{range .History}}
+        <tr>
+          <td>{{.Seq}}</td>
+          <td>{{.ContributorShareBps}} bps</td>
+          <td>{{.PlatformFeeBps}} bps</td>
+          <td>{{if .Balanced}}<span style="color:var(--ok);">&#10003;</span>{{else}}<span style="color:var(--warn);">&mdash;</span>{{end}}</td>
+          <td style="color:var(--muted);">{{.EffectiveAt}}</td>
+        </tr>
+        {{end}}
+        {{else}}
+        <tr><td colspan="5" style="color:var(--muted);text-align:center;padding:1.5rem;">No declarations published yet.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById("fee-form");
+  if (!form) return;
+  var result = document.getElementById("fee-result");
+  var submit = document.getElementById("fee-submit");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    submit.disabled = true;
+    result.style.display = "block";
+    result.style.color = "var(--muted)";
+    result.textContent = "Signing and publishing…";
+    var payload = {
+      contributor_share_bps: parseInt(form.contributor_share_bps.value, 10),
+      platform_fee_bps: parseInt(form.platform_fee_bps.value, 10),
+      seq: parseInt(form.seq.value, 10),
+      effective_at: form.effective_at.value.trim()
+    };
+    fetch("/admin/fees", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (resp) {
+      return resp.json().then(function (body) { return { ok: resp.ok, body: body }; });
+    }).then(function (r) {
+      if (r.ok) {
+        result.style.color = "var(--ok)";
+        result.textContent = "Published — seq " + r.body.seq + ", signature " +
+          (r.body.signature || "").slice(0, 24) + "… Reload to see it in history.";
+      } else {
+        result.style.color = "var(--danger)";
+        result.textContent = "Rejected: " + (r.body.error || "could not publish");
+        submit.disabled = false;
+      }
+    }).catch(function () {
+      result.style.color = "var(--danger)";
+      result.textContent = "Network error — could not reach the governance surface.";
+      submit.disabled = false;
+    });
+  });
+})();
+</script>
+{{end}}
+{{template "layout" .}}

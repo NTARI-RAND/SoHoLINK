@@ -16,6 +16,9 @@ coverage.html
 # Go workspace file
 go.work
 
+# Local build temp dir (repo-local GOTMPDIR for the WDAC/SAC work-around)
+/.gotmp/
+
 # Vendor directory (keep local, don't commit)
 /vendor/
 

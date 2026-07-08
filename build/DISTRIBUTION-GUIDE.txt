@@ -77,6 +77,44 @@ Package Sizes:
 
 ═══════════════════════════════════════════════════════════════════
 
+CODE SIGNING (EV / AUTHENTICODE)
+--------------------------------
+
+All Windows build scripts EV-sign the .exe/.msi artifacts they produce:
+
+- scripts/build-all.ps1              (signs .exe/.msi in dist/)
+- scripts/build-gui.ps1              (signs soholink.exe)
+- scripts/build-installer-windows.ps1 (signs the binaries before zipping)
+- installer/windows/build.ps1        (signs agent, SPIRE agent, and MSI)
+
+Signing uses signtool with the NTARI Sectigo EV certificate — thumbprint
+in certs/thumbprint.txt, private key on the SafeNet/Thales USB token.
+Windows prompts for the token PIN on each signing operation. The shared
+helper is scripts/codesign.ps1; the full runbook is deploy/signing.md.
+
+How signing is controlled:
+
+1. DEFAULT — signing runs automatically. If the USB token/cert or
+   signtool is unavailable (CI, dev machines), the script prints a
+   warning and continues, producing UNSIGNED artifacts. The build
+   never fails just because the token is absent.
+
+2. -NoSign — pass to any of the scripts above to skip signing
+   explicitly (no warning, deliberate unsigned build).
+
+3. installer/windows/build.ps1 -Sign — REQUIRES signing: the build
+   hard-fails if it cannot sign. Use this for release/production MSI
+   builds so an unsigned installer can never ship by accident.
+
+signtool is located automatically: PATH first, then the NuGet
+buildtools install under %USERPROFILE%\.signtool, then the Windows
+10/11 SDK kits folder.
+
+IMPORTANT: Never distribute unsigned artifacts to end users. Unsigned
+builds are for CI verification and local development only.
+
+═══════════════════════════════════════════════════════════════════
+
 DISTRIBUTING TO END USERS
 --------------------------
 

@@ -1,0 +1,113 @@
+{{define "content"}}
+<div class="container" style="max-width:820px;">
+
+  <div class="page-header">
+    <div>
+      <div class="page-header-label">Operator onboarding &middot; Step 3 of 5</div>
+      <h2>Verify contact</h2>
+    </div>
+    <code style="color:var(--muted);font-size:0.85rem;">{{.OperatorID}}</code>
+  </div>
+
+  <div id="verify-error" style="display:none;background:rgba(239,68,68,0.08);border:1px solid var(--danger);border-radius:var(--r);padding:0.75rem 1rem;margin-bottom:1.25rem;">
+    <p style="color:var(--danger);margin:0;font-size:0.825rem;"></p>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1.75rem;">
+
+    <!-- EMAIL card -->
+    <div style="background:var(--surface);padding:1.75rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+        <div class="card-eyebrow" style="margin:0;">Email</div>
+        <span id="email-badge" class="badge badge-idle">unverified</span>
+      </div>
+      <p style="font-size:0.8rem;margin:0 0 1rem;">
+        A code is sent only to your <strong style="color:var(--text);">registered</strong>
+        contact email. Enter it below to prove you control the inbox.
+      </p>
+      <button id="send-code" type="button" class="btn btn-outline btn-sm" style="margin-bottom:1rem;">Send code</button>
+      <div class="form-group" style="margin-bottom:0.75rem;">
+        <label for="code">6-digit code</label>
+        <input type="text" id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+               placeholder="000000" style="font-family:var(--mono);letter-spacing:0.3em;">
+      </div>
+      <button id="check-code" type="button" class="btn btn-primary btn-sm" style="width:100%;">Confirm</button>
+    </div>
+
+    <!-- PHONE card (deferred) -->
+    <div style="background:var(--surface);padding:1.75rem;opacity:0.55;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+        <div class="card-eyebrow" style="margin:0;">Phone</div>
+        <span class="badge badge-offline">deferred</span>
+      </div>
+      <p style="font-size:0.8rem;margin:0;">
+        Phone 2FA is not part of the v0 gate. Email verification alone advances you
+        to conformance.
+      </p>
+    </div>
+
+  </div>
+
+  <div id="verify-done" style="display:none;">
+    <div class="card" style="border-color:var(--accent);margin-bottom:1.5rem;">
+      <div class="card-eyebrow">Contact verified</div>
+      <p style="margin:0;font-size:0.85rem;">Your email is confirmed. Proceed to prove conformance.</p>
+    </div>
+    <a href="/operators/{{.OperatorID}}/conformance" class="btn btn-primary">Continue to conformance &rarr;</a>
+  </div>
+
+</div>
+
+<script>
+  (function () {
+    var operatorId = {{.OperatorID}};
+    var errBox = document.getElementById('verify-error');
+    var badge = document.getElementById('email-badge');
+    var doneBox = document.getElementById('verify-done');
+    // A per-flow applicant session id; the code issuance is bound to it.
+    var sessionId;
+    try {
+      var buf = new Uint8Array(16);
+      (window.crypto || {}).getRandomValues && window.crypto.getRandomValues(buf);
+      sessionId = Array.prototype.map.call(buf, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    } catch (e) { sessionId = String(Date.now()) + Math.random().toString(16).slice(2); }
+
+    function showErr(msg) {
+      errBox.querySelector('p').textContent = msg;
+      errBox.style.display = 'block';
+      window.scrollTo(0, 0);
+    }
+    document.getElementById('send-code').addEventListener('click', function () {
+      errBox.style.display = 'none';
+      fetch('/operators/' + encodeURIComponent(operatorId) + '/verify/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: 'email', session_id: sessionId })
+      }).then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      }).then(function (r) {
+        if (!r.ok) { showErr(r.data.error || 'Could not send code.'); return; }
+        badge.textContent = 'code sent';
+      }).catch(function () { showErr('Network error. Please retry.'); });
+    });
+    document.getElementById('check-code').addEventListener('click', function () {
+      errBox.style.display = 'none';
+      var code = document.getElementById('code').value.trim();
+      fetch('/operators/' + encodeURIComponent(operatorId) + '/verify/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: 'email', session_id: sessionId, code: code })
+      }).then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+      }).then(function (r) {
+        if (!r.ok) { showErr(r.data.error || 'Verification failed.'); return; }
+        badge.textContent = 'verified';
+        badge.className = 'badge';
+        badge.style.color = 'var(--ok)';
+        doneBox.style.display = 'block';
+      }).catch(function () { showErr('Network error. Please retry.'); });
+    });
+  })();
+</script>
+{{end}}
+{{template "layout" .}}
