@@ -36,7 +36,8 @@ func TestBuildRFC5322_HasHeadersAndBody(t *testing.T) {
 		"From: from@example.com\r\n",
 		"To: to@example.com\r\n",
 		"Subject: hello\r\n",
-		"\r\nworld\r\n",
+		"Content-Transfer-Encoding: base64\r\n",
+		"\r\nd29ybGQ=\r\n", // base64("world")
 	} {
 		if !contains(payload, want) {
 			t.Errorf("payload missing %q\n---\n%s", want, payload)
