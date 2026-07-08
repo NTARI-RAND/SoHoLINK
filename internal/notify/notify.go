@@ -75,7 +75,7 @@ func (n *SMTPNotifier) Send(msg Message) error {
 	if err != nil {
 		return fmt.Errorf("notify: invalid recipient address %q: %w", msg.To, err)
 	}
-	msg.To = parsed.Address
+	msg.To = stripHeader(parsed.Address)
 	var auth smtp.Auth
 	if n.cfg.Username != "" {
 		auth = smtp.PlainAuth("", n.cfg.Username, n.cfg.Password, n.cfg.Host)
@@ -115,7 +115,9 @@ func buildRFC5322(from string, msg Message) []byte {
 // cannot inject additional RFC 5322 headers (header/CRLF injection). Recipient
 // addresses are additionally validated with mail.ParseAddress in Send.
 func stripHeader(v string) string {
-	return strings.NewReplacer("\r", "", "\n", "").Replace(v)
+	v = strings.ReplaceAll(v, "\r", "")
+	v = strings.ReplaceAll(v, "\n", "")
+	return v
 }
 
 // LogNotifier is the dev/test transport. It never dials a mail server; it
