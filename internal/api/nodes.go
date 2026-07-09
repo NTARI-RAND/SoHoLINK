@@ -1,11 +1,15 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +19,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
@@ -61,6 +67,13 @@ type heartbeatRequest struct {
 	NodeID        string `json:"node_id"`
 	OptOutVersion int    `json:"opt_out_version"`
 	PrinterHash   string `json:"printer_hash"`
+
+	// Transitional ADVISORY load fields (B2): consumed only by the
+	// scheduler's soft idle-first scoring, never a hard gate. Absent fields
+	// decode to zero values — backward compatible with old agents. The
+	// signed protocol Heartbeat carries neither (no float in canon).
+	OwnerActive bool    `json:"owner_active"`
+	CPUPct      float64 `json:"cpu_pct"`
 }
 
 type heartbeatOptOut struct {
@@ -96,10 +109,11 @@ func registerNodeRoutes(mux *http.ServeMux, db *store.DB, registry *orchestrator
 	mux.HandleFunc("POST /nodes/register", handleRegisterNode(db, registry))
 	mux.HandleFunc("POST /nodes/heartbeat", handleHeartbeat(db, registry))
 	mux.HandleFunc("POST /nodes/printers", handleReportPrinters(db))
+	mux.HandleFunc("POST /nodes/pubkey", handleRegisterNodePubkey(db))
 	mux.HandleFunc("GET /nodes/jobs", handleGetJobs(db))
 	mux.HandleFunc("POST /jobs/{id}/started", handleStartedJob(db))
 	mux.HandleFunc("POST /jobs/{id}/telemetry", handleTelemetry(db))
-	mux.HandleFunc("POST /jobs/{id}/complete", handleCompleteJob(db))
+	mux.HandleFunc("POST /jobs/{id}/complete", handleCompleteJob(db, registry))
 }
 
 func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.HandlerFunc {
@@ -404,20 +418,7 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			return
 		}
 
-		_, err := db.Pool.Exec(r.Context(),
-			`UPDATE nodes SET last_heartbeat_at = NOW(), updated_at = NOW() WHERE id = $1`,
-			req.NodeID,
-		)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-
-		_, err = db.Pool.Exec(r.Context(),
-			`INSERT INTO node_heartbeat_events (node_id) VALUES ($1)`,
-			req.NodeID,
-		)
-		if err != nil {
+		if err := store.RecordNodeHeartbeat(r.Context(), db, req.NodeID); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -429,7 +430,7 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 		var dbVersion int
 		var computeEnabled, storageEnabled, printingEnabled bool
 		var hasEnabledPrinter bool
-		err = db.Pool.QueryRow(r.Context(), `
+		err := db.Pool.QueryRow(r.Context(), `
 			SELECT opt_out_version, opt_out_compute, opt_out_storage, opt_out_printing,
 			       EXISTS(SELECT 1 FROM node_printers WHERE node_id = $1 AND enabled = TRUE)
 			FROM nodes WHERE id = $1`, req.NodeID,
@@ -451,6 +452,17 @@ func handleHeartbeat(db *store.DB, registry *orchestrator.NodeRegistry) http.Han
 			// Race: node was evicted between Heartbeat() above and this call.
 			// Heartbeat itself succeeded; log and continue.
 			slog.Warn("registry update opt-out failed", "node_id", req.NodeID, "err", err)
+		}
+
+		// Refresh the advisory load sample (B2) for the scheduler's soft
+		// idle-first scoring. Same warn-and-continue posture as UpdateOptOut:
+		// a lost sample must never fail a heartbeat.
+		if err := registry.UpdateLoad(req.NodeID, orchestrator.NodeLoadState{
+			OwnerActive: req.OwnerActive,
+			CPUUtilPct:  req.CPUPct,
+			SampledAt:   time.Now(),
+		}); err != nil {
+			slog.Warn("registry update load failed", "node_id", req.NodeID, "err", err)
 		}
 
 		resp := heartbeatResponse{OK: true}
@@ -597,52 +609,20 @@ func handleGetJobs(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		rows, err := db.Pool.Query(r.Context(),
-			`SELECT id, COALESCE(job_token, ''), COALESCE(container_image, ''), COALESCE(printer_id, '')
-			 FROM jobs
-			 WHERE node_id = $1 AND status = 'scheduled'::job_status
-			 AND NOT (
-			     workload_type IN ('print_traditional'::workload_type, 'print_3d'::workload_type)
-			     AND participant_id = (SELECT participant_id FROM nodes WHERE id = $1)
-			 )`,
-			nodeID,
-		)
+		dispatched, err := store.PollScheduledJobs(r.Context(), db, nodeID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		defer rows.Close()
 
-		jobs := []jobEntry{}
-		var jobIDs []string
-		for rows.Next() {
-			var j jobEntry
-			if err := rows.Scan(&j.JobID, &j.JobToken, &j.Image, &j.PrinterID); err != nil {
-				writeError(w, http.StatusInternalServerError, "scan error")
-				return
-			}
-			jobs = append(jobs, j)
-			jobIDs = append(jobIDs, j.JobID)
-		}
-		if err := rows.Err(); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-
-		if len(jobIDs) > 0 {
-			_, err = db.Pool.Exec(r.Context(),
-				`UPDATE jobs SET status = 'dispatched'::job_status, updated_at = NOW()
-				 WHERE id = ANY($1) AND status = 'scheduled'::job_status
-				 AND NOT (
-				     workload_type IN ('print_traditional'::workload_type, 'print_3d'::workload_type)
-				     AND participant_id = (SELECT participant_id FROM nodes WHERE id = $2)
-				 )`,
-				jobIDs, nodeID,
-			)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
-			}
+		jobs := make([]jobEntry, 0, len(dispatched))
+		for _, d := range dispatched {
+			jobs = append(jobs, jobEntry{
+				JobID:     d.JobID,
+				JobToken:  d.JobToken,
+				Image:     d.Image,
+				PrinterID: d.PrinterID,
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -660,7 +640,7 @@ type completeJobRequest struct {
 	TmpfsExhausted bool   `json:"tmpfs_exhausted,omitempty"`
 }
 
-func handleCompleteJob(db *store.DB) http.HandlerFunc {
+func handleCompleteJob(db *store.DB, registry *orchestrator.NodeRegistry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.PathValue("id")
 		if jobID == "" {
@@ -668,13 +648,13 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		var nodeID, workloadType string
+		var nodeID string
 		err := db.Pool.QueryRow(r.Context(), `
-			SELECT j.node_id::text, j.workload_type::text
+			SELECT j.node_id::text
 			FROM jobs j
 			WHERE j.id = $1`,
 			jobID,
-		).Scan(&nodeID, &workloadType)
+		).Scan(&nodeID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "job not found")
 			return
@@ -701,70 +681,112 @@ func handleCompleteJob(db *store.DB) http.HandlerFunc {
 			return
 		}
 
-		// Derive failure_cause: explicit field wins; otherwise fall back to
-		// "tmpfs_exhausted" if the agent flagged ENOSPC; otherwise empty (NULLed
-		// in the UPDATE via NULLIF).
-		cause := req.FailureCause
-		if cause == "" && req.TmpfsExhausted {
-			cause = "tmpfs_exhausted"
-		}
-
-		// Determine terminal status based on exit_code and workload type.
-		// nil exit_code (no body / old agent) → failed; non-zero → failed;
-		// zero + print workload → awaiting_pickup (C5/C7 handles transitions
-		// from there); zero + anything else → completed with metering.
-		var newStatus string
-		var shouldMeter bool
-		switch {
-		case req.ExitCode == nil || *req.ExitCode != 0:
-			newStatus = "failed"
-		case workloadType == "print_traditional" || workloadType == "print_3d":
-			newStatus = "awaiting_pickup"
-		default:
-			newStatus = "completed"
-			shouldMeter = true
-		}
-
-		// completed_at is set only on terminal statuses. awaiting_pickup is
-		// non-terminal — completed_at gets set later when the job reaches
-		// delivered (C5) or failed.
-		var completedAt *time.Time
-		if newStatus == "completed" || newStatus == "failed" {
-			t := time.Now().UTC()
-			completedAt = &t
-		}
-
-		// C5: set awaiting_pickup_at when transitioning into awaiting_pickup, so the
-		// no-show window has a stable anchor. NULL on all other transitions.
-		var awaitingPickupAt *time.Time
-		if newStatus == "awaiting_pickup" {
-			t := time.Now().UTC()
-			awaitingPickupAt = &t
-		}
-
-		tag, err := db.Pool.Exec(r.Context(),
-			`UPDATE jobs SET status = $4::job_status, completed_at = $5, awaiting_pickup_at = $6, updated_at = NOW(),
-				exit_code = $2, failure_cause = NULLIF($3, '')
-			 WHERE id = $1 AND status = 'running'::job_status`,
-			jobID, req.ExitCode, cause, newStatus, completedAt, awaitingPickupAt,
-		)
+		newStatus, err := store.CompleteJob(r.Context(), db, jobID, req.ExitCode, req.FailureCause, req.TmpfsExhausted)
 		if err != nil {
+			if errors.Is(err, store.ErrJobNotRunning) {
+				writeError(w, http.StatusConflict, "job is not in running state")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		if tag.RowsAffected() == 0 {
-			writeError(w, http.StatusConflict, "job is not in running state")
+
+		// Advisory in-flight accounting (B4): all three statuses CompleteJob
+		// can produce are terminal FOR PLACEMENT — completed, failed, and
+		// awaiting_pickup (container work is done; only physical handoff
+		// remains) — so the node's slot is released.
+		registry.AddInFlight(nodeID, -1)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": newStatus}) //nolint:errcheck
+	}
+}
+
+// nodePubkeyRequest is the JSON body for POST /nodes/pubkey (A1): out-of-band
+// enrollment of a node's sohocloud-protocol Ed25519 verification key.
+type nodePubkeyRequest struct {
+	NodeID    string `json:"node_id"`
+	PublicKey string `json:"public_key"` // standard base64 of the raw 32-byte ed25519 public key
+	Algo      string `json:"algo"`       // optional; only "ed25519" accepted in v0
+}
+
+// handleRegisterNodePubkey enrolls a node's protocol verification key into
+// node_protocol_keys. SPIFFE-bound with the canonical TODO-35 guard.
+// FIRST-WRITE-WINS: re-enrolling the identical key is an idempotent 200;
+// presenting a different key returns 409 — rotation is an operator action
+// (direct DB update with sign-off), never a self-service overwrite, so a
+// compromised node SVID cannot silently swap the verification key.
+func handleRegisterNodePubkey(db *store.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req nodePubkeyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if req.NodeID == "" {
+			writeError(w, http.StatusBadRequest, "node_id is required")
+			return
+		}
+		// Canonical SPIFFE binding guard (TODO 34/35 form).
+		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+			return
+		}
+		if spiffeID.Path() != "/node/"+req.NodeID {
+			writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
 			return
 		}
 
-		if shouldMeter {
-			if err := store.ComputeMetering(r.Context(), db, jobID); err != nil {
-				log.Printf("ComputeMetering job=%s error=%v", jobID, err)
+		algo := req.Algo
+		if algo == "" {
+			algo = "ed25519"
+		}
+		if algo != "ed25519" {
+			writeError(w, http.StatusBadRequest, "unsupported algo (v0 permits exactly ed25519)")
+			return
+		}
+		key, err := base64.StdEncoding.DecodeString(req.PublicKey)
+		if err != nil || len(key) != ed25519.PublicKeySize {
+			writeError(w, http.StatusBadRequest, "public_key must be standard base64 of a 32-byte ed25519 public key")
+			return
+		}
+
+		tag, err := db.Pool.Exec(r.Context(),
+			`INSERT INTO node_protocol_keys (node_id, public_key, algo)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (node_id) DO NOTHING`,
+			req.NodeID, key, algo,
+		)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" { // foreign_key_violation
+				writeError(w, http.StatusNotFound, "node not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+
+		if tag.RowsAffected() == 0 {
+			// A key already exists: idempotent success only when byte-identical.
+			var existingKey []byte
+			var existingAlgo string
+			if err := db.Pool.QueryRow(r.Context(),
+				`SELECT public_key, algo FROM node_protocol_keys WHERE node_id = $1`,
+				req.NodeID,
+			).Scan(&existingKey, &existingAlgo); err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			if !bytes.Equal(existingKey, key) || existingAlgo != algo {
+				writeError(w, http.StatusConflict, "a different protocol key is already enrolled for this node (rotation is an operator action)")
+				return
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": newStatus}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]bool{"enrolled": true}) //nolint:errcheck
 	}
 }
 
@@ -874,7 +896,11 @@ func (s *APIServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleCompleteJob(w http.ResponseWriter, r *http.Request) {
-	handleCompleteJob(s.db)(w, r)
+	handleCompleteJob(s.db, s.registry)(w, r)
+}
+
+func (s *APIServer) handleRegisterNodePubkey(w http.ResponseWriter, r *http.Request) {
+	handleRegisterNodePubkey(s.db)(w, r)
 }
 
 func (s *APIServer) handleStartedJob(w http.ResponseWriter, r *http.Request) {

@@ -763,3 +763,166 @@ func TestExpirePickedUp_OnlyAffectsPickedUpStatus(t *testing.T) {
 		t.Errorf("status: got %q, want unchanged %q", status, "awaiting_pickup")
 	}
 }
+
+// ── B4: RescheduleStaleJob + compute decline reroute ─────────────────────────
+
+// registerSecondNode inserts node B in the DB and the registry.
+func registerSecondNode(t *testing.T, f *orchFixture) string {
+	t.Helper()
+	var nodeBID string
+	if err := f.db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, node_class, hostname, country_code, status)
+		 VALUES ($1, 'A', 'orch-test-node-b2', 'US', 'online')
+		 RETURNING id`,
+		f.providerID,
+	).Scan(&nodeBID); err != nil {
+		t.Fatalf("insert node B: %v", err)
+	}
+	f.registry.Register(orchestrator.NodeEntry{
+		NodeID:        nodeBID,
+		ParticipantID: f.providerID,
+		NodeClass:     "A",
+		CountryCode:   "US",
+		Status:        "online",
+		LastHeartbeat: time.Now(),
+		HardwareProfile: orchestrator.HardwareProfile{
+			CPUCores:  8,
+			RAMMB:     16384,
+			StorageGB: 200,
+		},
+	})
+	return nodeBID
+}
+
+// TestRescheduleStaleJob_RebindsToOnlineNode verifies that a scheduled compute
+// job bound to an evicted node is rebound (still scheduled) to an online node
+// with a fresh token.
+func TestRescheduleStaleJob_RebindsToOnlineNode(t *testing.T) {
+	ctx := context.Background()
+	f := setupOrchFixture(t, writeOrchAllowlist(t), false)
+	nodeBID := registerSecondNode(t, f)
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image, job_token)
+		 VALUES ($1, $2, 'batch_compute'::workload_type, 'scheduled'::job_status,
+		         2, 4096, 0, FALSE, $3, 'stale-token')
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchComputeImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert scheduled job: %v", err)
+	}
+
+	// Node A dies: evicted from the registry.
+	f.registry.Evict(f.nodeID)
+
+	if err := f.orch.RescheduleStaleJob(ctx, jobID, f.nodeID); err != nil {
+		t.Fatalf("RescheduleStaleJob: %v", err)
+	}
+
+	var status, newNodeID, token string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, node_id::text, COALESCE(job_token, '') FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &newNodeID, &token); err != nil {
+		t.Fatalf("query rebound job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want scheduled (rebind keeps scheduled)", status)
+	}
+	if newNodeID != nodeBID {
+		t.Errorf("node_id: got %q, want %q (node B)", newNodeID, nodeBID)
+	}
+	if token == "stale-token" {
+		t.Error("job_token was not reissued on rebind")
+	}
+}
+
+// TestRescheduleStaleJob_NoCandidates_LeavesScheduled verifies the deliberate
+// divergence from RerouteDeclinedJob: with no candidates the job stays
+// scheduled on the dead node (idle-first machines may wake) instead of failing.
+func TestRescheduleStaleJob_NoCandidates_LeavesScheduled(t *testing.T) {
+	ctx := context.Background()
+	f := setupOrchFixture(t, writeOrchAllowlist(t), false)
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image)
+		 VALUES ($1, $2, 'batch_compute'::workload_type, 'scheduled'::job_status,
+		         2, 4096, 0, FALSE, $3)
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchComputeImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert scheduled job: %v", err)
+	}
+
+	// Only node dies; no candidates remain.
+	f.registry.Evict(f.nodeID)
+
+	if err := f.orch.RescheduleStaleJob(ctx, jobID, f.nodeID); err != nil {
+		t.Fatalf("RescheduleStaleJob: %v", err)
+	}
+
+	var status, nodeID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, node_id::text FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &nodeID); err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want scheduled (left for retry, not failed)", status)
+	}
+	if nodeID != f.nodeID {
+		t.Errorf("node_id: got %q, want unchanged %q", nodeID, f.nodeID)
+	}
+}
+
+// TestRerouteDeclinedJob_Compute_RebindsToScheduled verifies the non-print
+// reroute branch introduced for the protocol Decline path: a declined compute
+// job is rebound straight to scheduled on another node (no printer resolve,
+// no confirmation).
+func TestRerouteDeclinedJob_Compute_RebindsToScheduled(t *testing.T) {
+	ctx := context.Background()
+	f := setupOrchFixture(t, writeOrchAllowlist(t), false)
+	nodeBID := registerSecondNode(t, f)
+
+	var jobID string
+	if err := f.db.Pool.QueryRow(ctx,
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+		                   cpu_cores, ram_mb, storage_gb, gpu_required, container_image)
+		 VALUES ($1, $2, 'batch_compute'::workload_type, 'declined'::job_status,
+		         2, 4096, 0, FALSE, $3)
+		 RETURNING id`,
+		f.consumerID, f.nodeID, orchComputeImage,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("insert declined compute job: %v", err)
+	}
+	if _, err := f.db.Pool.Exec(ctx,
+		`INSERT INTO job_node_declines (job_id, node_id) VALUES ($1, $2)`,
+		jobID, f.nodeID,
+	); err != nil {
+		t.Fatalf("insert job_node_declines: %v", err)
+	}
+
+	if err := f.orch.RerouteDeclinedJob(ctx, jobID); err != nil {
+		t.Fatalf("RerouteDeclinedJob: %v", err)
+	}
+
+	var status, newNodeID string
+	var printerID *string
+	if err := f.db.Pool.QueryRow(ctx,
+		`SELECT status, node_id::text, printer_id FROM jobs WHERE id = $1`, jobID,
+	).Scan(&status, &newNodeID, &printerID); err != nil {
+		t.Fatalf("query rerouted job: %v", err)
+	}
+	if status != "scheduled" {
+		t.Errorf("status: got %q, want scheduled (compute reroute skips confirmation)", status)
+	}
+	if newNodeID != nodeBID {
+		t.Errorf("node_id: got %q, want %q (node B)", newNodeID, nodeBID)
+	}
+	if printerID != nil {
+		t.Errorf("printer_id: got %q, want NULL for compute", *printerID)
+	}
+}
