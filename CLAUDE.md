@@ -42,7 +42,14 @@ When in doubt, stop and report — do not act.
 
 Commit messages are drafted by Claude Code (which has direct diff visibility),
 audited by Claude Chat, and authorized by the human. Do not append
-Co-Authored-By, Signed-off-by, or similar trailers.
+Co-Authored-By or other tool/vanity attribution trailers. **`Signed-off-by`
+IS required** on every commit (amended 2026-07-09): the repo adopted DCO
+inbound=outbound governance (PR #4, `governance: DCO inbound=outbound (no
+CLA)`), whose check enforces a `Signed-off-by` trailer per commit — commit
+with `git commit -s`. This is NOT tool attribution: it is the human
+contributor's Developer Certificate of Origin certification, and since Code
+commits under the human's git identity the sign-off carries the human's name
+(`Signed-off-by: Jodson Graves <info@ntari.org>`).
 
 **Reply format.** Claude Chat replies are split into two parts to minimize
 the human's reading load:
