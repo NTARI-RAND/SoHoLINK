@@ -5,3 +5,6 @@ deploy/allowlist/*.json -text
 
 # Shell scripts must use LF; CRLF breaks shebang parsing on Linux
 *.sh text eol=lf
+
+# Go sources normalized to LF (committed blob gofmt-clean on CRLF checkouts)
+*.go text eol=lf

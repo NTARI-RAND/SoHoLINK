@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
@@ -188,6 +189,7 @@ type JobStatusData struct {
 	JobID           string
 	Status          string
 	NodeID          string
+	FailureCause    string
 	CreatedAt       time.Time
 	Email           string
 	IsAuthenticated bool
@@ -372,6 +374,8 @@ func New(db *store.DB, addr string, privateKey ed25519.PrivateKey, templatesDir 
 		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerPickedUp)))
 	mux.Handle("POST /consumer/job/{id}/delivered",
 		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerDelivered)))
+	mux.Handle("POST /consumer/job/{id}/contest-no-show",
+		RequireAuth(sm, http.HandlerFunc(ps.handleConsumerContestNoShow)))
 	mux.Handle("GET /dispute/queue",
 		RequireAuth(sm, http.HandlerFunc(ps.handleDisputeQueue)))
 	mux.Handle("POST /dispute/{id}/resolve",
@@ -1174,10 +1178,10 @@ func (ps *PortalServer) handleJobStatus(w http.ResponseWriter, r *http.Request) 
 	data.IsAuthenticated = true
 
 	err := ps.db.Pool.QueryRow(r.Context(),
-		`SELECT status, COALESCE(node_id::text, ''), created_at
+		`SELECT status, COALESCE(node_id::text, ''), COALESCE(failure_cause, ''), created_at
 		 FROM jobs WHERE id = $1 AND participant_id = $2`,
 		jobID, claims.UserID,
-	).Scan(&data.Status, &data.NodeID, &data.CreatedAt)
+	).Scan(&data.Status, &data.NodeID, &data.FailureCause, &data.CreatedAt)
 	if err != nil {
 		http.Error(w, "job not found", http.StatusNotFound)
 		return
@@ -2255,4 +2259,106 @@ func (ps *PortalServer) handleProviderNoShow(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "failed"})
+}
+
+// handleConsumerContestNoShow opens a dispute over a job the contributor flagged
+// as a no-show (handleProviderNoShow). This is the C5→C7 recourse: the no-show
+// is contributor-unilateral, so the consumer's counter is to contest it after
+// the fact. The job stays 'failed'; the dispute is the recourse layer on top,
+// resolved by an arbiter through the existing Dispute Terminal.
+//
+// Authorization: caller must own the job (jobs.participant_id == session
+// UserID). A miss returns 404 (no-leak convention, consistent with the other
+// C5 consumer endpoints). Guards: the job must be status='failed' with
+// failure_cause='no_show_after_7d'; node_id must be non-NULL (disputes.node_id
+// is NOT NULL, jobs.node_id is ON DELETE SET NULL); and the contest must land
+// within 7 days of completion. One active dispute per job is enforced by
+// idx_disputes_one_active_per_job (migration 026); a unique violation maps to
+// 409 already_contested. C7 print lifecycle.
+func (ps *PortalServer) handleConsumerContestNoShow(w http.ResponseWriter, r *http.Request) {
+	claims, _ := ClaimsFromContext(r.Context())
+	jobID := r.PathValue("id")
+
+	var (
+		currentStatus string
+		failureCause  string
+		nodeID        string
+		completedAt   *time.Time
+	)
+	err := ps.db.Pool.QueryRow(r.Context(),
+		`SELECT status::text, COALESCE(failure_cause, ''),
+		        COALESCE(node_id::text, ''), completed_at
+		 FROM jobs WHERE id = $1 AND participant_id = $2`,
+		jobID, claims.UserID,
+	).Scan(&currentStatus, &failureCause, &nodeID, &completedAt)
+	if err != nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+
+	if currentStatus != "failed" || failureCause != "no_show_after_7d" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":          "wrong_status",
+			"current_status": currentStatus,
+		})
+		return
+	}
+	if nodeID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no_node"})
+		return
+	}
+	if completedAt == nil || time.Since(*completedAt) >= 7*24*time.Hour {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "window_expired"})
+		return
+	}
+
+	// Race-safe INSERT: the guards above are re-encoded in the WHERE so a
+	// concurrent status change between the SELECT and this INSERT cannot open a
+	// dispute on a job that no longer qualifies. The unique index enforces the
+	// one-active-dispute-per-job invariant; a duplicate contest surfaces as a
+	// 23505 unique violation translated to 409 below.
+	var disputeID string
+	err = ps.db.Pool.QueryRow(r.Context(),
+		`INSERT INTO disputes (job_id, node_id, participant_id, payment_intent_id, reason, status)
+		 SELECT id, node_id, participant_id, COALESCE(payment_intent_id, ''),
+		        'contested no-show', 'open'::dispute_status
+		 FROM jobs
+		 WHERE id = $1
+		   AND participant_id = $2
+		   AND status = 'failed'::job_status
+		   AND failure_cause = 'no_show_after_7d'
+		   AND node_id IS NOT NULL
+		   AND completed_at > NOW() - INTERVAL '7 days'
+		 RETURNING id`,
+		jobID, claims.UserID,
+	).Scan(&disputeID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "already_contested"})
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// A concurrent update changed the job out from under the guards.
+			http.Error(w, "status changed concurrently", http.StatusConflict)
+			return
+		}
+		slog.Error("handleConsumerContestNoShow: insert", "job_id", jobID, "error", err)
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":     "contested",
+		"dispute_id": disputeID,
+	})
 }
