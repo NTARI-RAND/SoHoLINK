@@ -428,9 +428,19 @@ func (a *Adapter) ReportJob(ctx context.Context, r employment.JobReport) error {
 	// node_id; a no-op if the job is already 'running'. Without this, every /v0
 	// ReportJob would fail ErrJobNotRunning and expireDispatched would revert
 	// the job to scheduled and re-offer it forever.
+	//
+	// M2 (audit): started_at drives duration metering, and r.StartedAt is
+	// node-supplied and signed but NOT validated — a greedy node could backdate
+	// it to inflate both its own earnings and the buyer's charge. Clamp it
+	// server-side to [dispatch time, now]: LEAST(GREATEST(reported, dispatch),
+	// now). In the SET clause, jobs.updated_at still holds the dispatch
+	// timestamp (the dispatched-flip set it), so it is the honest floor;
+	// transaction NOW() is the ceiling. Duration can no longer exceed the true
+	// (completed − dispatch) window nor go negative.
 	if _, err := a.db.Pool.Exec(ctx,
 		`UPDATE jobs SET status = 'running'::job_status,
-		        started_at = COALESCE(started_at, $3), updated_at = NOW()
+		        started_at = COALESCE(started_at, LEAST(GREATEST($3::timestamptz, updated_at), NOW())),
+		        updated_at = NOW()
 		 WHERE id = $1 AND node_id = $2 AND status = 'dispatched'::job_status`,
 		r.JobID, nodeID, r.StartedAt,
 	); err != nil {
