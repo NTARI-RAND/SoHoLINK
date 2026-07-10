@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
@@ -158,20 +161,34 @@ func handleRegisterNode(db *store.DB, registry *orchestrator.NodeRegistry) http.
 
 		// hostname is NOT NULL in the schema; use node_id as the stable identifier
 		// until the agent reports its own hostname in a later phase.
-		_, err = db.Pool.Exec(r.Context(), `
+		// The DO UPDATE is guarded by WHERE nodes.participant_id =
+		// EXCLUDED.participant_id so re-registering a node NEVER silently
+		// reassigns it to a different participant (which would redirect its
+		// future payouts). A same-owner re-register updates and RETURNs the id;
+		// a fresh id inserts and RETURNs it; a conflicting id owned by someone
+		// else matches neither the INSERT nor the guarded UPDATE, so RETURNING
+		// yields no row and we reject 409. Ownership transfer must be an
+		// explicit admin action, not an upsert side effect (audit finding L6).
+		var registeredID string
+		err = db.Pool.QueryRow(r.Context(), `
 			INSERT INTO nodes (id, participant_id, node_class, hostname, country_code, region, status, hardware_profile)
 			VALUES ($1, $2, $3::node_class, $4, $5, $6, 'online'::node_status, $7)
 			ON CONFLICT (id) DO UPDATE SET
-				participant_id   = EXCLUDED.participant_id,
 				node_class       = EXCLUDED.node_class,
 				country_code     = EXCLUDED.country_code,
 				region           = EXCLUDED.region,
 				status           = 'online'::node_status,
 				hardware_profile = EXCLUDED.hardware_profile,
-				updated_at       = NOW()`,
+				updated_at       = NOW()
+			WHERE nodes.participant_id = EXCLUDED.participant_id
+			RETURNING id`,
 			req.NodeID, req.ProviderID, req.NodeClass, req.NodeID,
 			req.CountryCode, region, string(hwJSON),
-		)
+		).Scan(&registeredID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "node id already registered to another participant")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return

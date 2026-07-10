@@ -142,7 +142,10 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 run bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4
     volumes:
-      - C:/Users/Jodson Graves/.cloudflared:/etc/cloudflared
+      # Host path to the cloudflared credential dir. Set CLOUDFLARED_DIR in
+      # .env per host; defaults to a repo-relative dir. Never hardcode an
+      # operator's home path here — this file is public (audit finding M5).
+      - ${CLOUDFLARED_DIR:-./deploy/cloudflared}:/etc/cloudflared
     depends_on:
       - nginx
 

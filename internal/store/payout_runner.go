@@ -28,7 +28,10 @@ func RunPayoutReleaser(ctx context.Context, db *DB, pc *payment.Client, interval
 			}
 
 			for _, c := range candidates {
-				_, err := pc.TriggerPayout(ctx, c.ProviderStripeAccountID, c.ContributorEarnedCents)
+				// Key the payout on the job id: a retry after a failed
+				// bookkeeping write below reuses this key, so Stripe dedupes
+				// instead of paying twice (audit finding M1).
+				_, err := pc.TriggerPayout(ctx, c.ProviderStripeAccountID, c.ContributorEarnedCents, c.JobID)
 				if err != nil {
 					slog.Warn("payout releaser: TriggerPayout failed",
 						"job_id", c.JobID,

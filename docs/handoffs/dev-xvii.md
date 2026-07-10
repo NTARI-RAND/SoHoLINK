@@ -113,7 +113,7 @@ B6 is done (2026-05-05). The actual next product workstreams are **B4** (print j
 ## Opening reads for next session
 
 ```bash
-cd "C:/Users/Jodson Graves/Documents/SoHoLINK"
+cd "C:/Users/<user>/Documents/SoHoLINK"
 git log --oneline -8 && docker compose ps && go build ./cmd/... && echo "all clean"
 ```
 
@@ -129,7 +129,7 @@ msiexec /a "web/static/SoHoLINK-Setup.msi" /qn TARGETDIR="C:/MSIExtract"
 If picking up TODO 20 sign-verify roundtrip:
 
 ```bash
-grep -n "mustEd25519Key" "C:/Users/Jodson Graves/Documents/SoHoLINK/cmd/portal/main.go"
+grep -n "mustEd25519Key" "C:/Users/<user>/Documents/SoHoLINK/cmd/portal/main.go"
 ```
 
 If picking up B4 or B5 — read the phase descriptions in CLAUDE.md lines 587–600 and scope the first commit.

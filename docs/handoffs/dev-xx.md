@@ -241,7 +241,7 @@ detail matters for future sessions.
 ## Opening reads for next session
 
 ```
-cd "C:/Users/Jodson Graves/Documents/SoHoLINK"
+cd "C:/Users/<user>/Documents/SoHoLINK"
 git log --oneline -10 && docker compose ps && go build ./cmd/... && echo "all clean"
 ```
 

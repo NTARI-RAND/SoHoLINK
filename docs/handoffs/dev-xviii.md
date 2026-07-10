@@ -284,7 +284,7 @@ or equivalent rather than running counts.
 ## Opening reads for next session
 
 ```bash
-cd "C:/Users/Jodson Graves/Documents/SoHoLINK"
+cd "C:/Users/<user>/Documents/SoHoLINK"
 git log --oneline -12 && docker compose ps && go build ./cmd/... && echo "all clean"
 ```
 
