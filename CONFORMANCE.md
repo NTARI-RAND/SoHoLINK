@@ -25,7 +25,7 @@ SoHoLINK is the **coordinator** of a JFA **substrate**: node-side orchestration 
 | **Fiat stays fiat; credit stays home** | Settlement is pure fiat (Stripe Connect); no tokens, no wallets; strictly separate from any front end's member-issued credit | CLAUDE.md invariant; payment package touches Stripe only |
 | **No information asymmetry** | Pricing, metering, and earnings visible to all participants | Portal surfaces; metering tables |
 | **Governance surface separated** | Admin portal on a separate local-only port, never exposed publicly, not role-flags on the public portal | Deploy configuration |
-| **Provenance inbound = outbound** | AGPL-3.0; DCO (`Signed-off-by` per commit), no CLA | License; DCO check on every PR |
+| **Provenance inbound = outbound** | AGPL-3.0; DCO (`Signed-off-by` per commit), no CLA | License; DCO workflow (see stand-ins: enforcement suspended as a named interim) |
 
 ## Stand-ins and open residuals
 
@@ -33,6 +33,7 @@ SoHoLINK is the **coordinator** of a JFA **substrate**: node-side orchestration 
 - **Coordinator federation is a design target, not built.** Witnessed checkpoints (the certificate-transparency model reserved in the record layer and the protocol's `anchor/` stub) are the named target for cross-coordinator non-equivocation. Until then, this is a single-coordinator deployment: the architecture's open problem 7 — sovereign compute buys mechanical, not economic, exit — applies in full and is named, not solved.
 - **Frontend-as-operator authentication is a design target** (rotating key set, signed transmissions); not implemented here yet.
 - **Fiat settlement counterparty** (member's payout identity vs. front end) is a deliberately open question; either answer stays fiat-side, never conflated with member credit.
+- **DCO enforcement is suspended as a named interim (2026-07-12).** The `dco.yml` workflow is disabled — not deleted — for the stack-establishment push, by decision of the steward. Per the architecture's provenance standard: the covenant itself never suspends (contributions still enter the AGPL commons inbound = outbound, Contributor Covenant unaffected); reinstatement is committed and is one action (`gh workflow enable DCO`); and the gap is honest — commits made during the window cannot be retroactively certified, so the window is kept short and its start and end are matters of record. Agent-authored commits continue to carry `Signed-off-by` throughout the window regardless.
 
 ## Dependency declaration
 
