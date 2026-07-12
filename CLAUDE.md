@@ -259,6 +259,13 @@ the diff was reverted and re-applied without `gofmt -w`.
 SoHoLINK was built as a Janus Facing Application (JFA) as defined by NTARI document
 P3-011. Reference: https://www.ntari.org/post/janusfacingapplications
 
+**Conformance self-description: see `CONFORMANCE.md`** — the repo's role
+declaration in the unified architecture's terms (coordinator of a JFA
+substrate), the invariant-to-binding table, and the named stand-ins. Per the
+architecture's ordering rule it precedes product-specific description; per its
+legibility rule, a change that alters any binding in CONFORMANCE.md updates
+that file in the same PR.
+
 Under the resolved Substrate architecture (NTARI, 2026-07-04), the JFA member
 economy is a FRONTEND concern, and the frontend is Cloudy. Cloudy owns the
 member's whole world: the JFA member economy (`internal/economy` member-issued
