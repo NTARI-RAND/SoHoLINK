@@ -236,7 +236,7 @@ the diff was reverted and re-applied without `gofmt -w`.
 - **Module:** `github.com/NetworkTheoryAppliedResearchInstitute/soholink`
 - **Domain:** soholink.org
 - **Trust domain:** spiffe://soholink.org
-- **Working branch:** master
+- **Working branch:** main (renamed from `master` 2026-07-12; GitHub redirects old refs, open PRs were retargeted automatically, and the `~DEFAULT_BRANCH` rulesets followed the rename. Historical references to `master` in the session records below are left as written.)
 
 ## Technology Stack
 | Layer | Technology |
