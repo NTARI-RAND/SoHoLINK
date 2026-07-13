@@ -259,7 +259,7 @@ surfaces the ambiguity earlier.
 ## Opening reads for next session
 
 ```powershell
-cd "C:/Users/Jodson Graves/Documents/SoHoLINK"
+cd "C:/Users/<user>/Documents/SoHoLINK"
 git log --oneline -5
 gh run list -R NTARI-RAND/SoHoLINK --limit 3
 go build ./cmd/...

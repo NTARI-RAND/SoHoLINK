@@ -68,6 +68,9 @@ mobile/flutter-app/android/local.properties
 # Private keys
 *.pem
 *.priv
+*.key
+# Dev TLS material — regenerate per host, never commit (audit finding L1)
+tls/
 
 # Dev-only allowlist artifacts (regenerated via scripts/allowlist-genkey)
 /allowlist-dev*
