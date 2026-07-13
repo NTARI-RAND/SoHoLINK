@@ -221,3 +221,30 @@ func EncodeOperatorHeader(tx operator.OperatorTransmission) string {
 	jsonBytes, _ := json.Marshal(wire) //nolint:errcheck // wire has no unmarshalable fields
 	return base64.StdEncoding.EncodeToString(jsonBytes)
 }
+
+// OperatorOrSPIFFE gates a route by EITHER a valid operator transmission OR a
+// SPIFFE SVID, selected solely by the presence of the OperatorHeader:
+//
+//   - header present  -> OperatorAuth(operatorNext): the caller authenticates
+//     as an OPERATOR (2-of-7 transmission). This is the operator-relay model,
+//     where one front end relays many members' nodes and per-node SPIFFE SVIDs
+//     do not exist; each message's OWN ed25519 signature carries node
+//     authenticity downstream (the adapter verifies it against node_protocol_keys).
+//   - header absent   -> spiffeGated: the existing RequireSPIFFE path, for
+//     direct/satellite nodes that hold their own SVID.
+//
+// Neither path is downgradable to the other. Presence of the header alone
+// selects the operator path, and OperatorAuth then HARD-rejects a
+// malformed/invalid/expired/replayed transmission (401) — it never falls back
+// to SPIFFE. Absence never invokes OperatorAuth. An attacker therefore cannot
+// strip the header to reach a weaker authenticator, nor add one to bypass SPIFFE.
+func OperatorOrSPIFFE(repo operatorVerifier, coordinatorID string, spiffeGated, operatorNext http.Handler) http.Handler {
+	operatorPath := OperatorAuth(repo, coordinatorID, operatorNext)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(OperatorHeader) != "" {
+			operatorPath.ServeHTTP(w, r)
+			return
+		}
+		spiffeGated.ServeHTTP(w, r)
+	})
+}

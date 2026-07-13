@@ -41,7 +41,11 @@ type APIServer struct {
 // SPIFFE-protected routes return 503, and /health reports
 // "identity":"unavailable". This happens when the SPIRE Workload API socket
 // cannot be reached at startup. See TODO 12.
-func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string, allowlistPath string, protocolV0 http.Handler) *APIServer {
+// opVerifier + coordinatorID enable operator-authenticated access to routes
+// that also accept SPIFFE (currently node-pubkey enrollment). Both nil (or a
+// degraded idSource) leaves those routes SPIFFE-only — the pre-operator
+// behavior — so the parameters are additive and backward compatible.
+func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string, allowlistPath string, protocolV0 http.Handler, opVerifier operatorVerifier, coordinatorID string) *APIServer {
 	// authMux: all routes that require a valid SPIFFE SVID.
 	authMux := http.NewServeMux()
 	registerNodeRoutes(authMux, db, registry)
@@ -53,6 +57,17 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 	top.HandleFunc("POST /nodes/claim", handleClaimNode(db, registry))
 	if protocolV0 != nil {
 		top.Handle("/v0/", protocolV0)
+	}
+	// Node-pubkey enrollment accepts EITHER an operator transmission (an admitted
+	// operator enrolling its members' node keys) OR a node's own SPIFFE SVID.
+	// The exact method+path pattern is more specific than the "/" subtree below,
+	// so it shadows the SPIFFE-only registration in authMux. Wired only when an
+	// operator verifier and a live SPIFFE source both exist; otherwise pubkey
+	// enrollment stays SPIFFE-only via authMux (backward compatible).
+	if opVerifier != nil && idSource != nil {
+		pubkey := http.HandlerFunc(handleRegisterNodePubkey(db))
+		spiffePubkey := identity.RequireSPIFFE(idSource.BundleSource(), pubkey)
+		top.Handle("POST /nodes/pubkey", OperatorOrSPIFFE(opVerifier, coordinatorID, spiffePubkey, pubkey))
 	}
 	if idSource != nil {
 		top.Handle("/", identity.RequireSPIFFE(idSource.BundleSource(), authMux))

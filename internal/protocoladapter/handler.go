@@ -26,7 +26,15 @@ import (
 // degraded (SPIRE Workload API unreachable at startup, nil idSource) serves
 // 503 on the protected subtree while fees stay reachable — mirroring the
 // bespoke server's degraded posture.
-func NewHandler(a *Adapter, idSource *identity.Source, degraded bool) http.Handler {
+// gate, when non-nil, composes the transport authenticator for the node-side
+// /v0 subtree from its two ingredients: `bare` (the reference handler with NO
+// transport auth — node authenticity comes from each message's own signature,
+// which the adapter verifies) and `spiffeGated` (the RequireSPIFFE+bindNodeID
+// path for direct/satellite nodes). It exists so the operator-or-SPIFFE
+// selection (which lives in the api package) is injected from cmd/orchestrator,
+// keeping this package free of an api import. A nil gate preserves the
+// pre-operator behavior: SPIFFE-only.
+func NewHandler(a *Adapter, idSource *identity.Source, degraded bool, gate func(bare, spiffeGated http.Handler) http.Handler) http.Handler {
 	top := http.NewServeMux()
 
 	top.HandleFunc("GET /v0/fees", func(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +63,12 @@ func NewHandler(a *Adapter, idSource *identity.Source, degraded bool) http.Handl
 	if idSource != nil {
 		bundle = idSource.BundleSource()
 	}
-	top.Handle("/v0/", identity.RequireSPIFFE(bundle, bindNodeID(httpjson.Handler(a))))
+	bare := httpjson.Handler(a)
+	spiffeGated := identity.RequireSPIFFE(bundle, bindNodeID(bare))
+	if gate != nil {
+		top.Handle("/v0/", gate(bare, spiffeGated))
+	} else {
+		top.Handle("/v0/", spiffeGated)
+	}
 	return top
 }

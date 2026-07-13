@@ -742,15 +742,23 @@ func handleRegisterNodePubkey(db *store.DB) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "node_id is required")
 			return
 		}
-		// Canonical SPIFFE binding guard (TODO 34/35 form).
-		spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
-		if !ok {
-			writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
-			return
-		}
-		if spiffeID.Path() != "/node/"+req.NodeID {
-			writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
-			return
+		// Auth is one of two shapes, selected by OperatorOrSPIFFE upstream:
+		//   - operator-authenticated (VerifiedOperator in context): an admitted
+		//     operator enrolls keys on behalf of its members' nodes (operator-relay
+		//     model). No per-node SPIFFE SVID exists; the operator vouches, and the
+		//     FIRST-WRITE-WINS insert below still prevents any silent overwrite.
+		//   - SPIFFE (direct/satellite node): enforce the canonical TODO 34/35
+		//     binding — the caller's SVID must be exactly this node_id.
+		if _, viaOperator := OperatorFromContext(r.Context()); !viaOperator {
+			spiffeID, ok := identity.SPIFFEIDFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, "no SPIFFE identity in context")
+				return
+			}
+			if spiffeID.Path() != "/node/"+req.NodeID {
+				writeError(w, http.StatusForbidden, "SPIFFE identity does not match node")
+				return
+			}
 		}
 
 		algo := req.Algo

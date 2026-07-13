@@ -154,9 +154,17 @@ func main() {
 	// carries its own SPIFFE middleware and mirrors degraded mode.
 	repo := operator.NewRepository(db.Pool)
 	adapter := protocoladapter.New(db, registry, repo, coordinatorID, coordKey, tokenSecret)
-	protocolV0 := protocoladapter.NewHandler(adapter, idSource, idSource == nil)
+	// /v0 accepts EITHER an operator transmission (Cloudy-as-operator relays its
+	// members' nodes) OR a direct node's SPIFFE SVID — selected by the operator
+	// header. The selector lives in the api package; injected here so
+	// protocoladapter needs no api import. Node authenticity in both paths comes
+	// from each message's own signature (the adapter verifies it).
+	v0Gate := func(bare, spiffeGated http.Handler) http.Handler {
+		return api.OperatorOrSPIFFE(repo, coordinatorID, spiffeGated, bare)
+	}
+	protocolV0 := protocoladapter.NewHandler(adapter, idSource, idSource == nil, v0Gate)
 
-	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath, protocolV0)
+	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath, protocolV0, repo, coordinatorID)
 	internalSrv := api.NewInternal(orch, internalAddr)
 
 	go func() {
