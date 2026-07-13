@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SoHoLINK horizontal lockup — mark + wordmark. Wordmark uses a monospace
+  system stack; for a font-independent asset, outline the text in your editor.
+  Palette: amber #F4A93A, teal #3FC9B6, ink #0C1416 (swap wordmark fill to
+  #E9EFEC for dark backgrounds).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 48" width="440" height="96" fill="none" role="img" aria-label="SoHoLINK">
+  <title>SoHoLINK</title>
+  <g transform="translate(8,8)">
+    <path d="M16 6L6 23M16 6l10 17M6 23h20M16 6v11M6 23l10-6M26 23l-10-6" stroke="#3FC9B6" stroke-opacity="0.35" stroke-width="1.1"/>
+    <circle cx="16" cy="6" r="3.2" fill="#F4A93A"/>
+    <circle cx="6" cy="23" r="3.2" fill="#3FC9B6"/>
+    <circle cx="26" cy="23" r="3.2" fill="#3FC9B6"/>
+    <circle cx="16" cy="17" r="2.4" fill="#F4A93A"/>
+  </g>
+  <text x="52" y="31" font-family="ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace" font-size="22" font-weight="700" letter-spacing="-0.5" fill="#0C1416">Soho<tspan fill="#0C1416">LINK</tspan></text>
+</svg>

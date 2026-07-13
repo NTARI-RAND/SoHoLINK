@@ -1,0 +1,27 @@
+# Public frontend for the SoHoLINK site — overlay, not part of the core stack.
+#
+# Serves the static landing page and reverse-proxies application routes to the
+# portal backend over the existing compose network. Kept as a separate file so
+# it never disturbs the running core services; bind is localhost-only until a
+# reviewer decides the public (cloudflared) routing.
+#
+#   docker compose -f docker-compose.frontend.yml up -d
+#
+# Requires the core stack's network to exist (soholink_default).
+
+services:
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/frontend/html:/usr/share/nginx/html:ro
+      - ./deploy/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8088:80"
+    networks:
+      - soholink
+
+networks:
+  soholink:
+    external: true
+    name: soholink_default
