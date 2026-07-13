@@ -1028,3 +1028,243 @@ func TestHandleProviderNoShow_TooSoon_409(t *testing.T) {
 		t.Errorf("expected error=too_soon in 409 body, got %q", resp["error"])
 	}
 }
+
+// ── handleConsumerContestNoShow ──────────────────────────────────────────────
+
+// seedNoShowJob inserts a print job in the terminal no-show state (status=failed,
+// failure_cause=no_show_after_7d) with the given completed_at anchor.
+func seedNoShowJob(t *testing.T, db *store.DB, consumerID, nodeID string, completedAt time.Time) string {
+	t.Helper()
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status,
+			failure_cause, completed_at, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'failed'::job_status,
+			'no_show_after_7d', $3, 1000)
+		 RETURNING id`,
+		consumerID, nodeID, completedAt,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seedNoShowJob: %v", err)
+	}
+	return jobID
+}
+
+func TestHandleConsumerContestNoShow_Success(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "contest_ok@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "contest_ok_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	jobID := seedNoShowJob(t, db, consumerID, nodeID, time.Now().Add(-1*24*time.Hour))
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "contest_ok@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["status"] != "contested" {
+		t.Errorf("expected status=contested in response, got %q", resp["status"])
+	}
+	if resp["dispute_id"] == "" {
+		t.Error("expected non-empty dispute_id in response")
+	}
+
+	// Exactly one open dispute for the job, with node_id and participant_id copied.
+	var count int
+	var dNode, dParticipant, dReason, dStatus string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count disputes: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 dispute row, got %d", count)
+	}
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT node_id::text, participant_id::text, reason, status::text
+		 FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&dNode, &dParticipant, &dReason, &dStatus); err != nil {
+		t.Fatalf("query dispute: %v", err)
+	}
+	if dNode != nodeID {
+		t.Errorf("dispute node_id = %q, want %q", dNode, nodeID)
+	}
+	if dParticipant != consumerID {
+		t.Errorf("dispute participant_id = %q, want %q", dParticipant, consumerID)
+	}
+	if dStatus != "open" {
+		t.Errorf("dispute status = %q, want open", dStatus)
+	}
+	if dReason != "contested no-show" {
+		t.Errorf("dispute reason = %q, want \"contested no-show\"", dReason)
+	}
+}
+
+func TestHandleConsumerContestNoShow_WrongStatus_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "contest_badstatus@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "contest_badstatus_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+
+	// A running job — not a no-show failure.
+	var jobID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO jobs (participant_id, node_id, workload_type, status, amount_cents)
+		 VALUES ($1, $2, 'print_traditional'::workload_type, 'running'::job_status, 1000)
+		 RETURNING id`,
+		consumerID, nodeID,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "contest_badstatus@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "wrong_status" {
+		t.Errorf("expected error=wrong_status, got %q", resp["error"])
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count disputes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no dispute opened on wrong-status contest, got %d", count)
+	}
+}
+
+func TestHandleConsumerContestNoShow_NotOwner_404(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "contest_owner@test.com", "pass1234")
+	otherID := seedParticipant(t, db, "contest_other@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "contest_owner_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	jobID := seedNoShowJob(t, db, consumerID, nodeID, time.Now().Add(-1*24*time.Hour))
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: otherID, Email: "contest_other@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count disputes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no dispute opened for non-owner, got %d", count)
+	}
+}
+
+func TestHandleConsumerContestNoShow_Duplicate_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "contest_dup@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "contest_dup_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	jobID := seedNoShowJob(t, db, consumerID, nodeID, time.Now().Add(-1*24*time.Hour))
+
+	claims := SessionClaims{UserID: consumerID, Email: "contest_dup@test.com"}
+
+	// First contest succeeds.
+	r1 := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r1.SetPathValue("id", jobID)
+	r1 = withClaims(r1, claims)
+	w1 := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w1, r1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first contest: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	// Second contest hits the one-active-dispute-per-job unique index.
+	r2 := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r2.SetPathValue("id", jobID)
+	r2 = withClaims(r2, claims)
+	w2 := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w2, r2)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("second contest: expected 409, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "already_contested" {
+		t.Errorf("expected error=already_contested, got %q", resp["error"])
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count disputes: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 dispute after duplicate contest, got %d", count)
+	}
+}
+
+func TestHandleConsumerContestNoShow_WindowExpired_409(t *testing.T) {
+	db := setupTestDB(t)
+	ps := newTestPortalServer(t, db)
+	consumerID := seedParticipant(t, db, "contest_expired@test.com", "pass1234")
+	providerID := seedParticipant(t, db, "contest_expired_prov@test.com", "pass1234")
+	nodeID := seedNode(t, db, providerID, "online", "A", "US")
+	// Completed 8 days ago — outside the 7-day contest window.
+	jobID := seedNoShowJob(t, db, consumerID, nodeID, time.Now().Add(-8*24*time.Hour))
+
+	r := httptest.NewRequest(http.MethodPost, "/consumer/job/"+jobID+"/contest-no-show", nil)
+	r.SetPathValue("id", jobID)
+	r = withClaims(r, SessionClaims{UserID: consumerID, Email: "contest_expired@test.com"})
+	w := httptest.NewRecorder()
+	ps.handleConsumerContestNoShow(w, r)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["error"] != "window_expired" {
+		t.Errorf("expected error=window_expired, got %q", resp["error"])
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM disputes WHERE job_id = $1`, jobID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count disputes: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no dispute opened after window expiry, got %d", count)
+	}
+}

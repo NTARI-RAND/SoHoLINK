@@ -42,6 +42,49 @@
     {{end}}
   </div>
 
+  {{if and (eq .Status "failed") (eq .FailureCause "no_show_after_7d")}}
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Contributor flagged this print as a no-show</div>
+    <p style="font-size:0.9rem;color:var(--muted);margin-bottom:1rem;">
+      The contributor reported that this print was never picked up. If you
+      disagree, you can contest the no-show. NTARI will review and arbitrate.
+    </p>
+    <button id="contest-btn" type="button" class="btn btn-outline">Contest no-show</button>
+    <p id="contest-result" style="display:none;font-size:0.85rem;margin-top:0.75rem;"></p>
+  </div>
+  <script>
+(function() {
+  var btn = document.getElementById('contest-btn');
+  var out = document.getElementById('contest-result');
+  if (!btn) return;
+  btn.addEventListener('click', function() {
+    btn.disabled = true;
+    fetch('/consumer/job/{{.JobID}}/contest-no-show', { method: 'POST' })
+      .then(function(res) { return res.json().then(function(d) { return { ok: res.ok, body: d }; }); })
+      .then(function(r) {
+        out.style.display = 'block';
+        if (r.ok) {
+          out.style.color = 'var(--accent)';
+          out.textContent = 'No-show contested. NTARI will review this dispute.';
+        } else {
+          out.style.color = 'var(--danger, #c0392b)';
+          out.textContent = r.body.error === 'already_contested'
+            ? 'This job has already been contested.'
+            : 'Could not contest: ' + (r.body.error || 'unknown error') + '.';
+          btn.disabled = false;
+        }
+      })
+      .catch(function() {
+        out.style.display = 'block';
+        out.style.color = 'var(--danger, #c0392b)';
+        out.textContent = 'Network error. Please try again.';
+        btn.disabled = false;
+      });
+  });
+})();
+  </script>
+  {{end}}
+
   <p id="sse-fallback" style="display:none;font-size:0.78rem;color:var(--muted);margin-bottom:1.5rem;">
     Live updates not supported in this browser. Reload to check for status updates.
   </p>
