@@ -143,6 +143,24 @@ services:
       portal:
         condition: service_healthy
 
+  # Public frontend edge: serves the static landing page at the site root and
+  # reverse-proxies every other path to the portal backend (deploy/frontend/).
+  # cloudflared's soholink.org public-hostname points at frontend:80. Folded
+  # into the core stack (was docker-compose.frontend.yml) so it is managed and
+  # started with the rest — the live homepage no longer depends on a separate
+  # overlay container staying up.
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./deploy/frontend/html:/usr/share/nginx/html:ro
+      - ./deploy/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8088:80"
+    depends_on:
+      portal:
+        condition: service_healthy
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
@@ -154,6 +172,7 @@ services:
       - ${CLOUDFLARED_DIR:-./deploy/cloudflared}:/etc/cloudflared
     depends_on:
       - nginx
+      - frontend
 
 volumes:
   postgres_data:
