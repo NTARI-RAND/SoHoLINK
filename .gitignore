@@ -88,3 +88,4 @@ installer/windows/*.wixpdb
 installer/windows/*.bmp
 installer/windows/soholink-agent.exe
 installer/windows/spire-agent.exe
+deploy/spire/x509pop/
