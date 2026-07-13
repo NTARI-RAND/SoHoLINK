@@ -41,6 +41,29 @@ type NodeEntry struct {
 	OptOutStorage     bool
 	OptOutPrinting    bool
 	HasEnabledPrinter bool
+
+	// Advisory load state, refreshed by handleHeartbeat via UpdateLoad.
+	// Self-reported and spoofable — consumed only by the scheduler's soft
+	// idle-first scoring (never a hard filter). Zero values mean "never
+	// sampled": LoadSampledAt.IsZero() marks the sample absent, and the
+	// scheduler scores absent/stale samples 0.0 so silence never outranks
+	// an honest busy reporter.
+	OwnerActive   bool
+	CPUUtilPct    float64
+	LoadSampledAt time.Time
+
+	// InFlight counts placements currently assigned to this node (advisory,
+	// clamped >= 0 by AddInFlight). Incremented at placement/rebind time,
+	// decremented on decline and on terminal-for-placement completion.
+	InFlight int
+}
+
+// NodeLoadState carries the advisory load fields from a heartbeat into the
+// in-memory registry via UpdateLoad.
+type NodeLoadState struct {
+	OwnerActive bool
+	CPUUtilPct  float64 // 0-100 scale, matching the codebase CPU% convention
+	SampledAt   time.Time
 }
 
 // NodeOptOutState carries opt-out flags from the DB into the in-memory
@@ -66,7 +89,7 @@ type MatchRequest struct {
 	GPURequired                  bool
 	StorageGB                    int
 	ExcludedNodeIDs              []string // nodes that have already declined this job
-	ExcludeConsumerParticipantID string   // C5: for print workloads only, exclude nodes owned by this participant. Prevents self-print (platform extraction on a transaction the participant could perform unaided is predatory by the platform operator). Compute/storage self-use is legitimate, so this field is interpreted only on print workload types.
+	ExcludeConsumerParticipantID string   // Exclude nodes owned by this participant for ALL workload types (approved operator decision, feat/protocol-integration): routing a job to hardware its own requester owns lets the platform take a share of a transaction the participant could perform unaided. Originally C5 print-only ("compute/storage self-use is legitimate"); that narrower rationale is superseded — the print history is preserved in the C5 commit trail.
 }
 
 // NodeRegistry is a concurrency-safe in-memory store of active nodes.
@@ -119,6 +142,60 @@ func (r *NodeRegistry) UpdateOptOut(nodeID string, state NodeOptOutState) error 
 	return nil
 }
 
+// UpdateLoad overwrites a node's advisory load fields. Returns an error if
+// the node is not registered. Callers (typically handleHeartbeat) forward the
+// heartbeat's self-reported load sample here so the scheduler's idle-first
+// scoring can read it without DB access.
+func (r *NodeRegistry) UpdateLoad(nodeID string, state NodeLoadState) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.nodes[nodeID]
+	if !ok {
+		return fmt.Errorf("update load: node %s not found", nodeID)
+	}
+	entry.OwnerActive = state.OwnerActive
+	entry.CPUUtilPct = state.CPUUtilPct
+	entry.LoadSampledAt = state.SampledAt
+	r.nodes[nodeID] = entry
+	return nil
+}
+
+// AddInFlight adjusts a node's advisory in-flight placement counter by delta,
+// clamping at zero. Missing nodes are a silent no-op — the counter is a soft
+// scheduling signal, never an invariant, so an eviction race must not fail
+// the placement path that calls this.
+func (r *NodeRegistry) AddInFlight(nodeID string, delta int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.nodes[nodeID]
+	if !ok {
+		return
+	}
+	entry.InFlight += delta
+	if entry.InFlight < 0 {
+		entry.InFlight = 0
+	}
+	r.nodes[nodeID] = entry
+}
+
+// IsOnline reports whether the node is present in the registry with
+// Status "online". Used by the scheduled-staleness reaper to detect jobs
+// bound to nodes that have been evicted or gone offline.
+func (r *NodeRegistry) IsOnline(nodeID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.nodes[nodeID]
+	return ok && entry.Status == "online"
+}
+
+// Get returns a copy of the node's registry entry, if present.
+func (r *NodeRegistry) Get(nodeID string) (NodeEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.nodes[nodeID]
+	return entry, ok
+}
+
 // Evict removes a node from the registry.
 func (r *NodeRegistry) Evict(nodeID string) {
 	r.mu.Lock()
@@ -142,6 +219,12 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 	var candidates []NodeEntry
 	for _, node := range r.nodes {
 		if excluded[node.NodeID] {
+			continue
+		}
+		// Same-owner exclusion, all workload types (see the field comment on
+		// ExcludeConsumerParticipantID). Applies even when WorkloadType is ""
+		// so legacy callers cannot route around it.
+		if req.ExcludeConsumerParticipantID != "" && node.ParticipantID == req.ExcludeConsumerParticipantID {
 			continue
 		}
 		if node.Status != "online" {
@@ -180,12 +263,9 @@ func (r *NodeRegistry) FindMatch(req MatchRequest) ([]NodeEntry, error) {
 					if node.OptOutPrinting || !node.HasEnabledPrinter {
 						continue
 					}
-					// C5 self-print exclusion: a print workload routed to a node owned by the
-					// consumer means the platform takes its share on a transaction the
-					// participant could perform unaided. Reject the match.
-					if req.ExcludeConsumerParticipantID != "" && node.ParticipantID == req.ExcludeConsumerParticipantID {
-						continue
-					}
+					// C5's self-print exclusion previously lived here; the
+					// same-owner check now runs for every workload at the top
+					// of the candidate loop.
 				}
 			}
 		}

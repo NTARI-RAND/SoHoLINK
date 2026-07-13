@@ -31,7 +31,7 @@ record on a schedule (create-on-first-run, update-on-change, no-op otherwise).
 4. Schedule it every 5 minutes (run as SYSTEM so it survives logoff):
    ```powershell
    $action  = New-ScheduledTaskAction -Execute "pwsh.exe" `
-     -Argument '-NoProfile -File "C:\Users\Jodson Graves\Documents\NTARI Official Docs\Development\Substrate\SoHoLINK\deploy\ddns\update-spire-dns.ps1"'
+     -Argument '-NoProfile -File "C:\Users\<user>\Documents\NTARI Official Docs\Development\Substrate\SoHoLINK\deploy\ddns\update-spire-dns.ps1"'
    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
      -RepetitionInterval (New-TimeSpan -Minutes 5)
    Register-ScheduledTask -TaskName "SoHoLINK SPIRE DDNS" -Action $action `

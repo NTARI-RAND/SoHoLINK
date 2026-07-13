@@ -108,6 +108,12 @@ services:
       dockerfile: Dockerfile.orchestrator
     restart: unless-stopped
     env_file: .env
+    # OPERATOR STEP (feat/protocol-integration): the orchestrator now REQUIRES
+    # COORDINATOR_SIGNING_KEY in .env (128-hex Ed25519 private key; signs the
+    # protocol Assignment offers served on /v0) and reads COORDINATOR_ID
+    # (default "soholink"). Secrets stay in .env, never committed here. Reuse
+    # the governance console's COORDINATOR_SIGNING_KEY value so assignments
+    # and fee declarations verify against the same coordinator public key.
     environment:
       INTERNAL_ADDR: ":8083"
     expose:
@@ -142,7 +148,10 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate --protocol http2 run bb7b7f0d-0d50-4d58-858b-abc52f1d7cd4
     volumes:
-      - C:/Users/Jodson Graves/.cloudflared:/etc/cloudflared
+      # Host path to the cloudflared credential dir. Set CLOUDFLARED_DIR in
+      # .env per host; defaults to a repo-relative dir. Never hardcode an
+      # operator's home path here — this file is public (audit finding M5).
+      - ${CLOUDFLARED_DIR:-./deploy/cloudflared}:/etc/cloudflared
     depends_on:
       - nginx
 

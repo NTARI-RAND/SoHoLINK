@@ -42,7 +42,14 @@ When in doubt, stop and report — do not act.
 
 Commit messages are drafted by Claude Code (which has direct diff visibility),
 audited by Claude Chat, and authorized by the human. Do not append
-Co-Authored-By, Signed-off-by, or similar trailers.
+Co-Authored-By or other tool/vanity attribution trailers. **`Signed-off-by`
+IS required** on every commit (amended 2026-07-09): the repo adopted DCO
+inbound=outbound governance (PR #4, `governance: DCO inbound=outbound (no
+CLA)`), whose check enforces a `Signed-off-by` trailer per commit — commit
+with `git commit -s`. This is NOT tool attribution: it is the human
+contributor's Developer Certificate of Origin certification, and since Code
+commits under the human's git identity the sign-off carries the human's name
+(`Signed-off-by: Jodson Graves <info@ntari.org>`).
 
 **Reply format.** Claude Chat replies are split into two parts to minimize
 the human's reading load:
@@ -439,6 +446,8 @@ test/integration/ ← Phase 1 end-to-end integration test (build tag: integratio
 | 018 | `018_job_lifecycle_statuses` | Extends `job_status` enum with `dispatched`, `awaiting_pickup`, `picked_up`, `delivered`. Adds columns `picked_up_at`, `delivered_at`, `exit_code`, `failure_cause` on `jobs`. Enum down migration is one-way (Postgres limitation, documented in down SQL). |
 | 019 | `019_awaiting_pickup_anchor` | `awaiting_pickup_at TIMESTAMPTZ` on `jobs`. Timestamp set when print job transitions `running → awaiting_pickup`; used as the anchor for the 7-day no-show and dispute windows. |
 | 020 | `020_drop_nodes_spiffe_id` | Drops `nodes.spiffe_id`. The column (from 001) was never populated; pre-TODO-34 handlers gated SPIFFE checks on `COALESCE(spiffe_id,'') != ''`, which was always false — inert. TODO 34 replaced that with deterministic construction from `jobs.node_id`; the column had no remaining consumer. Down migration re-adds `spiffe_id TEXT UNIQUE` (always NULL in practice, so nothing to restore). |
+| 027 | `027_participant_geo` | `country_code CHAR(2)`, `region TEXT` (both nullable) on `participants`. Requester-side geo for the B3 locality-first SOFT scoring term; unpopulated until the portal register/profile form collects them (named follow-up), and NEVER copied into the hard `CountryConstraint` residency filter. |
+| 028 | `028_node_protocol_keys` | `node_protocol_keys` table: per-node Ed25519 verification key for sohocloud-protocol messages (`node_id` PK -> nodes ON DELETE CASCADE, `public_key BYTEA`, `algo` default 'ed25519', `last_listing_seq`/`last_heartbeat_seq` BIGINT default 0). Enrolled via SPIFFE-bound first-write-wins `POST /nodes/pubkey`; the seq columns persist SPEC 5.5 strict monotonicity across restarts. (Rows 021-026 are documented in their federation-track sub-phase sections, not this table.) |
 
 To apply all migrations: run the Phase 1 integration test with TEST_DATABASE_URL set:
 ```
@@ -768,6 +777,13 @@ These have caused bugs before — read before touching related code:
   `template.ParseFiles(layoutPath, pagePath)` to avoid last-parsed-wins collision.
   Do not revert to a shared parsed set.
 - `template.ParseFiles` names templates by base filename only — keep base names unique.
+
+**Scheduler placement scoring (post-B3, feat/protocol-integration):**
+- `orchestrator.ScheduleFunc` is now `func(candidates []NodeEntry, tier SLATier, pctx PlacementContext) ([]NodeEntry, error)`; `scheduler.Schedule` matches. `PlacementContext{RequesterParticipantID, RequesterRegion, RequesterCountry}` lives in the orchestrator package (scheduler imports orchestrator; defining it scheduler-side would cycle). Pass `orchestrator.PlacementContext{}` where geo is irrelevant. RequesterCountry is NEVER copied into `MatchRequest.CountryConstraint` - the hard residency filter stays consumer-stated.
+- Score = classScore + freshnessScore + capacityScore + `wLocality`(10.0)*localityScore + `wIdle`(2.0)*idleScore - `perInFlightPenalty`(0.5)*InFlight. localityScore soft tiers: same region 0.6, same country 0.3, else 0 (empty never matches). wLocality is deliberately dominant (max 6.0 >= legacy max 6.0); wIdle deliberately below it (idle is self-reported/spoofable). Constants are defined and documented in `internal/scheduler/scheduler.go`.
+- INVARIANT: an absent or stale load sample (older than `loadSampleTTL` = 3x the 60s heartbeat interval) scores idleScore 0.0 - never a neutral 0.5. Silence must never outrank an honest node reporting 100% CPU. `OwnerActive` also zeroes the idle term.
+- `MatchRequest.ExcludeConsumerParticipantID` now excludes same-owner nodes for ALL workload types (approved operator decision) - the C5 print-only carve-out is superseded.
+- No deterministic NodeID tie-break: Go map iteration randomness in FindMatch remains the load-spreading mechanism.
 
 **Exported function signature changes:**
 - When adding parameters to any exported function, grep the full repo for callers:
@@ -1447,6 +1463,50 @@ Six commits shipped across two threads: TODO 25 closure (three commits) and an u
 **Operational notes:**
 - **Hardware re-registration blocking**: production database is essentially empty after the data loss. Jodson needs to re-register his hardware nodes via the portal `/register` flow before participant traffic can flow. Blocks end-to-end smoke test (register → heartbeat → job → payout) of the TODO 25 fix.
 - **postgres container restarted** during Step 3 (`archive_mode=on` requires postgres recreation). Uptime stamp at session close: postgres ~1 hour, all other services ~2 hours.
+
+### Sub-phase - Protocol integration (branch `feat/protocol-integration`, UNCOMMITTED, pending review)
+
+SoHoLINK-side sohocloud-protocol integration (approved 2026-07-08): implements
+`coordinator.Coordinator` and serves the protocol `/v0` httpjson wire, plus
+locality-first / idle-first placement. Work is on the branch working tree
+only - no commits yet.
+
+- **Phase B (placement)**: same-owner exclusion for ALL workloads in
+  `FindMatch`; transitional advisory `owner_active`/`cpu_pct` fields on the
+  JSON heartbeat (signed protocol Heartbeat untouched - no float in canon);
+  `PlacementContext` + weighted scoring (see Critical API Notes); advisory
+  `InFlight` counter (`AddInFlight`, clamped >= 0, incremented on placement/
+  rebind, decremented on decline/terminal-for-placement completion); new
+  `RescheduleStaleJob` + `rescheduleStale` reaper on the 30s loop rebinding
+  scheduled non-print jobs off dead nodes - on no-candidates it LEAVES the
+  job scheduled (idle-first machines may wake; deliberate divergence from
+  reroute's fail-the-job). `RerouteDeclinedJob` gained a non-print branch
+  (rebind straight to `scheduled`, no printer resolve) so protocol Declines
+  of compute jobs reroute correctly. Migration 027 (participant geo).
+- **Phase A (adapter)**: migration 028 + SPIFFE-bound first-write-wins
+  `POST /nodes/pubkey` (the ONE net-new bespoke surface); shared logic
+  extracted downward to `internal/store/dispatch.go` (`PollScheduledJobs`,
+  `CompleteJob`, `RecordNodeHeartbeat` - behavioral no-op for the bespoke
+  handlers); new `internal/protocoladapter` package (Adapter + NewHandler +
+  bindNodeID middleware). SubmitListing UPDATES an existing node only
+  (bespoke `/nodes/claim` stays the onboarding path); ComputeClass map
+  server->A, standard->B, micro->C (ordinal-preserving, transitional);
+  printers upserted with derived `printer_id = <kind>:<model>`. PollJobs is
+  fail-closed on fees BEFORE the dispatch flip (no unsigned/zero-fee offers,
+  no stranded claims). `/v0` mounted in `api.New` via a new `protocolV0
+  http.Handler` param (nil = not mounted; api does NOT import
+  protocoladapter - wiring is in cmd/orchestrator/main.go).
+- **Phase C (fees on the wire)**: `GET /v0/fees` is PLAIN (SPEC 6) and maps
+  `operator.ErrNoFeeDeclaration` -> 404; declaration signing/publishing
+  stays exactly on loopback :8090 (`POST /admin/fees`).
+- **Key decision**: `COORDINATOR_SIGNING_KEY` (new REQUIRED orchestrator env
+  var, loaded via the `mustEd25519Key` roundtrip loader; `COORDINATOR_ID`
+  defaults "soholink") enters the orchestrator process because
+  `employment.Assignment` offers are coordinator-signed. Fee-declaration
+  signing remains :8090-only. OPERATOR STEP before deploy: add both to .env
+  (see docker-compose.yml note).
+- **Transitional coexistence**: every bespoke route is untouched and stays
+  live alongside `/v0`.
 
 ### Sub-phase B8 — Windows-Native Print Agent
 Post-pilot architectural workstream. Native execution path separate from the
