@@ -40,6 +40,7 @@ services:
     command: ["-config", "/etc/spire/server.conf"]
     volumes:
       - ./deploy/spire/server.conf:/etc/spire/server.conf:ro
+      - ${SPIRE_X509POP_DIR:-./deploy/spire/x509pop}/ca.crt:/etc/spire/x509pop-ca.crt:ro
       - spire_data:/opt/spire/data/server
       - spire_socket:/run/spire-server/private
     ports:
@@ -56,13 +57,11 @@ services:
     image: ghcr.io/spiffe/spire-agent:1.9.6
     restart: unless-stopped
     pid: "host"
-    command:
-      - "-config"
-      - "/etc/spire/agent.conf"
-      - "-joinToken"
-      - "${SPIRE_AGENT_JOIN_TOKEN}"
+    command: ["-config", "/etc/spire/agent.conf"]
     volumes:
       - ./deploy/spire/agent.conf:/etc/spire/agent.conf:ro
+      - ${SPIRE_X509POP_DIR:-./deploy/spire/x509pop}/agent.crt:/etc/spire/agent.crt:ro
+      - ${SPIRE_X509POP_DIR:-./deploy/spire/x509pop}/agent.key:/etc/spire/agent.key:ro
       - spire_agent_socket:/run/spire/sockets
       - spire_agent_data:/opt/spire/data/agent
     depends_on:
