@@ -156,7 +156,7 @@ func TestAdapter_Bind(t *testing.T) {
 
 func TestHandler_Fees_NotPublished404(t *testing.T) {
 	a := New(nil, orchestrator.NewNodeRegistry(), stubFees{err: operator.ErrNoFeeDeclaration}, "soholink", nil, nil)
-	h := NewHandler(a, nil, true) // degraded: exercises only the plain /v0/fees route (no bundle needed)
+	h := NewHandler(a, nil, true, nil) // degraded: exercises only the plain /v0/fees route (no bundle needed)
 
 	r := httptest.NewRequest(http.MethodGet, "/v0/fees", nil)
 	w := httptest.NewRecorder()
@@ -177,7 +177,7 @@ func TestHandler_Fees_ServesSignedDeclaration(t *testing.T) {
 	decl.Sign(priv)
 
 	a := New(nil, orchestrator.NewNodeRegistry(), stubFees{decl: decl}, "soholink", nil, nil)
-	h := NewHandler(a, nil, true) // degraded: exercises only the plain /v0/fees route (no bundle needed)
+	h := NewHandler(a, nil, true, nil) // degraded: exercises only the plain /v0/fees route (no bundle needed)
 
 	r := httptest.NewRequest(http.MethodGet, "/v0/fees", nil)
 	w := httptest.NewRecorder()
@@ -197,7 +197,7 @@ func TestHandler_Fees_ServesSignedDeclaration(t *testing.T) {
 
 func TestHandler_Fees_ServedPlainInDegradedMode(t *testing.T) {
 	a := New(nil, orchestrator.NewNodeRegistry(), stubFees{err: operator.ErrNoFeeDeclaration}, "soholink", nil, nil)
-	h := NewHandler(a, nil, true)
+	h := NewHandler(a, nil, true, nil)
 
 	// Fees stays reachable (404 = honest "nothing published", not 503)...
 	r := httptest.NewRequest(http.MethodGet, "/v0/fees", nil)
@@ -221,7 +221,7 @@ func TestHandler_Fees_ServedPlainInDegradedMode(t *testing.T) {
 // bundle is ever consulted).
 func TestHandler_ProtectedRoutesRequireTLS(t *testing.T) {
 	a := New(nil, orchestrator.NewNodeRegistry(), stubFees{}, "soholink", nil, nil)
-	h := NewHandler(a, nil, false) // NON-degraded: the protected subtree must return 401 (not 503) without mTLS
+	h := NewHandler(a, nil, false, nil) // NON-degraded: the protected subtree must return 401 (not 503) without mTLS
 
 	// Plain HTTP request (no TLS peer certificate) → RequireSPIFFE 401.
 	r := httptest.NewRequest(http.MethodPost, "/v0/heartbeat", nil)
