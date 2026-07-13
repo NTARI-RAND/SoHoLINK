@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"log"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/api"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/operator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestrator"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/protocoladapter"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/scheduler"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
@@ -38,6 +41,32 @@ func mustHex(key string) []byte {
 	return b
 }
 
+// mustEd25519Key loads a 64-byte Ed25519 private key from a hex env var and
+// proves the public half matches the seed via a sign-then-verify roundtrip
+// (house rule: every asymmetric-key loader self-tests before returning).
+// Mirrors cmd/governance/main.go's loader.
+func mustEd25519Key(key string) ed25519.PrivateKey {
+	raw := mustEnv(key)
+	b, err := hex.DecodeString(raw)
+	if err != nil {
+		log.Fatalf("%s: invalid hex: %v", key, err)
+	}
+	if len(b) != ed25519.PrivateKeySize {
+		log.Fatalf("%s: must be exactly %d bytes (%d hex chars), got %d bytes",
+			key, ed25519.PrivateKeySize, ed25519.PrivateKeySize*2, len(b))
+	}
+	priv := ed25519.PrivateKey(b)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		log.Fatalf("%s: could not derive public key from private key", key)
+	}
+	const probe = "soholink-coordinator-key-self-test-v1"
+	if !ed25519.Verify(pub, []byte(probe), ed25519.Sign(priv, []byte(probe))) {
+		log.Fatalf("%s: sign/verify roundtrip failed; key bytes are internally inconsistent", key)
+	}
+	return priv
+}
+
 func main() {
 	orchestrator.MustValidateWorkloadMapping()
 
@@ -49,6 +78,19 @@ func main() {
 	metricsAddr := mustEnv("METRICS_ADDR")
 	internalAddr := mustEnv("INTERNAL_ADDR")
 	spiffeSocket := mustEnv("SPIFFE_ENDPOINT_SOCKET")
+
+	// Coordinator identity for the sohocloud-protocol /v0 surface. Default
+	// matches cmd/governance/main.go. NOTE (deliberate posture decision): the
+	// coordinator SIGNING key enters the orchestrator process because
+	// employment.Assignment offers are coordinator-signed on PollJobs; fee
+	// declaration SIGNING remains exclusively on the loopback :8090
+	// governance surface. The alternative — unsigned assignments — violates
+	// the protocol; a signing sidecar is the only other option.
+	coordinatorID := os.Getenv("COORDINATOR_ID")
+	if coordinatorID == "" {
+		coordinatorID = "soholink"
+	}
+	coordKey := mustEd25519Key("COORDINATOR_SIGNING_KEY")
 
 	allowlistPath := os.Getenv("ALLOWLIST_PATH")
 	if allowlistPath == "" {
@@ -107,7 +149,14 @@ func main() {
 	orchestrator.StartEvictionLoop(ctx, registry, 5*time.Minute)
 	orch.StartDeclineRerouteLoop(ctx)
 
-	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath)
+	// sohocloud-protocol /v0 surface (B4 milestone): the adapter delegates to
+	// the same store/orchestrator logic as the bespoke routes; the handler
+	// carries its own SPIFFE middleware and mirrors degraded mode.
+	repo := operator.NewRepository(db.Pool)
+	adapter := protocoladapter.New(db, registry, repo, coordinatorID, coordKey, tokenSecret)
+	protocolV0 := protocoladapter.NewHandler(adapter, idSource, idSource == nil)
+
+	srv := api.New(db, registry, idSource, apiAddr, metricsAddr, allowlistPath, protocolV0)
 	internalSrv := api.NewInternal(orch, internalAddr)
 
 	go func() {

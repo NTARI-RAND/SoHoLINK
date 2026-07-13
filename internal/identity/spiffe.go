@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
@@ -50,6 +51,14 @@ func TLSServerConfigOptional(source *Source) *tls.Config {
 	cfg := tlsconfig.TLSServerConfig(source.x509Source)
 	cfg.ClientAuth = tls.RequestClientCert
 	return cfg
+}
+
+// BundleSource exposes the SPIRE trust-bundle source (the underlying
+// X509Source satisfies x509bundle.Source). RequireSPIFFE uses it to verify a
+// presented client certificate chains to the trust domain before trusting its
+// SPIFFE SAN.
+func (s *Source) BundleSource() x509bundle.Source {
+	return s.x509Source
 }
 
 // Close shuts down the X.509 source and releases its SPIRE connection.

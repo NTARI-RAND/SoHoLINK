@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -2075,5 +2077,271 @@ func TestHandleGetJobs_SPIFFEMismatch_403(t *testing.T) {
 	handleGetJobs(db)(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// ── handleRegisterNodePubkey (A1) ────────────────────────────────────────────
+
+// seedPubkeyNode inserts a node row directly and returns its UUID.
+func seedPubkeyNode(t *testing.T, db *store.DB, participantID string) string {
+	t.Helper()
+	var nodeID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`INSERT INTO nodes (participant_id, hostname, status, node_class, country_code, hardware_profile)
+		 VALUES ($1, 'pubkey-host', 'online', 'A', 'US', '{}')
+		 RETURNING id`,
+		participantID,
+	).Scan(&nodeID); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	return nodeID
+}
+
+func testEd25519PubkeyB64(t *testing.T) (string, []byte) {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(pub), []byte(pub)
+}
+
+func TestHandleRegisterNodePubkey_Valid(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "pubkey_valid@test.com")
+	nodeID := seedPubkeyNode(t, db, pid)
+	keyB64, keyRaw := testEd25519PubkeyB64(t)
+
+	w := postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id":    nodeID,
+		"public_key": keyB64,
+	}, nodeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stored []byte
+	var algo string
+	var listingSeq, heartbeatSeq int64
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT public_key, algo, last_listing_seq, last_heartbeat_seq
+		 FROM node_protocol_keys WHERE node_id = $1`, nodeID,
+	).Scan(&stored, &algo, &listingSeq, &heartbeatSeq); err != nil {
+		t.Fatalf("query node_protocol_keys: %v", err)
+	}
+	if !bytes.Equal(stored, keyRaw) {
+		t.Error("stored key does not match enrolled key")
+	}
+	if algo != "ed25519" {
+		t.Errorf("algo: got %q, want ed25519", algo)
+	}
+	if listingSeq != 0 || heartbeatSeq != 0 {
+		t.Errorf("seq columns: got %d/%d, want 0/0", listingSeq, heartbeatSeq)
+	}
+}
+
+func TestHandleRegisterNodePubkey_SPIFFEMissing_401(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "pubkey_401@test.com")
+	nodeID := seedPubkeyNode(t, db, pid)
+	keyB64, _ := testEd25519PubkeyB64(t)
+
+	w := postJSON(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id":    nodeID,
+		"public_key": keyB64,
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM node_protocol_keys WHERE node_id = $1`, nodeID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no key row after 401, got %d", count)
+	}
+}
+
+func TestHandleRegisterNodePubkey_SPIFFEMismatch_403(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "pubkey_403@test.com")
+	nodeID := seedPubkeyNode(t, db, pid)
+	keyB64, _ := testEd25519PubkeyB64(t)
+
+	w := postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id":    nodeID,
+		"public_key": keyB64,
+	}, "some-other-node")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+
+	var count int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM node_protocol_keys WHERE node_id = $1`, nodeID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected no key row after 403, got %d", count)
+	}
+}
+
+func TestHandleRegisterNodePubkey_FirstWriteWins(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "pubkey_fww@test.com")
+	nodeID := seedPubkeyNode(t, db, pid)
+	key1B64, key1Raw := testEd25519PubkeyB64(t)
+	key2B64, _ := testEd25519PubkeyB64(t)
+
+	// First enrollment wins.
+	w := postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": key1B64,
+	}, nodeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first enroll: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Re-enrolling the SAME key is an idempotent 200.
+	w = postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": key1B64,
+	}, nodeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("idempotent re-enroll: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// A DIFFERENT key is refused 409 — rotation is an operator action.
+	w = postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": key2B64,
+	}, nodeID)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("different key: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stored []byte
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT public_key FROM node_protocol_keys WHERE node_id = $1`, nodeID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("query stored key: %v", err)
+	}
+	if !bytes.Equal(stored, key1Raw) {
+		t.Error("stored key changed — first-write-wins violated")
+	}
+}
+
+func TestHandleRegisterNodePubkey_UnknownNode_404(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	keyB64, _ := testEd25519PubkeyB64(t)
+	const ghost = "99999999-9999-9999-9999-999999999999"
+
+	w := postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id":    ghost,
+		"public_key": keyB64,
+	}, ghost)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown node, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleRegisterNodePubkey_BadKey_400(t *testing.T) {
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "pubkey_bad@test.com")
+	nodeID := seedPubkeyNode(t, db, pid)
+
+	// Not base64.
+	w := postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": "not-base64!!!",
+	}, nodeID)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad base64: expected 400, got %d", w.Code)
+	}
+
+	// Wrong length.
+	w = postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": base64.StdEncoding.EncodeToString([]byte("short")),
+	}, nodeID)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("short key: expected 400, got %d", w.Code)
+	}
+
+	// Unsupported algo.
+	keyB64, _ := testEd25519PubkeyB64(t)
+	w = postJSONAs(t, ps.handleRegisterNodePubkey, "/nodes/pubkey", map[string]any{
+		"node_id": nodeID, "public_key": keyB64, "algo": "mldsa",
+	}, nodeID)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported algo: expected 400, got %d", w.Code)
+	}
+}
+
+// ── handleHeartbeat (B2 advisory load fields) ────────────────────────────────
+
+func TestHandleHeartbeat_RefreshesLoadState(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "hb_load@test.com")
+	nodeID := "40000000-0000-0000-0000-000000000010"
+	registerTestNode(t, ps, pid, nodeID, nil)
+
+	before := time.Now()
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+		"node_id":      nodeID,
+		"owner_active": true,
+		"cpu_pct":      37.5,
+	}, nodeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entry, ok := ps.registry.Get(nodeID)
+	if !ok {
+		t.Fatal("node missing from registry after heartbeat")
+	}
+	if !entry.OwnerActive {
+		t.Error("OwnerActive not refreshed from heartbeat")
+	}
+	if entry.CPUUtilPct != 37.5 {
+		t.Errorf("CPUUtilPct: got %v, want 37.5", entry.CPUUtilPct)
+	}
+	if entry.LoadSampledAt.Before(before) {
+		t.Errorf("LoadSampledAt not refreshed: %v", entry.LoadSampledAt)
+	}
+}
+
+func TestHandleHeartbeat_AbsentLoadFieldsDefaultZero(t *testing.T) {
+	t.Setenv("CONTROL_PLANE_REGISTER_SECRET", "test-secret")
+	db := connectAPITestDB(t)
+	ps := newAPIServer(t, db)
+	pid := seedAPIParticipant(t, db, "hb_load_absent@test.com")
+	nodeID := "40000000-0000-0000-0000-000000000011"
+	registerTestNode(t, ps, pid, nodeID, nil)
+
+	// Old-agent heartbeat: no owner_active / cpu_pct fields at all.
+	w := postJSONAs(t, ps.handleHeartbeat, "/nodes/heartbeat", map[string]any{
+		"node_id": nodeID,
+	}, nodeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (backward compatible), got %d: %s", w.Code, w.Body.String())
+	}
+
+	entry, ok := ps.registry.Get(nodeID)
+	if !ok {
+		t.Fatal("node missing from registry after heartbeat")
+	}
+	if entry.OwnerActive {
+		t.Error("OwnerActive should default false for old agents")
+	}
+	if entry.CPUUtilPct != 0 {
+		t.Errorf("CPUUtilPct should default 0 for old agents, got %v", entry.CPUUtilPct)
 	}
 }

@@ -29,11 +29,19 @@ type APIServer struct {
 // on the outer top-level mux. metricsAddr is the address for the separate plain
 // HTTP metrics server — not wrapped with mTLS.
 //
+// protocolV0 is the sohocloud-protocol /v0 surface (protocoladapter.NewHandler);
+// nil means /v0 is not mounted. The api package deliberately does NOT import
+// internal/protocoladapter — wiring happens in cmd/orchestrator/main.go — so
+// no import cycle can form. The handler carries its own SPIFFE middleware and
+// degraded-mode behavior; the "/v0/" pattern is more specific than the "/"
+// subtree below, so mounting it here changes nothing about the bespoke routes
+// (transitional coexistence).
+//
 // If idSource is nil the server runs in degraded mode: it binds plain HTTP,
 // SPIFFE-protected routes return 503, and /health reports
 // "identity":"unavailable". This happens when the SPIRE Workload API socket
 // cannot be reached at startup. See TODO 12.
-func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string, allowlistPath string) *APIServer {
+func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.Source, addr string, metricsAddr string, allowlistPath string, protocolV0 http.Handler) *APIServer {
 	// authMux: all routes that require a valid SPIFFE SVID.
 	authMux := http.NewServeMux()
 	registerNodeRoutes(authMux, db, registry)
@@ -43,8 +51,11 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 	top.HandleFunc("GET /health", healthHandler(idSource))
 	top.HandleFunc("GET /allowlist", handleGetAllowlist(allowlistPath))
 	top.HandleFunc("POST /nodes/claim", handleClaimNode(db, registry))
+	if protocolV0 != nil {
+		top.Handle("/v0/", protocolV0)
+	}
 	if idSource != nil {
-		top.Handle("/", identity.RequireSPIFFE(authMux))
+		top.Handle("/", identity.RequireSPIFFE(idSource.BundleSource(), authMux))
 	} else {
 		// Degraded mode: SPIRE Workload API unreachable. SPIFFE-protected
 		// routes return 503 with a descriptive body — see TODO 12.

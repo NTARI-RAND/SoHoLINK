@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -642,18 +643,24 @@ func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_Print3D(t *testing.T) {
 	}
 }
 
-func TestNodeRegistry_FindMatch_DoesNotExcludeOwnNode_Compute(t *testing.T) {
-	r := NewNodeRegistry()
+// ── B1: same-owner exclusion for ALL workload types ──────────────────────────
+// The C5 print-only carve-out is superseded: compute/storage/empty workload
+// requests also never match a node owned by the requesting participant.
 
-	// Same participant owns both nodes. Compute self-use is legitimate —
-	// ExcludeConsumerParticipantID must be ignored for non-print workloads.
-	consumerNode := newOnlineNode("node-consumer-compute", "US", 4, 8192, 50, false)
+func registerOwnerPair(t *testing.T, r *NodeRegistry) {
+	t.Helper()
+	consumerNode := newOnlineNode("node-consumer", "US", 4, 8192, 50, false)
 	consumerNode.ParticipantID = "consumer-participant-id"
 	r.Register(consumerNode)
 
-	otherNode := newOnlineNode("node-other-compute", "US", 4, 8192, 50, false)
+	otherNode := newOnlineNode("node-other", "US", 4, 8192, 50, false)
 	otherNode.ParticipantID = "other-participant-id"
 	r.Register(otherNode)
+}
+
+func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_Compute(t *testing.T) {
+	r := NewNodeRegistry()
+	registerOwnerPair(t, r)
 
 	candidates, err := r.FindMatch(MatchRequest{
 		WorkloadType:                 types.MarketplaceAppHosting,
@@ -664,7 +671,166 @@ func TestNodeRegistry_FindMatch_DoesNotExcludeOwnNode_Compute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindMatch: %v", err)
 	}
+	if len(candidates) != 1 || candidates[0].NodeID != "node-other" {
+		t.Errorf("expected only node-other for compute (same-owner excluded), got %+v", candidates)
+	}
+}
+
+func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_Storage(t *testing.T) {
+	r := NewNodeRegistry()
+	registerOwnerPair(t, r)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplaceObjectStorage,
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "consumer-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].NodeID != "node-other" {
+		t.Errorf("expected only node-other for storage (same-owner excluded), got %+v", candidates)
+	}
+}
+
+func TestNodeRegistry_FindMatch_ExcludesConsumerOwnNode_EmptyWorkloadType(t *testing.T) {
+	r := NewNodeRegistry()
+	registerOwnerPair(t, r)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "consumer-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].NodeID != "node-other" {
+		t.Errorf("expected only node-other for empty workload type (same-owner excluded), got %+v", candidates)
+	}
+}
+
+func TestNodeRegistry_FindMatch_NonOwnerStillMatches(t *testing.T) {
+	r := NewNodeRegistry()
+	registerOwnerPair(t, r)
+
+	candidates, err := r.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplaceAppHosting,
+		CPUCores:                     1,
+		RAMMB:                        1024,
+		ExcludeConsumerParticipantID: "unrelated-participant-id",
+	})
+	if err != nil {
+		t.Fatalf("FindMatch: %v", err)
+	}
 	if len(candidates) != 2 {
-		t.Errorf("expected both nodes for compute (self-use legitimate), got %d", len(candidates))
+		t.Errorf("expected both nodes when requester owns neither, got %d", len(candidates))
+	}
+}
+
+// ── B2: UpdateLoad ────────────────────────────────────────────────────────────
+
+func TestNodeRegistry_UpdateLoad_ErrorOnUnknownNode(t *testing.T) {
+	r := NewNodeRegistry()
+	err := r.UpdateLoad("ghost-node", NodeLoadState{CPUUtilPct: 50})
+	if err == nil {
+		t.Fatal("expected error for unknown node, got nil")
+	}
+}
+
+func TestNodeRegistry_UpdateLoad_PersistsState(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+
+	sampledAt := time.Now()
+	if err := r.UpdateLoad("node-1", NodeLoadState{
+		OwnerActive: true,
+		CPUUtilPct:  42.5,
+		SampledAt:   sampledAt,
+	}); err != nil {
+		t.Fatalf("UpdateLoad: %v", err)
+	}
+
+	entry, ok := r.Get("node-1")
+	if !ok {
+		t.Fatal("Get: node-1 missing")
+	}
+	if !entry.OwnerActive {
+		t.Errorf("OwnerActive = false, want true")
+	}
+	if entry.CPUUtilPct != 42.5 {
+		t.Errorf("CPUUtilPct = %v, want 42.5", entry.CPUUtilPct)
+	}
+	if !entry.LoadSampledAt.Equal(sampledAt) {
+		t.Errorf("LoadSampledAt = %v, want %v", entry.LoadSampledAt, sampledAt)
+	}
+}
+
+// ── B4: AddInFlight / IsOnline / Get ─────────────────────────────────────────
+
+func TestNodeRegistry_AddInFlight_ClampsAtZero(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+
+	r.AddInFlight("node-1", -5)
+	if entry, _ := r.Get("node-1"); entry.InFlight != 0 {
+		t.Errorf("InFlight after negative-only delta = %d, want 0 (clamped)", entry.InFlight)
+	}
+
+	r.AddInFlight("node-1", +3)
+	r.AddInFlight("node-1", -1)
+	if entry, _ := r.Get("node-1"); entry.InFlight != 2 {
+		t.Errorf("InFlight = %d, want 2", entry.InFlight)
+	}
+
+	r.AddInFlight("node-1", -10)
+	if entry, _ := r.Get("node-1"); entry.InFlight != 0 {
+		t.Errorf("InFlight after over-decrement = %d, want 0 (clamped)", entry.InFlight)
+	}
+
+	// Missing node is a silent no-op, never a panic.
+	r.AddInFlight("ghost-node", +1)
+}
+
+func TestNodeRegistry_AddInFlight_Concurrent(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-1", "US", 8, 16384, 100, false))
+
+	const workers = 8
+	const perWorker = 100
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perWorker; j++ {
+				r.AddInFlight("node-1", +1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if entry, _ := r.Get("node-1"); entry.InFlight != workers*perWorker {
+		t.Errorf("InFlight = %d, want %d", entry.InFlight, workers*perWorker)
+	}
+}
+
+func TestNodeRegistry_IsOnline(t *testing.T) {
+	r := NewNodeRegistry()
+	r.Register(newOnlineNode("node-online", "US", 8, 16384, 100, false))
+
+	offline := newOnlineNode("node-offline", "US", 8, 16384, 100, false)
+	offline.Status = "offline"
+	r.Register(offline)
+
+	if !r.IsOnline("node-online") {
+		t.Error("IsOnline(node-online) = false, want true")
+	}
+	if r.IsOnline("node-offline") {
+		t.Error("IsOnline(node-offline) = true, want false")
+	}
+	if r.IsOnline("node-missing") {
+		t.Error("IsOnline(node-missing) = true, want false")
 	}
 }
