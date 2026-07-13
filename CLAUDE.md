@@ -243,7 +243,7 @@ the diff was reverted and re-applied without `gofmt -w`.
 - **Module:** `github.com/NetworkTheoryAppliedResearchInstitute/soholink`
 - **Domain:** soholink.org
 - **Trust domain:** spiffe://soholink.org
-- **Working branch:** master
+- **Working branch:** main (renamed from `master` 2026-07-12; GitHub redirects old refs, open PRs were retargeted automatically, and the `~DEFAULT_BRANCH` rulesets followed the rename. Historical references to `master` in the session records below are left as written.)
 
 ## Technology Stack
 | Layer | Technology |
@@ -265,6 +265,13 @@ the diff was reverted and re-applied without `gofmt -w`.
 ## Architectural Philosophy — Janus Facing Application
 SoHoLINK was built as a Janus Facing Application (JFA) as defined by NTARI document
 P3-011. Reference: https://www.ntari.org/post/janusfacingapplications
+
+**Conformance self-description: see `CONFORMANCE.md`** — the repo's role
+declaration in the unified architecture's terms (coordinator of a JFA
+substrate), the invariant-to-binding table, and the named stand-ins. Per the
+architecture's ordering rule it precedes product-specific description; per its
+legibility rule, a change that alters any binding in CONFORMANCE.md updates
+that file in the same PR.
 
 Under the resolved Substrate architecture (NTARI, 2026-07-04), the JFA member
 economy is a FRONTEND concern, and the frontend is Cloudy. Cloudy owns the
