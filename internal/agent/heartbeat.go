@@ -154,16 +154,31 @@ func (a *HeartbeatAgent) Register(ctx context.Context) error {
 // push updated opt-out state when stale and request a full printer re-report
 // when the hash does not match. Returned opt-out updates are applied to
 // optOutStore and persisted to disk.
+//
+// It also carries two ADVISORY load fields — owner_active and cpu_pct — that
+// feed the orchestrator's soft idle-first scoring. They are transitional
+// JSON-heartbeat fields only: the signed protocol Heartbeat (sohocloud
+// liveness.Heartbeat) is untouched, so no float ever enters the canonical
+// byte format. A sampling failure sends cpu_pct=100 (conservatively busy)
+// rather than a false idle claim.
 func (a *HeartbeatAgent) Heartbeat(ctx context.Context) error {
 	var version int
 	if a.optOutStore != nil {
 		version = a.optOutStore.Get().Version
 	}
 
+	cpuPct, err := sampleCPUPct(ctx)
+	if err != nil {
+		log.Printf("heartbeat: cpu sample failed, reporting busy: %v", err)
+		cpuPct = 100.0
+	}
+
 	payload := map[string]any{
 		"node_id":         a.cfg.NodeID,
 		"opt_out_version": version,
 		"printer_hash":    PrinterHash(a.hw.Printers),
+		"owner_active":    DetectOwnerActive(),
+		"cpu_pct":         cpuPct,
 	}
 
 	data, err := json.Marshal(payload)

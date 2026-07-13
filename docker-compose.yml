@@ -108,6 +108,12 @@ services:
       dockerfile: Dockerfile.orchestrator
     restart: unless-stopped
     env_file: .env
+    # OPERATOR STEP (feat/protocol-integration): the orchestrator now REQUIRES
+    # COORDINATOR_SIGNING_KEY in .env (128-hex Ed25519 private key; signs the
+    # protocol Assignment offers served on /v0) and reads COORDINATOR_ID
+    # (default "soholink"). Secrets stay in .env, never committed here. Reuse
+    # the governance console's COORDINATOR_SIGNING_KEY value so assignments
+    # and fee declarations verify against the same coordinator public key.
     environment:
       INTERNAL_ADDR: ":8083"
     expose:

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/agent"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
@@ -30,10 +31,24 @@ const (
 	SLAPremium  SLATier = 3 // three nodes
 )
 
+// PlacementContext carries requester-side soft signals into the scheduler.
+// Defined here (not in internal/scheduler) because the scheduler imports the
+// orchestrator package; defining it scheduler-side would create an import
+// cycle. All fields are soft: empty values simply contribute nothing to the
+// locality score. RequesterCountry is NEVER copied into
+// MatchRequest.CountryConstraint — the hard residency filter stays a
+// consumer-stated constraint, not an inferred one.
+type PlacementContext struct {
+	RequesterParticipantID string
+	RequesterRegion        string
+	RequesterCountry       string
+}
+
 // ScheduleFunc scores and ranks a candidate list, returning the top N nodes
 // for the given tier. Injected at construction to avoid a circular import
-// between the orchestrator and scheduler packages.
-type ScheduleFunc func(candidates []NodeEntry, tier SLATier) ([]NodeEntry, error)
+// between the orchestrator and scheduler packages. pctx supplies requester
+// locality for soft scoring; pass PlacementContext{} when geo is irrelevant.
+type ScheduleFunc func(candidates []NodeEntry, tier SLATier, pctx PlacementContext) ([]NodeEntry, error)
 
 // SubmitJobRequest describes a consumer's workload placement request.
 type SubmitJobRequest struct {
@@ -191,7 +206,7 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		return SubmitJobResponse{}, fmt.Errorf("find nodes: %w", err)
 	}
 
-	scheduled, err := o.schedule(candidates, SLAStandard)
+	scheduled, err := o.schedule(candidates, SLAStandard, o.requesterPlacementContext(ctx, req.ConsumerID))
 	if err != nil {
 		return SubmitJobResponse{}, fmt.Errorf("schedule: %w", err)
 	}
@@ -302,6 +317,12 @@ func (o *Orchestrator) SubmitJob(ctx context.Context, req SubmitJobRequest) (Sub
 		return SubmitJobResponse{}, fmt.Errorf("commit transaction: %w", err)
 	}
 
+	// Advisory in-flight counter (B4): count the committed placement against
+	// the chosen node so the scheduler's per-in-flight penalty spreads load.
+	// Both scheduled and awaiting_confirmation placements count — the node is
+	// spoken for until the job reaches a terminal-for-placement state.
+	o.registry.AddInFlight(node.NodeID, +1)
+
 	// Placement succeeded and is durably committed — record the placed job's
 	// shape fire-and-forget. Runs only on the committed path so the record
 	// reflects a real, persisted job_id.
@@ -345,6 +366,28 @@ func canonicalJobSpecHash(req SubmitJobRequest) ([]byte, error) {
 	return h[:], nil
 }
 
+// requesterPlacementContext builds the soft-locality context for the
+// scheduler from the requester's participant row. The geo columns (migration
+// 027) are nullable and unpopulated until the portal collects them; empty
+// values mean the locality term contributes 0. A lookup failure degrades to
+// an empty context with a warning — locality is a soft signal and must never
+// fail placement.
+func (o *Orchestrator) requesterPlacementContext(ctx context.Context, participantID string) PlacementContext {
+	pctx := PlacementContext{RequesterParticipantID: participantID}
+	if o.db == nil || participantID == "" {
+		return pctx
+	}
+	if err := o.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(country_code, ''), COALESCE(region, '') FROM participants WHERE id = $1`,
+		participantID,
+	).Scan(&pctx.RequesterCountry, &pctx.RequesterRegion); err != nil {
+		slog.Warn("placement context: requester geo lookup failed; locality contributes 0",
+			"participant_id", participantID, "error", err)
+		pctx.RequesterCountry, pctx.RequesterRegion = "", ""
+	}
+	return pctx
+}
+
 // RerouteDeclinedJob attempts to find a new node for a job in 'declined' status.
 // It reads the job's stored spec, queries job_node_declines for all nodes that
 // have already declined, then calls FindMatch with those nodes excluded.
@@ -366,14 +409,15 @@ func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) err
 		countryConstraint     string
 		specHash              []byte
 		consumerParticipantID string
+		previousNodeID        string
 	)
 	err := o.db.Pool.QueryRow(ctx,
 		`SELECT workload_type, COALESCE(cpu_cores, 0), COALESCE(ram_mb, 0),
 		        COALESCE(storage_gb, 0), gpu_required, COALESCE(country_constraint, ''),
-		        spec_hash, COALESCE(participant_id::text, '')
+		        spec_hash, COALESCE(participant_id::text, ''), COALESCE(node_id::text, '')
 		 FROM jobs WHERE id = $1`,
 		jobID,
-	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &specHash, &consumerParticipantID)
+	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &specHash, &consumerParticipantID, &previousNodeID)
 	if err != nil {
 		return fmt.Errorf("reroute: read job %s: %w", jobID, err)
 	}
@@ -408,18 +452,24 @@ func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) err
 		ExcludeConsumerParticipantID: consumerParticipantID,
 	})
 	if findErr != nil {
-		// No eligible nodes remain — fail the job.
-		if _, err := o.db.Pool.Exec(ctx,
+		// No eligible nodes remain — fail the job. The guarded UPDATE means a
+		// concurrent worker that already moved the row forward makes this a
+		// no-op; the in-flight decrement fires only when we actually flipped it.
+		ct, err := o.db.Pool.Exec(ctx,
 			`UPDATE jobs SET status = 'failed'::job_status, updated_at = NOW()
 			 WHERE id = $1 AND status = 'declined'::job_status`,
 			jobID,
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("reroute: fail job %s: %w", jobID, err)
+		}
+		if ct.RowsAffected() == 1 && previousNodeID != "" {
+			o.registry.AddInFlight(previousNodeID, -1)
 		}
 		return nil
 	}
 
-	scheduled, err := o.schedule(candidates, SLAStandard)
+	scheduled, err := o.schedule(candidates, SLAStandard, o.requesterPlacementContext(ctx, consumerParticipantID))
 	if err != nil {
 		return fmt.Errorf("reroute: schedule %s: %w", jobID, err)
 	}
@@ -430,34 +480,212 @@ func (o *Orchestrator) RerouteDeclinedJob(ctx context.Context, jobID string) err
 		return fmt.Errorf("reroute: generate token: %w", err)
 	}
 
-	var printerID string
-	if err := o.db.Pool.QueryRow(ctx,
-		`SELECT printer_id FROM node_printers
-		 WHERE node_id = $1 AND enabled = TRUE
-		 ORDER BY printer_id LIMIT 1`,
-		node.NodeID,
-	).Scan(&printerID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("reroute: node %s passed FindMatch but has no enabled printer (registry/DB drift)", node.NodeID)
+	isPrint := workloadType == string(types.MarketplacePrintTraditional) ||
+		workloadType == string(types.MarketplacePrint3D)
+
+	var ct pgconn.CommandTag
+	if isPrint {
+		var printerID string
+		if err := o.db.Pool.QueryRow(ctx,
+			`SELECT printer_id FROM node_printers
+			 WHERE node_id = $1 AND enabled = TRUE
+			 ORDER BY printer_id LIMIT 1`,
+			node.NodeID,
+		).Scan(&printerID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("reroute: node %s passed FindMatch but has no enabled printer (registry/DB drift)", node.NodeID)
+			}
+			return fmt.Errorf("reroute: resolve printer: %w", err)
 		}
-		return fmt.Errorf("reroute: resolve printer: %w", err)
+
+		deadline := time.Now().Add(o.confirmationWindow)
+		ct, err = o.db.Pool.Exec(ctx,
+			`UPDATE jobs
+			 SET node_id              = $1,
+			     job_token            = $2,
+			     printer_id           = $3,
+			     confirmation_deadline = $4,
+			     status               = 'awaiting_confirmation'::job_status,
+			     updated_at           = NOW()
+			 WHERE id = $5 AND status = 'declined'::job_status`,
+			node.NodeID, token, printerID, deadline, jobID,
+		)
+		if err != nil {
+			return fmt.Errorf("reroute: update job %s: %w", jobID, err)
+		}
+	} else {
+		// Compute/storage declines (protocol Decline path) carry no printer
+		// and no per-job confirmation: rebind straight back to scheduled so
+		// the next node's poll picks the job up.
+		ct, err = o.db.Pool.Exec(ctx,
+			`UPDATE jobs
+			 SET node_id    = $1,
+			     job_token  = $2,
+			     status     = 'scheduled'::job_status,
+			     updated_at = NOW()
+			 WHERE id = $3 AND status = 'declined'::job_status`,
+			node.NodeID, token, jobID,
+		)
+		if err != nil {
+			return fmt.Errorf("reroute: update job %s: %w", jobID, err)
+		}
 	}
 
-	deadline := time.Now().Add(o.confirmationWindow)
-	if _, err := o.db.Pool.Exec(ctx,
-		`UPDATE jobs
-		 SET node_id              = $1,
-		     job_token            = $2,
-		     printer_id           = $3,
-		     confirmation_deadline = $4,
-		     status               = 'awaiting_confirmation'::job_status,
-		     updated_at           = NOW()
-		 WHERE id = $5 AND status = 'declined'::job_status`,
-		node.NodeID, token, printerID, deadline, jobID,
-	); err != nil {
-		return fmt.Errorf("reroute: update job %s: %w", jobID, err)
+	// Advisory in-flight rebind accounting (B4): only when the guarded UPDATE
+	// actually moved the row. The previous node may already have been
+	// decremented by a protocol Decline — AddInFlight clamps at zero, and the
+	// counter is a soft scheduling signal, so the occasional double decrement
+	// is accepted rather than tracked.
+	if ct.RowsAffected() == 1 {
+		o.registry.AddInFlight(node.NodeID, +1)
+		if previousNodeID != "" {
+			o.registry.AddInFlight(previousNodeID, -1)
+		}
 	}
 	return nil
+}
+
+// RescheduleStaleJob rebinds a scheduled job away from a node that is no
+// longer online (evicted from the registry or marked offline). Mirrors
+// RerouteDeclinedJob's exclusion + guarded-UPDATE shape, with one deliberate
+// divergence: when no candidates remain the job is LEFT in scheduled with a
+// warning rather than failed — under idle-first placement a machine that went
+// quiet may wake and reclaim its queue, and the reaper retries on every tick.
+//
+// Print workloads are skipped: a scheduled print job's node binding was
+// produced by (or gated on) the contributor-confirmation flow, and silently
+// rebinding it would bypass that consent path.
+func (o *Orchestrator) RescheduleStaleJob(ctx context.Context, jobID, oldNodeID string) error {
+	var (
+		workloadType          string
+		cpuCores              int
+		ramMB                 int
+		storageGB             int
+		gpuRequired           bool
+		countryConstraint     string
+		consumerParticipantID string
+	)
+	err := o.db.Pool.QueryRow(ctx,
+		`SELECT workload_type, COALESCE(cpu_cores, 0), COALESCE(ram_mb, 0),
+		        COALESCE(storage_gb, 0), gpu_required, COALESCE(country_constraint, ''),
+		        COALESCE(participant_id::text, '')
+		 FROM jobs WHERE id = $1`,
+		jobID,
+	).Scan(&workloadType, &cpuCores, &ramMB, &storageGB, &gpuRequired, &countryConstraint, &consumerParticipantID)
+	if err != nil {
+		return fmt.Errorf("reschedule stale: read job %s: %w", jobID, err)
+	}
+
+	if workloadType == string(types.MarketplacePrintTraditional) ||
+		workloadType == string(types.MarketplacePrint3D) {
+		return nil
+	}
+
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT node_id FROM job_node_declines WHERE job_id = $1`, jobID)
+	if err != nil {
+		return fmt.Errorf("reschedule stale: read declines for %s: %w", jobID, err)
+	}
+	excludedIDs := []string{oldNodeID}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("reschedule stale: scan decline: %w", err)
+		}
+		excludedIDs = append(excludedIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reschedule stale: declines rows: %w", err)
+	}
+
+	candidates, findErr := o.registry.FindMatch(MatchRequest{
+		WorkloadType:                 types.MarketplaceWorkloadType(workloadType),
+		CountryConstraint:            countryConstraint,
+		CPUCores:                     cpuCores,
+		RAMMB:                        ramMB,
+		StorageGB:                    storageGB,
+		GPURequired:                  gpuRequired,
+		ExcludedNodeIDs:              excludedIDs,
+		ExcludeConsumerParticipantID: consumerParticipantID,
+	})
+	if findErr != nil {
+		// Deliberate divergence from RerouteDeclinedJob: leave the job
+		// scheduled and retry next tick — the bound node may wake.
+		slog.Warn("reschedule stale: no candidates; leaving job scheduled",
+			"job_id", jobID, "node_id", oldNodeID, "error", findErr)
+		return nil
+	}
+
+	scheduled, err := o.schedule(candidates, SLAStandard, o.requesterPlacementContext(ctx, consumerParticipantID))
+	if err != nil {
+		return fmt.Errorf("reschedule stale: schedule %s: %w", jobID, err)
+	}
+	node := scheduled[0]
+
+	token, err := GenerateJobToken(jobID, node.NodeID, jobTokenTTL, o.tokenSecret)
+	if err != nil {
+		return fmt.Errorf("reschedule stale: generate token: %w", err)
+	}
+
+	ct, err := o.db.Pool.Exec(ctx,
+		`UPDATE jobs
+		 SET node_id    = $1,
+		     job_token  = $2,
+		     updated_at = NOW()
+		 WHERE id = $3 AND status = 'scheduled'::job_status AND node_id = $4`,
+		node.NodeID, token, jobID, oldNodeID,
+	)
+	if err != nil {
+		return fmt.Errorf("reschedule stale: update job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 1 {
+		o.registry.AddInFlight(node.NodeID, +1)
+		o.registry.AddInFlight(oldNodeID, -1)
+	}
+	return nil
+}
+
+// rescheduleStale finds scheduled non-print jobs bound to nodes that are no
+// longer online and rebinds each via RescheduleStaleJob. Called on every tick
+// of StartDeclineRerouteLoop, after expireDispatched and before
+// expirePickedUp/rerouteDeclined.
+func (o *Orchestrator) rescheduleStale(ctx context.Context) {
+	rows, err := o.db.Pool.Query(ctx,
+		`SELECT id, COALESCE(node_id::text, '') FROM jobs
+		 WHERE status = 'scheduled'::job_status
+		   AND workload_type NOT IN ('print_traditional'::workload_type, 'print_3d'::workload_type)
+		 LIMIT 100`)
+	if err != nil {
+		slog.Error("reschedule stale: query scheduled jobs", "error", err)
+		return
+	}
+	type binding struct{ jobID, nodeID string }
+	var bindings []binding
+	for rows.Next() {
+		var b binding
+		if err := rows.Scan(&b.jobID, &b.nodeID); err != nil {
+			slog.Error("reschedule stale: scan job", "error", err)
+			rows.Close()
+			return
+		}
+		bindings = append(bindings, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		slog.Error("reschedule stale: rows", "error", err)
+		return
+	}
+
+	for _, b := range bindings {
+		if b.nodeID == "" || o.registry.IsOnline(b.nodeID) {
+			continue
+		}
+		if err := o.RescheduleStaleJob(ctx, b.jobID, b.nodeID); err != nil {
+			slog.Error("reschedule stale job", "job_id", b.jobID, "node_id", b.nodeID, "error", err)
+		}
+	}
 }
 
 // rerouteDeclined finds all declined jobs and attempts to reroute each one.
@@ -695,12 +923,13 @@ func (o *Orchestrator) expirePickedUp(ctx context.Context) {
 
 // StartDeclineRerouteLoop runs a background goroutine that periodically (a)
 // auto-declines awaiting_confirmation jobs whose deadline has passed, (b)
-// reverts stale dispatched jobs back to scheduled, (c) auto-advances stale
-// picked_up print jobs to delivered, and (d) re-dispatches declined jobs to a
-// different node. All four passes run on the same 30s ticker in
-// expire-then-reroute order. Stops when ctx is cancelled. Run only from
-// cmd/orchestrator — not from cmd/portal, which has a separate registry
-// instance that never receives agent heartbeats.
+// reverts stale dispatched jobs back to scheduled, (c) rebinds scheduled jobs
+// whose node is no longer online, (d) auto-advances stale picked_up print
+// jobs to delivered, and (e) re-dispatches declined jobs to a different node.
+// All five passes run on the same 30s ticker in expire-then-reroute order.
+// Stops when ctx is cancelled. Run only from cmd/orchestrator — not from
+// cmd/portal, which has a separate registry instance that never receives
+// agent heartbeats.
 func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -712,6 +941,7 @@ func (o *Orchestrator) StartDeclineRerouteLoop(ctx context.Context) {
 			case <-ticker.C:
 				o.expireConfirmations(ctx)
 				o.expireDispatched(ctx)
+				o.rescheduleStale(ctx)
 				o.expirePickedUp(ctx)
 				o.rerouteDeclined(ctx)
 			}
