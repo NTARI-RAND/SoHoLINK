@@ -36,7 +36,7 @@
   <div class="card" style="margin-bottom:1.5rem;">
     <div class="section-label">Assigned Node</div>
     {{if .NodeID}}
-      <p id="job-node" style="font-family:'JetBrains Mono',monospace;font-size:0.9rem;">{{.NodeID}}</p>
+      <p id="job-node" style="font-family:var(--mono);font-size:0.9rem;">{{.NodeID}}</p>
     {{else}}
       <p style="color:var(--muted);">Pending assignment</p>
     {{end}}
