@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SoHoLINK mark — four nodes (two warm "home" nodes in amber, two "link"
+  nodes in teal) federated by a mesh. Colors: amber #F4A93A, teal #3FC9B6.
+  For a single-color version, replace the fills/stroke with "currentColor".
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128" fill="none" role="img" aria-label="SoHoLINK">
+  <title>SoHoLINK</title>
+  <path d="M16 6L6 23M16 6l10 17M6 23h20M16 6v11M6 23l10-6M26 23l-10-6" stroke="#3FC9B6" stroke-opacity="0.35" stroke-width="1.1"/>
+  <circle cx="16" cy="6" r="3.2" fill="#F4A93A"/>
+  <circle cx="6" cy="23" r="3.2" fill="#3FC9B6"/>
+  <circle cx="26" cy="23" r="3.2" fill="#3FC9B6"/>
+  <circle cx="16" cy="17" r="2.4" fill="#F4A93A"/>
+</svg>
