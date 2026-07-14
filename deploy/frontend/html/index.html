@@ -621,5 +621,19 @@
 })();
 </script>
 
+<script>
+(function(){
+  var rail=document.getElementById('rail'); if(!rail) return;
+  fetch('/api/news').then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d||!d.items||!d.items.length) return; // keep the static fallback dispatches
+    var esc=function(s){var e=document.createElement('div');e.textContent=s||'';return e.innerHTML;};
+    rail.innerHTML=d.items.slice(0,8).map(function(it){
+      return '<article class="clip" role="listitem"><span class="tag">Dispatch</span>'
+        +'<p><a href="'+esc(it.url||'#')+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'+esc(it.title)+'</a></p>'
+        +'<span class="src">'+esc(it.source||'live feed')+'</span></article>';
+    }).join('');
+  }).catch(function(){});
+})();
+</script>
 </body>
 </html>

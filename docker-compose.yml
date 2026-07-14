@@ -173,6 +173,19 @@ services:
       - nginx
       - frontend
 
+  sitesvc:
+    build:
+      context: .
+      dockerfile: Dockerfile.sitesvc
+    restart: unless-stopped
+    environment:
+      SITESVC_ADDR: ":8095"
+      WAITLIST_FILE: "/data/waitlist.jsonl"
+    volumes:
+      - "D:/SoHoLINK-backups/sitesvc:/data"
+    expose:
+      - "8095"
+
 volumes:
   postgres_data:
   spire_data:
