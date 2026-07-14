@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator signup — SoHoLINK</title>
+<meta name="description" content="Federation opens when the network moves to post-quantum ML-DSA-65 keys with the Go 1.27 rollout. Join the operator waitlist.">
+<link rel="icon" type="image/svg+xml" href="/soholink-mark.svg">
+<meta name="theme-color" content="#0C1416">
+<style>
+  :root{
+    --ground:#0C1416; --surface:#101E22; --text:#E9EFEC; --muted:#8FA6A4; --faint:#5E7573;
+    --amber:#F4A93A; --amber-deep:#D98A1E; --teal:#3FC9B6; --line:rgba(63,201,182,.16); --line-strong:rgba(63,201,182,.30); --hair:rgba(233,239,236,.10);
+    --ff-display:"Helvetica Neue","Arial Nova",Helvetica,Arial,system-ui,sans-serif;
+    --ff-body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --ff-mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: light){:root{--ground:#EBF1F0;--surface:#FFF;--text:#0C1618;--muted:#4E6462;--faint:#829997;--amber:#B8720E;--amber-deep:#9A5E06;--teal:#12897A;--line:rgba(18,137,122,.2);--line-strong:rgba(18,137,122,.34);--hair:rgba(12,22,24,.12);}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--text);font-family:var(--ff-body);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column}
+  a{color:var(--teal);text-decoration:none} a:hover{color:var(--amber)}
+  a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:3px;border-radius:2px}
+  header{border-bottom:1px solid var(--hair)}
+  .wrap{max-width:640px;margin:0 auto;padding:0 24px;width:100%}
+  .nav{display:flex;align-items:center;height:64px}
+  .brand{display:flex;align-items:center;gap:11px;font-family:var(--ff-mono);font-weight:700;font-size:16px;color:var(--text)}
+  .brand svg{width:22px;height:22px}
+  main{flex:1;display:flex;align-items:center;padding:56px 0}
+  .eyebrow{font-family:var(--ff-mono);font-size:12.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--teal);margin:0 0 14px;display:flex;align-items:center;gap:.7em}
+  .eyebrow::before{content:"//";color:var(--faint);font-weight:700}
+  h1{font-family:var(--ff-display);font-weight:900;font-size:clamp(30px,6vw,46px);line-height:1.05;letter-spacing:-.028em;margin:0;text-wrap:balance}
+  h1 .warm{color:var(--amber)}
+  .lede{color:var(--muted);font-size:18px;margin:22px 0 0;max-width:52ch}
+  .note{margin-top:26px;border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:3px;background:var(--surface);padding:18px 20px;font-size:15.5px;color:var(--muted)}
+  .note b{color:var(--text)}
+  form{margin-top:30px;display:flex;gap:10px;flex-wrap:wrap}
+  input[type=email]{flex:1;min-width:220px;background:var(--surface);border:1px solid var(--line-strong);border-radius:3px;color:var(--text);font-family:var(--ff-body);font-size:16px;padding:13px 14px}
+  input[type=email]::placeholder{color:var(--faint)}
+  button{font-family:var(--ff-mono);font-size:14px;font-weight:600;letter-spacing:.02em;padding:13px 22px;border-radius:3px;border:0;background:var(--amber);color:#1a1206;cursor:pointer;transition:background .2s,transform .15s}
+  button:hover{background:var(--amber-deep);transform:translateY(-1px)}
+  button:disabled{opacity:.6;cursor:default;transform:none}
+  .msg{margin-top:14px;font-size:14.5px;min-height:1.2em}
+  .msg.ok{color:var(--teal)} .msg.err{color:var(--amber)}
+  .fine{margin-top:14px;font-family:var(--ff-mono);font-size:11.5px;color:var(--faint);letter-spacing:.04em}
+  .back{margin-top:34px;font-family:var(--ff-mono);font-size:13px}
+  footer{border-top:1px solid var(--hair)} footer .wrap{padding:22px 24px;font-family:var(--ff-mono);font-size:11.5px;color:var(--faint);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header><div class="wrap nav"><a class="brand" href="/">
+  <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6L6 23M16 6l10 17M6 23h20M16 6v11M6 23l10-6M26 23l-10-6" stroke="var(--line-strong)" stroke-width="1.1"/><circle cx="16" cy="6" r="3.2" fill="var(--amber)"/><circle cx="6" cy="23" r="3.2" fill="var(--teal)"/><circle cx="26" cy="23" r="3.2" fill="var(--teal)"/><circle cx="16" cy="17" r="2.4" fill="var(--amber)"/></svg>
+  <span>Soho<b>LINK</b></span></a></div></header>
+
+<main><div class="wrap">
+  <p class="eyebrow">Become an operator</p>
+  <h1>Federation isn't open <span class="warm">just yet.</span></h1>
+  <p class="lede">Coordinating a community's compute into a shared cloud means operators sign and verify everything they do. We're holding that door until the network's cryptography is future-proof.</p>
+
+  <div class="note">
+    <p style="margin:0 0 10px"><b>What we're waiting for.</b> Every operator key and signature moves to <b>ML-DSA-65</b> — the NIST post-quantum signature standard — for all keys across the federation. That lands with the <b>Go 1.27</b> release (expected 2026), when the stdlib ships it. We won't open real federation on Ed25519 that a future quantum computer could unwind.</p>
+    <p style="margin:0">Until then, enrollment (apply → register a 7-key ML-DSA-65 set → prove conformance) stays closed. Today's build runs on Ed25519 for development only.</p>
+  </div>
+
+  <p class="lede" style="margin-top:26px">Want in when it opens? Leave your email and we'll reach out the moment operator signup goes live.</p>
+  <form id="wl" novalidate>
+    <input type="email" id="email" name="email" placeholder="you@yourcommunity.org" autocomplete="email" required aria-label="Email address">
+    <button type="submit" id="submit">Join the waitlist</button>
+  </form>
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
+  <p class="fine">We store only your email, and only to notify you at launch. Nothing shared, nothing sold.</p>
+
+  <p class="back"><a href="/">← Back to SoHoLINK</a> &nbsp;·&nbsp; <a href="https://github.com/NTARI-RAND/sohocloud-protocol/blob/main/SPEC.md" target="_blank" rel="noopener">Read the protocol spec ↗</a></p>
+</div></main>
+
+<footer><div class="wrap"><span>SohoCloud Protocol · copyleft commons</span><span>Federation opens with post-quantum keys.</span></div></footer>
+
+<script>
+(function(){
+  var f=document.getElementById('wl'),e=document.getElementById('email'),b=document.getElementById('submit'),m=document.getElementById('msg');
+  f.addEventListener('submit',function(ev){
+    ev.preventDefault();
+    var email=(e.value||'').trim();
+    if(email.indexOf('@')<1){m.className='msg err';m.textContent='Please enter a valid email.';return;}
+    b.disabled=true;m.className='msg';m.textContent='Saving…';
+    fetch('/api/waitlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})})
+      .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});})
+      .then(function(res){
+        if(res.ok){m.className='msg ok';m.textContent='You’re on the list. We’ll email you when operator signup opens.';f.reset();}
+        else{m.className='msg err';m.textContent=(res.j&&res.j.error)||'Something went wrong — please try again.';b.disabled=false;}
+      })
+      .catch(function(){m.className='msg err';m.textContent='Network error — please try again.';b.disabled=false;});
+  });
+})();
+</script>
+</body>
+</html>
