@@ -233,3 +233,44 @@ func TestAdminConsole_RejectsNonLoopbackSource(t *testing.T) {
 		}
 	}
 }
+
+// TestAdminConsole_StaticAssets_ServedWhenConfigured — the admin templates
+// reference /static/css/portal.css and the brand mark; without this route the
+// console renders as bare unstyled HTML (found live 2026-07-14: the browser
+// showed what looked like "no UI"). ConfigureConsole derives the static dir
+// beside the templates dir, so the harness's real web/templates wiring serves
+// the real web/static.
+func TestAdminConsole_StaticAssets_ServedWhenConfigured(t *testing.T) {
+	h := newConsoleGovServer(t, sampleGovRead(), nil)
+	rec := getGov(h, "/static/css/portal.css")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /static/css/portal.css: status %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "--amber") {
+		t.Errorf("portal.css served but missing the design tokens (no --amber)")
+	}
+}
+
+// TestAdminConsole_Static404WhenUnconfigured — a POST-only server (no
+// ConfigureConsole) must 404 the static route — harmless, alongside the
+// unwired console pages' own 500 "template not found".
+func TestAdminConsole_Static404WhenUnconfigured(t *testing.T) {
+	g := newTestGovServer(t, &fakeGovRepo{}, notify.NewLogNotifier())
+	rec := getGov(govMux(g), "/static/css/portal.css")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unconfigured GET /static/css/portal.css: status %d, want 404", rec.Code)
+	}
+}
+
+// TestAdminConsole_StaticRejectsNonLoopbackSource — the static route sits on
+// the same loopback-source-guarded mux as everything else on :8090.
+func TestAdminConsole_StaticRejectsNonLoopbackSource(t *testing.T) {
+	h := newConsoleGovServer(t, sampleGovRead(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/static/css/portal.css", nil)
+	req.RemoteAddr = "203.0.113.9:4444" // NOT loopback
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("static from non-loopback source: status %d, want 403", rec.Code)
+	}
+}

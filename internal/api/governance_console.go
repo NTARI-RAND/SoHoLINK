@@ -6,7 +6,9 @@ import (
 	"errors"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -81,7 +83,34 @@ func (g *GovernanceServer) ConfigureConsole(readRepo consoleGovRepo, templatesDi
 	}
 	g.consoleRepo = readRepo
 	g.templatePaths = paths
+	// The admin templates reference /static/css/portal.css and the brand mark;
+	// serve them from the web/static directory beside the templates dir, the
+	// same web/ layout the portal serves (internal/portal/server.go).
+	if templatesDir != "" {
+		g.staticDir = filepath.Join(templatesDir, "..", "static")
+		// Surface a missing static dir at configure time. Without this the only
+		// symptom is per-request 404s and an unstyled console — the silent
+		// regression this route exists to prevent.
+		if _, err := os.Stat(g.staticDir); err != nil {
+			slog.Warn("governance console static dir missing; console pages will render unstyled",
+				"dir", g.staticDir, "error", err)
+		}
+	}
 	return nil
+}
+
+// handleStatic serves the console pages' static assets (the portal design-system
+// CSS and the brand mark) from the directory ConfigureConsole derived beside the
+// templates dir. Without ConfigureConsole the dir is unset and the route 404s —
+// harmless on a POST-only server, alongside the unwired console pages' own 500
+// "template not found". Reached only through the loopback-bound,
+// loopback-source-guarded mux.
+func (g *GovernanceServer) handleStatic(w http.ResponseWriter, r *http.Request) {
+	if g.staticDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	http.StripPrefix("/static/", http.FileServer(http.Dir(g.staticDir))).ServeHTTP(w, r)
 }
 
 // renderAdmin builds a fresh template set from admin_layout.html and the

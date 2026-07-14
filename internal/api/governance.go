@@ -64,9 +64,11 @@ type GovernanceServer struct {
 	// Console (Stage-4 step 3) GET-page fields, populated by ConfigureConsole
 	// (governance_console.go). Zero-valued on a POST-only server: the GET routes
 	// then render a 500 "template not found", the same failure mode as the portal
-	// with a missing template. These stay on the LOCAL-ONLY :8090 mux.
+	// with a missing template, and the static-asset route 404s. These stay on
+	// the LOCAL-ONLY :8090 mux.
 	consoleRepo   consoleGovRepo
 	templatePaths []string
+	staticDir     string
 
 	// sounding is the demand-sounding read model behind GET /admin/sounding,
 	// populated by ConfigureSounding (governance_sounding.go). Nil on a server
@@ -160,6 +162,14 @@ func (g *GovernanceServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/operators/{id}", g.handleAdminOperatorDetailPage)
 	mux.HandleFunc("GET /admin/fees", g.handleAdminFeesPage)
 	mux.HandleFunc("GET /admin/messaging", g.handleAdminMessagingPage)
+
+	// Console static assets (the portal design-system CSS and the brand mark the
+	// admin templates reference), served from the web/static directory
+	// ConfigureConsole derives beside the templates dir — mirroring the portal's
+	// /static wiring (internal/portal/server.go). Zero-valued on a POST-only
+	// server: the route then 404s — harmless, like the unwired console pages
+	// above (which fail 500). LOCAL-ONLY like everything on this mux.
+	mux.HandleFunc("GET /static/", g.handleStatic)
 
 	// Demand-sounding dashboard (governance_sounding.go). Server-rendered SVG
 	// charts over the migration-025 hypertables; LOCAL-ONLY like the rest.
