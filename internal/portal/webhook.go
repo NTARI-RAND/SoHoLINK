@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -13,9 +14,14 @@ import (
 
 // handleStripeWebhook verifies the Stripe-Signature header and dispatches
 // V1 webhook events. Returns 400 on signature failure so Stripe retries;
-// returns 200 on success or for unrecognised event types.
+// returns 413 on an oversized body and 200 on success or unrecognised events.
 func (ps *PortalServer) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	if err := payment.HandleV1Event(w, r, ps.webhookSecret, ps.onStripeEvent); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "webhook body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "webhook error", http.StatusBadRequest)
 		return
 	}
