@@ -30,7 +30,9 @@ type ThinEventHandler func(ctx context.Context, thinEvent *stripe.ThinEvent) err
 
 // HandleV1Event reads the request body, verifies the Stripe-Signature header
 // using webhookSecret, constructs the V1 Event, and dispatches it to handler.
-// Returns a non-nil error if signature validation fails or handler returns an error.
+// Bodies default to 64 KiB; WebhookOptions can override this local budget.
+// Overflow returns a wrapped *http.MaxBytesError, detectable with errors.As,
+// without dispatching an event. Signature and handler failures also return errors.
 func HandleV1Event(w http.ResponseWriter, r *http.Request, webhookSecret string, handler V1EventHandler, options ...WebhookOptions) error {
 	body, err := readWebhookBody(w, r, options)
 	if err != nil {
@@ -51,6 +53,9 @@ func HandleV1Event(w http.ResponseWriter, r *http.Request, webhookSecret string,
 // HandleThinEvent reads the request body, verifies the Stripe-Signature header
 // using webhookSecret, parses the thin event, and dispatches it to handler.
 // Use this for V2 event destinations (account.updated, capability.updated thin events).
+// Bodies default to 64 KiB; WebhookOptions can override this local budget.
+// Overflow returns a wrapped *http.MaxBytesError, detectable with errors.As,
+// without dispatching an event.
 func (c *Client) HandleThinEvent(w http.ResponseWriter, r *http.Request, webhookSecret string, handler ThinEventHandler, options ...WebhookOptions) error {
 	body, err := readWebhookBody(w, r, options)
 	if err != nil {
