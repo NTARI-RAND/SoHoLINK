@@ -15,8 +15,8 @@ The webhook default follows [Stripe's Go webhook example](https://pkg.go.dev/git
 The submission result currently contains four string fields: job ID, node ID,
 job token and provider Stripe account ID. A 1 MiB response budget leaves ample
 room for that receipt; diagnostics use a separate, smaller budget. Operators
-should check their actual event/response sizes before rollout and deliberately
-configure a larger budget if required.
+should check their actual event/response sizes before rollout. A larger budget
+currently requires changing the Go call sites described below.
 
 Reads detect overflow from actual bytes, including chunked requests/responses
 and absent Content-Length. They read at most the budget plus one byte to
@@ -54,7 +54,10 @@ last nonzero value for each field wins. Negative budgets fail before reading a
 webhook or sending a submission. Orchestrator budgets must also be less than
 `math.MaxInt64`, leaving room for the overflow-detection byte. Configure clients
 before concurrent use. The portal binary currently uses defaults; no new
-environment variables or live Stripe settings are introduced.
+environment variables or live Stripe settings are introduced. To change its
+webhook budget, pass `WebhookOptions` from `internal/portal/webhook.go`. To change
+its submission budgets, pass `BodyLimits` when constructing the client in
+`cmd/portal/main.go`. Rebuild and redeploy the portal after either code change.
 
 Signature failures retain HTTP 400; valid unhandled event types retain HTTP 200.
 Oversized payloads return HTTP 413 without exposing their contents. Custom thin
@@ -79,6 +82,5 @@ Stripe events, without contacting a payment service.
 
 The limits add no dependency, change no fee/settlement rule or conformance
 binding, and preserve the portal's transitional frontend ownership described in
-`CONFORMANCE.md`. Availability-preview PR #28 touches the same client; any
-integration should preserve these bounds for submission and separately assess
-the new preview response shape.
+`CONFORMANCE.md`. Other operations added to the same orchestrator client must
+preserve submission bounds and assess their own response shapes separately.
