@@ -35,12 +35,12 @@ func TestWebhookBodyLimit(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			for _, size := range []int{65535, 65536, 65537} {
-				for _, chunked := range []bool{false, true} {
-					t.Run(strings.Join([]string{sizeLabel(size), map[bool]string{false: "declared", true: "chunked"}[chunked]}, "/"), func(t *testing.T) {
+				for _, noLength := range []bool{false, true} {
+					t.Run(strings.Join([]string{sizeLabel(size), map[bool]string{false: "declared", true: "no-length"}[noLength]}, "/"), func(t *testing.T) {
 						payload := v1Payload()
 						payload += strings.Repeat(" ", size-len(payload))
 						req := signedRequest(payload)
-						if chunked {
+						if noLength {
 							req.ContentLength = -1
 							req.TransferEncoding = []string{"chunked"}
 						}
