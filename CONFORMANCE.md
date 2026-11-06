@@ -57,8 +57,10 @@ create jobs, generate job tokens, touch payments, or record submitted demand.
 `TestJobPreflightIsReadOnlyAndRechecksAvailability` exercises it with no DB,
 token secret, or scheduler. Confirmation uses `SubmitJob` again, so a preview
 cannot bypass a later opt-out or image change. All new portal routes require
-the existing member session. The UI remains frontend-owned transitional code;
-no person fields or preview messages are added to the shared protocol.
+the existing member session. The coordinator houses the blocker-description
+catalog, which the transitional frontend portal alone displays. These sentences
+are presentation text, never shared protocol fields. No person fields or preview
+messages are added to the shared protocol.
 
 **Limits:** previews that cannot be placed are not counted as rejections in demand sounding.
 The existing submission path uses `SLAStandard` (one node).
