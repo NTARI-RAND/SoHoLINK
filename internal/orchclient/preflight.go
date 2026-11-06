@@ -42,5 +42,9 @@ func (c *Client) preflightRequest(ctx context.Context, req orchestrator.SubmitJo
 		return nil, fmt.Errorf("orchclient: build preflight: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	return c.httpClient.Do(httpReq)
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("orchclient: preflight: %w", err)
+	}
+	return resp, nil
 }
