@@ -27,6 +27,23 @@ python3 -m unittest discover -s test -p 'test_api_client.py'
 
 These tests use local HTTP fixtures; they do not call a deployed API.
 
+### Local runner regression checks
+
+These Python and shell regressions are separate from the Go suite. Run them
+explicitly from the repository root. Create an isolated Python environment with
+the API client's two dependencies:
+
+```sh
+python3 -m venv /tmp/soholink-test-venv
+/tmp/soholink-test-venv/bin/python -m pip install requests cryptography
+/tmp/soholink-test-venv/bin/python -m unittest discover -s test -p 'test_api_client.py'
+./scripts/test-runner-tests.sh
+```
+
+The shell harness substitutes a local fake Go command to check argument
+boundaries and exit status. It does not compile Go or contact services.
+
+
 ### Unit Tests Only
 
 ```bash
