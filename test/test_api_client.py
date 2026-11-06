@@ -53,13 +53,13 @@ class SlowResponse(BaseHTTPRequestHandler):
 
 class APIClientTests(unittest.TestCase):
     def test_each_request_has_finite_timeout(self):
-        for phase in ("challenge", "connect", "query"):
+        for phase in ("challenge", "connect", "query", "public"):
             with self.subTest(phase=phase):
                 self.check_timeout(phase)
 
     def check_timeout(self, phase):
         server = LocalServer(("127.0.0.1", 0), SlowResponse)
-        server.slow_phase = phase
+        server.slow_phase = "query" if phase == "public" else phase
         thread = threading.Thread(
             target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
         )
@@ -67,7 +67,8 @@ class APIClientTests(unittest.TestCase):
         try:
             base_url = f"http://127.0.0.1:{server.server_address[1]}"
             with tempfile.TemporaryDirectory() as directory:
-                key_path = Path(directory) / "private.pem"
+                key_path = Path(directory) / ".soholink" / "identity" / "private.pem"
+                key_path.parent.mkdir(parents=True)
                 key_path.write_bytes(ed25519.Ed25519PrivateKey.generate().private_bytes(
                     serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                     serialization.NoEncryption(),
@@ -76,12 +77,29 @@ class APIClientTests(unittest.TestCase):
                     with redirect_stdout(io.StringIO()), self.assertRaises(requests.exceptions.Timeout):
                         if phase == "query":
                             client.query_api(base_url, "/protected", "test-token")
+                        elif phase == "public":
+                            self.query_public_from_main(base_url, directory)
                         else:
                             client.authenticate(base_url, key_path)
         finally:
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+    def query_public_from_main(self, base_url, directory):
+        real_get = requests.get
+
+        def local_get(url, **kwargs):
+            # Route the CLI's fixed localhost URL to our delayed HTTP fixture.
+            path = url.removeprefix("http://localhost:8080")
+            return real_get(base_url + path, **kwargs)
+
+        with patch.object(client.Path, "home", return_value=Path(directory)), \
+                patch.object(client, "authenticate", return_value="test-token"), \
+                patch.object(client, "query_api", return_value=None), \
+                patch.object(client.requests, "get", side_effect=local_get):
+            client.main()
 
 
 if __name__ == "__main__":
