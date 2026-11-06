@@ -15,6 +15,18 @@ go test -v ./internal/... ./test/...
 go test -v -short ./...
 ```
 
+### Standalone API client regression
+
+From the repository root, after installing `requests` and `cryptography` in your
+Python environment, run either invocation:
+
+```sh
+python3 test/test_api_client.py
+python3 -m unittest discover -s test -p 'test_api_client.py'
+```
+
+These tests use local HTTP fixtures; they do not call a deployed API.
+
 ### Unit Tests Only
 
 ```bash

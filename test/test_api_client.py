@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import tempfile
 import socketserver
+import sys
 import threading
 import time
 import unittest
@@ -15,6 +16,9 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import requests
+
+# Direct file execution starts with test/ on sys.path, not the repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import test_api as client
 
