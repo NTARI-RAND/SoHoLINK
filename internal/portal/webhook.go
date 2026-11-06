@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	stripe "github.com/stripe/stripe-go/v82"
@@ -19,9 +20,12 @@ func (ps *PortalServer) handleStripeWebhook(w http.ResponseWriter, r *http.Reque
 	if err := payment.HandleV1Event(w, r, ps.webhookSecret, ps.onStripeEvent); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
+			slog.Debug("stripe webhook rejected", "status", http.StatusRequestEntityTooLarge, "error", "webhook body too large")
 			http.Error(w, "webhook body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
+		// Log a safe category: SDK/handler errors can contain untrusted payload text.
+		slog.Debug("stripe webhook rejected", "status", http.StatusBadRequest, "error", "webhook validation or handling failed")
 		http.Error(w, "webhook error", http.StatusBadRequest)
 		return
 	}
