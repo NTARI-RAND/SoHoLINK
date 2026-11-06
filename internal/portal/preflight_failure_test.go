@@ -23,8 +23,9 @@ func TestJobCheckSubmissionFailureRequiresDashboardCheck(t *testing.T) {
 			defer server.Close()
 			ps := newTestPortalServerWithOrch(t, nil, orchclient.New(server.URL))
 			w := checkRequest(t, ps, "POST", "/consumer/job/check/submit", jobForm(), true)
-			if w.Code != http.StatusConflict && w.Code != http.StatusServiceUnavailable {
-				t.Fatalf("status = %d", w.Code)
+			want := map[int]int{http.StatusOK: http.StatusConflict, http.StatusServiceUnavailable: http.StatusServiceUnavailable}[status]
+			if w.Code != want {
+				t.Fatalf("status = %d, want %d", w.Code, want)
 			}
 			if !strings.Contains(w.Body.String(), "Check your dashboard before trying again.") {
 				t.Errorf("missing dashboard warning: %s", w.Body.String())
