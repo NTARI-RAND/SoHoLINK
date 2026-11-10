@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/metrics"
 )
 
 // RunUptimeScorer runs in a goroutine and updates nodes.uptime_pct every
@@ -27,6 +29,9 @@ func RunUptimeScorer(ctx context.Context, db *DB, interval time.Duration) error 
 }
 
 func scoreUptime(ctx context.Context, db *DB) error {
+	start := time.Now()
+	defer func() { metrics.UptimeScorerDuration.Observe(time.Since(start).Seconds()) }()
+
 	_, err := db.Pool.Exec(ctx, `
         UPDATE nodes n
         SET uptime_pct = LEAST(
