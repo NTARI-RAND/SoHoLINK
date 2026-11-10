@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestStripeWebhookRejectionDebugLog(t *testing.T) {
+func TestStripeWebhookRejectionLogging(t *testing.T) {
 	const privateMarker = "PRIVATE_WEBHOOK_PAYLOAD"
 	for _, tc := range []struct {
 		name, payload string
@@ -31,7 +31,7 @@ func TestStripeWebhookRejectionDebugLog(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(tc.payload))
 			req.Header.Set("Stripe-Signature", "private-signature")
 			ps.handleStripeWebhook(httptest.NewRecorder(), req)
-			if tc.level == slog.LevelInfo {
+			if tc.level == slog.LevelInfo && tc.status == http.StatusBadRequest {
 				if output.Len() != 0 {
 					t.Fatal("unauthenticated rejection logged above debug level")
 				}
@@ -45,7 +45,7 @@ func TestStripeWebhookRejectionDebugLog(t *testing.T) {
 func assertWebhookRejectionLog(t *testing.T, output *bytes.Buffer, status int, privateMarker string) {
 	t.Helper()
 	if output.Len() == 0 {
-		t.Fatal("rejection has no debug log")
+		t.Fatal("rejection has no log at the configured level")
 	}
 	var record map[string]any
 	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
@@ -54,7 +54,10 @@ func assertWebhookRejectionLog(t *testing.T, output *bytes.Buffer, status int, p
 	if record["status"] != float64(status) || record["error"] == nil || record["error"] == "" {
 		t.Fatalf("rejection lacks status/error: %v", record)
 	}
+	if status == http.StatusRequestEntityTooLarge && record["level"] != "WARN" {
+		t.Errorf("oversized webhook rejection is not a warning: %v", record)
+	}
 	if strings.Contains(output.String(), privateMarker) || strings.Contains(output.String(), "private-signature") {
-		t.Fatal("debug log leaks webhook body or signature")
+		t.Fatal("log leaks webhook body or signature")
 	}
 }
