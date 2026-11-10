@@ -1,7 +1,8 @@
-# Webhook and submission-response byte limits
+# Webhook and orchestrator-response byte limits
 
 The transitional member portal bounds Stripe webhook requests before signature
-verification and bounds responses from its private orchestrator submission API.
+verification and bounds responses from its private orchestrator submission and
+preflight APIs.
 These are local resource budgets, not payment amount limits or changes to the
 `sohocloud-protocol` wire contract.
 
@@ -10,6 +11,7 @@ These are local resource budgets, not payment amount limits or changes to the
 | Stripe V1 and thin webhook request | 64 KiB | Return a wrapped `*http.MaxBytesError`; dispatch no event. The portal returns HTTP 413. |
 | Successful `SubmitJob` response | 1 MiB | Return an error with status and byte limit; return no partial job result. |
 | Non-2xx `SubmitJob` response | 4 KiB | Return an error with status and byte limit, omitting the oversized body. |
+| Successful `PreflightJob` response | 64 KiB | Return an error with status and byte limit; return no partial availability result. |
 
 The webhook default follows [Stripe's Go webhook example](https://pkg.go.dev/github.com/stripe/stripe-go/v82/webhook).
 The submission result currently contains four string fields: job ID, node ID,
@@ -30,6 +32,12 @@ failure or JSON failure. The HTTP server owns closing incoming webhook request
 bodies. A webhook read failure dispatches no event. A submission-response failure
 can occur after the orchestrator has already created a job: this change adds no
 automatic retry or idempotency guarantee.
+
+Preflight reads are side-effect-free availability checks. Successful responses
+are read completely within their fixed 64 KiB budget before JSON decoding, so a
+valid prefix cannot hide overflow or a later read failure. HTTP 400 retains the
+invalid-preflight error; other non-200 statuses remain unavailable errors. These
+error paths close the response without reading or including its body.
 
 ## Configuration in callers
 
@@ -58,6 +66,9 @@ environment variables or live Stripe settings are introduced. To change its
 webhook budget, pass `WebhookOptions` from `internal/portal/webhook.go`. To change
 its submission budgets, pass `BodyLimits` when constructing the client in
 `cmd/portal/main.go`. Rebuild and redeploy the portal after either code change.
+`PreflightJob` keeps its separate fixed 64 KiB budget in
+`internal/orchclient/preflight.go`; `BodyLimits` configures submission responses
+only.
 
 Signature failures retain HTTP 400; valid unhandled event types retain HTTP 200.
 Oversized payloads return HTTP 413 without exposing their contents. Custom thin
@@ -82,5 +93,5 @@ Stripe events, without contacting a payment service.
 
 The limits add no dependency, change no fee/settlement rule or conformance
 binding, and preserve the portal's transitional frontend ownership described in
-`CONFORMANCE.md`. Other operations added to the same orchestrator client must
-preserve submission bounds and assess their own response shapes separately.
+`CONFORMANCE.md`. `PreflightJob` retains its existing availability semantics and
+64 KiB response budget alongside the separate submission limits.

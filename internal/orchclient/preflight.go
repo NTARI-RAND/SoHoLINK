@@ -26,8 +26,16 @@ func (c *Client) PreflightJob(ctx context.Context, req orchestrator.SubmitJobReq
 	if resp.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("orchclient: preflight unavailable: status %d", resp.StatusCode)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
-		return result, fmt.Errorf("orchclient: decode preflight: %w", err)
+	const limit = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return result, fmt.Errorf("orchclient: read preflight response body: %w", err)
+	}
+	if len(body) > limit {
+		return result, fmt.Errorf("orchclient: preflight: status %d: response body exceeds %d bytes", resp.StatusCode, limit)
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return orchestrator.JobPreflight{}, fmt.Errorf("orchclient: decode preflight: %w", err)
 	}
 	return result, nil
 }
