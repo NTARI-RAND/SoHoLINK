@@ -1,100 +1,100 @@
-package store_test
+package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
+	"github.com/google/uuid"
 )
 
-func TestRunUptimeScorer(t *testing.T) {
+func uptimeTestDB(t *testing.T) (*DB, string) {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set — skipping integration test (see docs/test-database.md)")
 	}
-
-	ctx := context.Background()
-
-	db, err := store.Connect(ctx, dsn)
+	db, err := Connect(context.Background(), dsn)
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
-	defer db.Pool.Close()
-
-	var dbName string
-	if err := db.Pool.QueryRow(ctx, `SELECT current_database()`).Scan(&dbName); err != nil {
-		t.Fatalf("current_database: %v", err)
+	t.Cleanup(func() { db.Pool.Close() })
+	var name string
+	if err := db.Pool.QueryRow(context.Background(), "SELECT current_database()").Scan(&name); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(dbName, "test") {
-		t.Fatalf("refusing to run destructive integration test: connected database %q does not contain \"test\" in its name; set TEST_DATABASE_URL to a dedicated test database", dbName)
+	if !strings.Contains(name, "test") {
+		t.Fatalf("refusing to modify non-test database %q", name)
 	}
-
-	// Seed: create a participant and a node.
-	var participantID, nodeID string
-	err = db.Pool.QueryRow(ctx, `
-		INSERT INTO participants (email, password_hash, display_name)
-		VALUES ('uptime-test@example.com', 'x', 'Uptime Test')
-		RETURNING id`,
-	).Scan(&participantID)
-	if err != nil {
-		t.Fatalf("insert participant: %v", err)
+	if err := RunMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	var participant string
+	if err := db.Pool.QueryRow(context.Background(), `INSERT INTO participants (email, password_hash, display_name) VALUES ($1, 'x', 'Uptime Test') RETURNING id`, "uptime-"+uuid.NewString()+"@example.test").Scan(&participant); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		db.Pool.Exec(ctx, `DELETE FROM participants WHERE id = $1`, participantID)
+		if _, err := db.Pool.Exec(context.Background(), `DELETE FROM participants WHERE id = $1`, participant); err != nil {
+			t.Error(err)
+		}
 	})
+	return db, participant
+}
 
-	err = db.Pool.QueryRow(ctx, `
-		INSERT INTO nodes (participant_id, hostname, country_code, node_class)
-		VALUES ($1, 'uptime-test-host', 'US', 'C'::node_class)
-		RETURNING id`,
-		participantID,
-	).Scan(&nodeID)
-	if err != nil {
-		t.Fatalf("insert node: %v", err)
+func seedUptimeNode(t *testing.T, db *DB, participant string, count int, age time.Duration) string {
+	t.Helper()
+	var node string
+	if err := db.Pool.QueryRow(context.Background(), `INSERT INTO nodes (participant_id, hostname, country_code, node_class, uptime_pct) VALUES ($1, $2, 'US', 'C', 17.00) RETURNING id`, participant, "uptime-"+uuid.NewString()).Scan(&node); err != nil {
+		t.Fatal(err)
 	}
-
-	// Seed heartbeats: 20160 expected over 7 days (one per 30s).
-	// Insert 19152 heartbeats → 19152/20160 ≈ 94.97% → below Class A (95%), above Class B (85%).
-	heartbeatCount := 19152
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO node_heartbeat_events (node_id, recorded_at)
-		SELECT $1, NOW() - n * INTERVAL '30 seconds'
-		FROM generate_series(0, $2 - 1) AS n`, nodeID, heartbeatCount)
-	if err != nil {
-		t.Fatalf("insert heartbeats: %v", err)
+	if _, err := db.Pool.Exec(context.Background(), `INSERT INTO node_heartbeat_events (node_id, recorded_at) SELECT $1, NOW() - $3::interval FROM generate_series(1, $2)`, node, count, fmt.Sprintf("%f seconds", age.Seconds())); err != nil {
+		t.Fatal(err)
 	}
+	return node
+}
 
-	// Run the scorer via RunUptimeScorer with a short interval.
-	scorerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func TestScoreUptimeExactPercentages(t *testing.T) {
+	db, participant := uptimeTestDB(t)
+	for _, tc := range []struct {
+		name  string
+		count int
+		age   time.Duration
+		want  string
+	}{
+		{"no heartbeats", 0, time.Hour, "0.00"},
+		{"stale only", 12, 8 * 24 * time.Hour, "0.00"},
+		{"19152 is exactly 95 percent", 19152, time.Hour, "95.00"},
+		{"full window", 20160, time.Hour, "100.00"},
+		{"above cap", 22000, time.Hour, "100.00"},
+		{"numeric half 2898", 2898, time.Hour, "14.38"},
+		{"numeric half 5166", 5166, time.Hour, "25.63"},
+		{"numeric half 6426", 6426, time.Hour, "31.88"},
+		{"numeric half 10962", 10962, time.Hour, "54.38"},
+		{"numeric half 12222", 12222, time.Hour, "60.63"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := seedUptimeNode(t, db, participant, tc.count, tc.age)
+			if err := scoreUptime(context.Background(), db); err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if err := db.Pool.QueryRow(context.Background(), `SELECT uptime_pct::text FROM nodes WHERE id=$1`, node).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("uptime_pct = %s; want %s", got, tc.want)
+			}
+		})
+	}
+}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- store.RunUptimeScorer(scorerCtx, db, 10*time.Millisecond)
-	}()
-
-	// Give the scorer time to fire at least once, then cancel.
-	time.Sleep(100 * time.Millisecond)
+func TestRunUptimeScorerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	<-errCh
-
-	// Verify uptime_pct was updated.
-	var uptimePct float64
-	err = db.Pool.QueryRow(ctx,
-		`SELECT uptime_pct FROM nodes WHERE id = $1`, nodeID,
-	).Scan(&uptimePct)
-	if err != nil {
-		t.Fatalf("read uptime_pct: %v", err)
-	}
-
-	// 19152/20160 = 94.97% — should be ≥ 85 (Class B threshold) and < 95.
-	if uptimePct < 85.0 {
-		t.Errorf("expected uptime_pct ≥ 85, got %.2f", uptimePct)
-	}
-	if uptimePct > 100.0 {
-		t.Errorf("uptime_pct capped at 100, got %.2f", uptimePct)
+	if err := RunUptimeScorer(ctx, &DB{}, time.Hour); err != nil {
+		t.Fatal(err)
 	}
 }
