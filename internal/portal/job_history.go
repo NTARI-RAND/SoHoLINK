@@ -71,8 +71,12 @@ func (ps *PortalServer) handleJobHistory(w http.ResponseWriter, r *http.Request)
 	var cursor jobHistoryCursor
 	rawCursor := r.URL.Query().Get("cursor")
 	if rawCursor != "" {
+		if len(rawCursor) > 1024 {
+			http.Error(w, "invalid cursor", http.StatusBadRequest)
+			return
+		}
 		encoded, err := base64.RawURLEncoding.DecodeString(rawCursor)
-		if len(rawCursor) > 1024 || err != nil || json.Unmarshal(encoded, &cursor) != nil || cursor.CreatedAt.IsZero() {
+		if err != nil || json.Unmarshal(encoded, &cursor) != nil || cursor.CreatedAt.IsZero() {
 			http.Error(w, "invalid cursor", http.StatusBadRequest)
 			return
 		}
