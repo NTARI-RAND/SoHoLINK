@@ -3,7 +3,7 @@ module github.com/NetworkTheoryAppliedResearchInstitute/soholink
 go 1.25.0
 
 require (
-	github.com/NTARI-RAND/sohocloud-protocol v0.1.0
+	github.com/NTARI-RAND/sohocloud-protocol v0.4.0
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0

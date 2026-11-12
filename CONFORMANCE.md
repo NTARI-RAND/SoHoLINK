@@ -40,6 +40,41 @@ SoHoLINK is the **coordinator** of a JFA **substrate**: node-side orchestration 
 
 Consumes `sohocloud-protocol` at a published version tag — the dependency leaf both this coordinator and the front ends share. Depends on no front end and no member-economy code; the member economy lives above this layer and must not migrate down into it.
 
+## Proposed protocol response migration
+
+This dependency draft targets sohocloud-protocol **v0.4.0**, pending publication
+and clean tagged-module verification. The reference client now requires exactly
+one JSON response document. `TestReferenceClientFeeFraming` checks the real
+`NewHandler` fee route with a signed declaration: normal JSON whitespace keeps
+the signature valid; a second response value fails. The handler, authentication,
+fee terms, and fee signatures are unchanged. The full dependency upgrade
+does not preserve v0.1.0 listing or assignment signatures. No success-body budget is
+imposed on other deployments by this dependency migration.
+
+Local candidate verification uses an external Go workspace, never a committed
+`replace`. After maintainers publish v0.4.0, regenerate module checksums and run
+all required build, unit, database integration, and Qlty checks without that
+workspace. The existing `.golangci.yml` mixes v1/v2 settings and includes
+unsupported linters; current golangci-lint fails before analysis with
+`can't load config: gofmt is a formatter`. That pre-existing Qlty blocker remains
+outside this scoped dependency draft; no rule has been disabled to bypass it.
+
+### Mixed-version release gate
+
+These consumers currently pin **v0.1.0**, not v0.3.0. Intervening protocol
+releases added GPUs, committed storage, and storage opt-in to listing canonical
+bytes and GPU requirements to assignment canonical bytes under their existing
+`v0` domains. Even empty new fields change signatures. Old/new peers cannot be
+assumed to exchange valid listings or assignments; signed-fee round trips alone
+do not prove upgrade safety.
+
+Before deployment, agree and test a coordinated agent, frontend/relay, and
+coordinator upgrade. Do not silently reinterpret stored signatures or adopt a
+migration policy in this dependency PR. The protocol migration fixture records
+valid v0.1.0 signatures that the candidate rejects; current candidate regression
+suites exercise peers using the same version. A mixed-version deployment remains
+blocked until its migration procedure is agreed and verified.
+
 ## Product-specific notes (last, per the ordering rule)
 
 Reference deployment at soholink.org; trust domain `spiffe://soholink.org`. Cloudy is the reference front end. Neither is privileged by the protocol.
