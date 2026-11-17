@@ -10,6 +10,15 @@ import (
 	"github.com/stripe/stripe-go/v82/webhook"
 )
 
+// DefaultWebhookBodyBytes follows Stripe's Go webhook example (64 KiB).
+const DefaultWebhookBodyBytes int64 = 64 << 10
+
+// WebhookOptions sets a local request-byte limit. Zero retains the default;
+// negative limits are rejected. The last nonzero option takes precedence.
+type WebhookOptions struct {
+	MaxBodyBytes int64
+}
+
 // V1EventHandler is called when a V1 webhook event is received. Implementations
 // should switch on event.Type and handle relevant events.
 type V1EventHandler func(event stripe.Event) error
@@ -21,9 +30,11 @@ type ThinEventHandler func(ctx context.Context, thinEvent *stripe.ThinEvent) err
 
 // HandleV1Event reads the request body, verifies the Stripe-Signature header
 // using webhookSecret, constructs the V1 Event, and dispatches it to handler.
-// Returns a non-nil error if signature validation fails or handler returns an error.
-func HandleV1Event(w http.ResponseWriter, r *http.Request, webhookSecret string, handler V1EventHandler) error {
-	body, err := io.ReadAll(r.Body)
+// Bodies default to 64 KiB; WebhookOptions can override this local budget.
+// Overflow returns a wrapped *http.MaxBytesError, detectable with errors.As,
+// without dispatching an event. Signature and handler failures also return errors.
+func HandleV1Event(w http.ResponseWriter, r *http.Request, webhookSecret string, handler V1EventHandler, options ...WebhookOptions) error {
+	body, err := readWebhookBody(w, r, options)
 	if err != nil {
 		return fmt.Errorf("read webhook body: %w", err)
 	}
@@ -42,8 +53,11 @@ func HandleV1Event(w http.ResponseWriter, r *http.Request, webhookSecret string,
 // HandleThinEvent reads the request body, verifies the Stripe-Signature header
 // using webhookSecret, parses the thin event, and dispatches it to handler.
 // Use this for V2 event destinations (account.updated, capability.updated thin events).
-func (c *Client) HandleThinEvent(w http.ResponseWriter, r *http.Request, webhookSecret string, handler ThinEventHandler) error {
-	body, err := io.ReadAll(r.Body)
+// Bodies default to 64 KiB; WebhookOptions can override this local budget.
+// Overflow returns a wrapped *http.MaxBytesError, detectable with errors.As,
+// without dispatching an event.
+func (c *Client) HandleThinEvent(w http.ResponseWriter, r *http.Request, webhookSecret string, handler ThinEventHandler, options ...WebhookOptions) error {
+	body, err := readWebhookBody(w, r, options)
 	if err != nil {
 		return fmt.Errorf("read webhook body: %w", err)
 	}
@@ -57,4 +71,20 @@ func (c *Client) HandleThinEvent(w http.ResponseWriter, r *http.Request, webhook
 		return fmt.Errorf("handle thin event %s: %w", thinEvent.Type, err)
 	}
 	return nil
+}
+
+// readWebhookBody preserves the signed bytes and detects overflow, including
+// requests with unknown or misleading Content-Length. The HTTP server owns
+// closing the incoming request body.
+func readWebhookBody(w http.ResponseWriter, r *http.Request, options []WebhookOptions) ([]byte, error) {
+	limit := DefaultWebhookBodyBytes
+	for _, option := range options {
+		if option.MaxBodyBytes != 0 {
+			limit = option.MaxBodyBytes
+		}
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("webhook body limit must be positive")
+	}
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 }
