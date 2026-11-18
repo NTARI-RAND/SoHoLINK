@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/identity"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/operator"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sounding"
 )
@@ -154,6 +155,10 @@ func OperatorAuth(repo operatorVerifier, coordinatorID string, next http.Handler
 		// SubmitJob, which cannot import this package) records the real
 		// operator_id without any further plumbing. Observation only.
 		ctx = sounding.ContextWithOperatorID(ctx, tx.OperatorID)
+		// The verified operator, for authorization below the api package: the
+		// protocol adapter binds each /v0 node message to the operator that
+		// registered the node (identity.OperatorIDFromContext).
+		ctx = identity.WithOperatorID(ctx, tx.OperatorID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

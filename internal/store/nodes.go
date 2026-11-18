@@ -17,9 +17,10 @@ var ErrNodeNotFound = errors.New("store: node not found")
 // NodePlacementRow carries the identity/geo columns the in-memory registry
 // needs when refreshing a node entry from a capability listing.
 type NodePlacementRow struct {
-	ParticipantID string
-	CountryCode   string
+	ParticipantID string // empty for an operator-owned node (migration 030)
+	CountryCode   string // empty for an operator-owned node
 	Region        string
+	OperatorID    string // empty for a participant-owned node
 }
 
 // UpdateNodeCapabilities updates a node's certified class and merges the
@@ -35,9 +36,10 @@ func UpdateNodeCapabilities(ctx context.Context, db *DB, nodeID, nodeClass strin
 		         'cpu_cores', $3::int, 'ram_mb', $4::int, 'storage_gb', $5::int),
 		     updated_at       = NOW()
 		 WHERE id = $1
-		 RETURNING participant_id::text, country_code, COALESCE(region, '')`,
+		 RETURNING COALESCE(participant_id::text, ''), COALESCE(country_code, ''),
+		           COALESCE(region, ''), COALESCE(operator_id, '')`,
 		nodeID, nodeClass, cpuCores, ramMB, storageGB,
-	).Scan(&row.ParticipantID, &row.CountryCode, &row.Region)
+	).Scan(&row.ParticipantID, &row.CountryCode, &row.Region, &row.OperatorID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return NodePlacementRow{}, fmt.Errorf("update node capabilities %s: %w", nodeID, ErrNodeNotFound)
