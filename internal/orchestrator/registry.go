@@ -22,7 +22,8 @@ type HardwareProfile struct {
 // NodeEntry is the in-memory representation of a registered node.
 type NodeEntry struct {
 	NodeID          string
-	ParticipantID   string // owner of this node; matches participants.id in the DB. Legacy field name was ProviderID (pre-migration 011, before unified participants table).
+	ParticipantID   string // owner of this node; matches participants.id in the DB. Legacy field name was ProviderID (pre-migration 011, before unified participants table). Empty for an operator-owned node.
+	OperatorID      string // the frontend operator that registered this node (migration 030); empty for a participant-owned node
 	NodeClass       string
 	CountryCode     string
 	Region          string

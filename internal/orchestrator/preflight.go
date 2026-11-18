@@ -83,6 +83,16 @@ func (r *NodeRegistry) matchLocked(req MatchRequest) ([]NodeEntry, MatchExplanat
 		if excluded[node.NodeID] || (req.ExcludeConsumerParticipantID != "" && node.ParticipantID == req.ExcludeConsumerParticipantID) {
 			continue
 		}
+		// Stand-in, fail-closed: operator-registered nodes receive no jobs
+		// until slice 2 settles how their work is submitted and paid (Cloudy
+		// decision 0002: the coordinator settles with the frontend only).
+		// Without this skip, SubmitJob would reach the participant Stripe
+		// lookup, which an operator-owned node cannot satisfy. Omitted from
+		// the preflight counts too, like own and excluded nodes, so a preview
+		// never reports a node that dispatch would refuse.
+		if node.OperatorID != "" {
+			continue
+		}
 		if code := placementBlocker(node, req); code != "" {
 			counts[code]++
 			continue

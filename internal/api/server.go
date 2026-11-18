@@ -69,6 +69,13 @@ func New(db *store.DB, registry *orchestrator.NodeRegistry, idSource *identity.S
 		spiffePubkey := identity.RequireSPIFFE(idSource.BundleSource(), pubkey)
 		top.Handle("POST /nodes/pubkey", OperatorOrSPIFFE(opVerifier, coordinatorID, spiffePubkey, pubkey))
 	}
+	// Operator-registered nodes (migration 030): an admitted operator registers
+	// one of its prosumers' nodes with no person attached. Operator credential
+	// only — a node SVID cannot register nodes. Needs no SPIRE source, so it is
+	// wired whenever an operator verifier exists.
+	if opVerifier != nil {
+		top.Handle("POST /operators/nodes", OperatorAuth(opVerifier, coordinatorID, handleRegisterOperatorNode(db)))
+	}
 	if idSource != nil {
 		top.Handle("/", identity.RequireSPIFFE(idSource.BundleSource(), authMux))
 	} else {

@@ -43,8 +43,8 @@ import (
 // re-checks are defense in depth per the Coordinator docstring (they surface
 // as 500 through the reference fail(), never silently pass).
 var (
-	ErrNoIdentity       = errors.New("protocoladapter: no SPIFFE identity in context")
-	ErrIdentityMismatch = errors.New("protocoladapter: SPIFFE identity does not match node")
+	ErrNoIdentity       = errors.New("protocoladapter: no SPIFFE identity or verified operator in context")
+	ErrIdentityMismatch = errors.New("protocoladapter: caller is not bound to this node (SPIFFE path or registering operator)")
 	ErrBadSignature     = errors.New("protocoladapter: message signature verification failed")
 	ErrSeqNotMonotonic  = errors.New("protocoladapter: Seq does not strictly exceed the last seen for this node")
 	ErrNoProtocolKey    = errors.New("protocoladapter: no protocol key enrolled for node (POST /nodes/pubkey)")
@@ -90,17 +90,40 @@ func New(
 	}
 }
 
-// bind enforces SPEC §2: the caller's SPIFFE path must be exactly
-// /node/<NodeID> for the node named in the message.
+// bind enforces SPEC §2: the caller must be bound to the node named in the
+// message, by exactly one of two proofs, never neither:
+//
+//   - the node's own SPIFFE SVID: the path must be exactly /node/<NodeID>
+//     (direct and satellite nodes); or
+//   - a verified operator transmission (identity.OperatorIDFromContext, set by
+//     the API's OperatorAuth) from the operator that REGISTERED this node
+//     (nodes.operator_id, migration 030) — the frontend relaying its own
+//     prosumers' nodes. An operator can never speak for another operator's
+//     node, nor for a participant-owned node.
+//
+// Either way the message's own ed25519 signature is still verified by the
+// caller against the node's enrolled key.
 func (a *Adapter) bind(ctx context.Context, n protoidentity.NodeID) error {
-	spiffeID, ok := identity.SPIFFEIDFromContext(ctx)
-	if !ok {
-		return ErrNoIdentity
+	if spiffeID, ok := identity.SPIFFEIDFromContext(ctx); ok {
+		if !protoidentity.BindsTo(spiffeID.Path(), n) {
+			return ErrIdentityMismatch
+		}
+		return nil
 	}
-	if !protoidentity.BindsTo(spiffeID.Path(), n) {
-		return ErrIdentityMismatch
+	if operatorID, ok := identity.OperatorIDFromContext(ctx); ok {
+		owner, err := store.NodeOperator(ctx, a.db, string(n))
+		if errors.Is(err, store.ErrNodeNotFound) {
+			return ErrIdentityMismatch
+		}
+		if err != nil {
+			return err
+		}
+		if owner != operatorID {
+			return ErrIdentityMismatch
+		}
+		return nil
 	}
-	return nil
+	return ErrNoIdentity
 }
 
 // nodeKey resolves the node's enrolled ed25519 verification key.
@@ -215,6 +238,7 @@ func (a *Adapter) SubmitListing(ctx context.Context, l listing.CapabilityListing
 			Region:        row.Region,
 		}
 	}
+	entry.OperatorID = row.OperatorID
 	entry.NodeClass = class
 	entry.Status = "online"
 	entry.LastHeartbeat = time.Now()
