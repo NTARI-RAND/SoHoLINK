@@ -83,6 +83,15 @@
   });
 })();
   </script>
+  {{else if eq .Status "failed"}}
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="section-label">Why this job failed</div>
+    {{if eq .FailureCause "tmpfs_exhausted"}}
+      <p>The job ran out of temporary storage. Reduce the amount of temporary data it writes before submitting it again.</p>
+    {{else}}
+      <p>The job could not finish. Check your job settings before submitting it again.</p>
+    {{end}}
+  </div>
   {{end}}
 
   <p id="sse-fallback" style="display:none;font-size:0.78rem;color:var(--muted);margin-bottom:1.5rem;">
@@ -98,6 +107,11 @@
     src.onmessage = function(e) {
       var d = JSON.parse(e.data);
       if (d.error) { src.close(); return; }
+      if (d.status === 'failed' && statusEl.textContent.trim() !== 'failed') {
+        src.close();
+        window.location.reload();
+        return;
+      }
       var badge = '';
       if (d.status === 'scheduled' || d.status === 'running') {
         badge = '<span class="badge badge-online">' + d.status + '</span>';
