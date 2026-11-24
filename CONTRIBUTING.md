@@ -56,5 +56,5 @@ sign-off. To fix:
   git push --force-with-lease
   ```
 
-Open your pull request against the `master` branch; branch from
-`master` to start work.
+Open your pull request against the `main` branch; branch from
+`main` to start work.
