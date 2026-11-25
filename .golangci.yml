@@ -1,57 +1,29 @@
-# .golangci.yml — SoHoLINK linter configuration
-#
-# Run locally:  make lint
-# Run in CI:    .github/workflows/test.yml (lint job)
-#
-# Key linter: deadcode
-#   Flags exported functions/variables that are reachable only from tests, not
-#   from any binary entry point (cmd/*/main.go).  This catches "register but
-#   never wire" bugs like a SetEmbeddedFS() that exists in a package but is
-#   never called from main().  When deadcode reports a symbol as dead, check:
-#     1. Is it intentionally unexported (rename with lowercase initial)?
-#     2. Is the call missing from one or more cmd/*/main.go files?
-#     3. Was the API removed but the setter left behind?
-
+# Run locally: golangci-lint run ./...
+# Whole-program reachability: deadcode ./... uses production entry points.
+# deadcode -test ./... also treats test entry points as roots.
+# See DEVELOPMENT.md for when to use each check.
 version: "2"
 
 linters:
-  # Start from a minimal set and opt-in deliberately.
-  disable-all: true
+  default: none
   enable:
-    - deadcode       # Finds code only reachable from tests → catches missing wiring
-    - govet          # Reports likely mistakes (printf format, struct alignment, etc.)
-    - staticcheck    # SA* checks: deprecated APIs, write-only variables, etc.
-    - errcheck       # Finds unchecked errors
-    - gofmt          # Formatting consistency
-    - unused         # Unused variables, types, and functions within a package
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+  settings:
+    staticcheck:
+      checks: ["all"]
+  exclusions:
+    rules:
+      # Preserve the existing exception for generated mock methods.
+      - path: "_mock\\.go$"
+        linters: [unused]
 
-linters-settings:
-  deadcode:
-    # test-mode: true makes deadcode treat test binaries as additional entry
-    # points.  A symbol is only flagged if it's unreachable from BOTH the real
-    # binary AND tests — that's a stronger signal that wiring is missing.
-    test-mode: true
-
-  staticcheck:
-    # SA4006: a variable is written but never read.  Catches write-only globals
-    # that look like registration points but are never consumed.
-    checks: ["all"]
+formatters:
+  enable:
+    - gofmt
 
 issues:
-  # Raise the default per-linter limit so deadcode can report all dead symbols
-  # in one pass rather than stopping at 3.
   max-issues-per-linter: 50
   max-same-issues: 10
-
-  exclude-rules:
-    # vendor/ is managed by go mod vendor — skip it entirely.
-    - path: "vendor/"
-      linters: [deadcode, govet, staticcheck, errcheck, gofmt, unused]
-
-    # Generated mock/stub files often have "dead" exported methods.
-    - path: "_mock\\.go$"
-      linters: [deadcode, unused]
-
-    # Test helpers are intentionally exported for cross-package test use.
-    - path: "_test\\.go$"
-      linters: [deadcode]
