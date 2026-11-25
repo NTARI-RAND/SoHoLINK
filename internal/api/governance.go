@@ -243,6 +243,13 @@ func (g *GovernanceServer) handlePublishFees(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// PostgreSQL stores effective_at to microsecond precision. Sign only
+	// timestamps that the repository can serve back exactly.
+	if !effectiveAt.Equal(effectiveAt.Truncate(time.Microsecond)) {
+		writeError(w, http.StatusBadRequest, "effective_at must be at microsecond precision or coarser")
+		return
+	}
+
 	decl := fees.FeeDeclaration{
 		CoordinatorID: g.coordinatorID,
 		Terms: fees.Terms{

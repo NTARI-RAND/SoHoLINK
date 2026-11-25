@@ -436,10 +436,9 @@ test(wasm): add executor unit tests
 ### Pre-Commit Checklist
 
 - [ ] `go build ./...` compiles (both with and without `-tags gui`)
-- [ ] `make test-short` passes
-- [ ] `golangci-lint run ./...` clean
+- [ ] `go test -short ./...` passes
+- [ ] `golangci-lint run ./...` adds no new findings compared with the target branch
 - [ ] `go mod tidy` run if `go.mod` changed
-- [ ] `go mod vendor` run if `go.mod` changed
 
 ---
 

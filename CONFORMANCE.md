@@ -49,8 +49,9 @@ through the real `NewHandler` fee route. The client accepts the signed declarati
 with normal JSON whitespace and returns no partial result when a second value
 is appended.
 Protocol v0.4.0 also rejects signed messages with zero or out-of-range timestamps.
-The governance fee publisher rejects an unrepresentable `effective_at` with
-HTTP 400 before signing. The full dependency upgrade changes listing and
+The governance fee publisher returns HTTP 400 before signing if `effective_at`
+falls outside the protocol range or has finer precision than PostgreSQL can
+store (microseconds). The full dependency upgrade changes listing and
 assignment signatures relative to v0.1.0. The success-body budget remains
 opt-in at the client.
 
@@ -62,7 +63,7 @@ the updated pull request.
 
 ### Mixed-version release gate
 
-These consumers currently pin **v0.1.0**, not v0.3.0. Intervening protocol
+SoHoLINK's previous protocol pin was **v0.1.0**. Intervening protocol
 releases added GPUs, committed storage, and storage opt-in to listing canonical
 bytes and GPU requirements to assignment canonical bytes under their existing
 `v0` domains. Even empty new fields change signatures. Old/new peers cannot be
